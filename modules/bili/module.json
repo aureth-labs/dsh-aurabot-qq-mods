@@ -1,0 +1,25 @@
+{
+  "id": "bili",
+  "name": "B站",
+  "version": "1.2.0",
+  "description": "让她自己逛 B 站：刷首页推荐、看视频、评论、回评论、发弹幕；支持私信、评论区 @ 我 回复、点赞收藏、抽帧看画面、发截图、写鱼日记、出日报。",
+  "category": "platform",
+  "tags": [
+    "B站",
+    "刷视频",
+    "弹幕"
+  ],
+  "author": "风止 / Aurabot",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "network",
+    "filesystem",
+    "process",
+    "plugin-config",
+    "plugin-internals"
+  ],
+  "replacesBuiltin": true
+}
