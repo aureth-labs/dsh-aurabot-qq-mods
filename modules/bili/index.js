@@ -15,6 +15,9 @@ export default {
   api: 1,
   description: '看别人发的 B 站视频；定时自己刷、评论、回评论；可选发弹幕；抽帧看画面、发截图；按权限改自己的头像 / 签名（bili_watch / bili_comment / bili_danmaku / qq_send_shot / bili_set_avatar / bili_set_sign）',
   tab: 'bili',
+  defaults: {
+    selfName: '',   // 她自己叫什么（圈地自萌判邀请时用）；留空用主人昵称，再兜底「她」
+  },
   files: ['lib/duty.js', 'lib/api.js', 'lib/vision.js', 'lib/shots.js', 'lib/danmaku.js', 'lib/danmaku-panel.js', 'lib/login-pause.js', 'lib/style-guard.js', 'lib/storyboard.js', 'lib/verify.js', 'lib/history.js', 'lib/_core.js', 'lib/_reply.js', 'lib/_access.js', 'lib/_llm.js', 'lib/_img.js', 'lib/_net.js'],
   setup(api) {
     const { hub, http } = api.core
@@ -214,7 +217,7 @@ export default {
             text: x.text, title: x.title, uri: x.uri,
             mine: String(x.mid) === ownerMid,
             replied: done.has(x.id),
-            atMe: (x.ats || []).some((a) => String(a.mid) === '3747576587226295') || (x.ats || []).length > 0,
+            atMe: (x.ats || []).some((a) => String(a.mid) === ownerMid) || (x.ats || []).length > 0,
           }))
         return { ok: true, items: list.slice(0, 20), ownerMid }
       } catch (error) { return { ok: false, message: error.message } }

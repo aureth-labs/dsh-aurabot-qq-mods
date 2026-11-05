@@ -224,24 +224,30 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
   // 为什么这么严：她发出去的每个字都算在主人账号上，去别人评论区主动搭话最容易惹麻烦。
 
   const CIRCLE_NEG = /别来|不要来|不用来|别刷|不要刷|别评论|不要评论|别回|不要回|不欢迎|禁止|滚/
-  // 正向邀请：名字 + 动作，或者 动作 + 名字。名字支持「大肥鱼 / 鱼塘」，
-  // 也支持配置里她自己的名字（ownerName 不是她的名字，这里用「糯糯」和「鱼」两类）。
+  // 正向邀请：名字 + 动作，或者 动作 + 名字。
+  // 名字来源：面板「她自己叫什么」→ 主人昵称 → 兜底「她」。
+  // 另外支持配置里加别名（cfg().selfAliases，逗号分隔）。
   const circlePos = (name) => {
-    const n = String(name || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const esc = (x) => String(x || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    const n = esc(name)
+    const aliases = String(cfg().selfAliases || "").split(/[,，、\s]+/).map((x) => x.trim()).filter(Boolean).map(esc)
+    const names = [n, ...aliases].filter(Boolean).join("|")
+    // 没名字就别匹配（空正则 (?:) 会命中一切，变成「谁的邀请都回」，很危险）
+    if (!names) return []
     return [
-      new RegExp(`(?:${n}|大肥鱼|鱼塘(?:的鱼)?)[^。！？!?\\n]{0,16}(?:快来|来评论|来玩|过来|来)(?!了|过|着|没|吗)`),
-      new RegExp(`(?:^|[\\s@])(?:快来|来)[^。！？!?\\n]{0,12}(?:${n}|大肥鱼|鱼塘)`),
-      // 「鱼来评论区玩」这种简写：鱼 + 来 + 可选场所，后面不能再接「了/过/着/没/吗」
-      new RegExp(`(?:^|[\\s@])鱼(?:快来|来)(?:评论区|楼中楼|玩)?(?!了|过|着|没|吗)`),
+      new RegExp(`(?:${names})[^。！？!?\\n]{0,16}(?:快来|来评论|来玩|过来|来)(?!了|过|着|没|吗)`),
+      new RegExp(`(?:^|[\\s@])(?:快来|来)[^。！？!?\\n]{0,12}(?:${names})`),
     ]
   }
 
   /** 这条评论是不是对「她」的邀请。否定语义优先。 */
-  function isInvite(text, name = '糯糯') {
+  function isInvite(text, name) {
+    // 名字从配置读（面板里她自己的名字），没配就用主人昵称，再兜底「她」
+    const herName = String(name || cfg().selfName || cfg().ownerName || '她').trim() || '她'
     const v = String(text || '').replace(/\s+/g, ' ').trim()
     if (!v) return { ok: false, why: 'empty' }
     if (CIRCLE_NEG.test(v)) return { ok: false, why: 'negative' }
-    if (circlePos(name).some((re) => re.test(v))) return { ok: true, why: 'invite' }
+    if (circlePos(herName).some((re) => re.test(v))) return { ok: true, why: 'invite' }
     return { ok: false, why: 'not-invite' }
   }
 
@@ -270,7 +276,7 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
     const invites = []
     for (const x of list) {
       if (Number(x.mid) !== owner.mid) continue // 只认 UP 主本人
-      const hit = isInvite(x.text, '糯糯')
+      const hit = isInvite(x.text)
       if (!hit.ok) continue
       invites.push({ ...x, bvid, aid, match: hit.why, replied: done.has(`${bvid}|${x.rpid}`) })
     }
