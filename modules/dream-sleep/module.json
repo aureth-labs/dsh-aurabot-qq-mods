@@ -1,0 +1,14 @@
+{
+  "id": "dream-sleep",
+  "name": "做梦睡觉",
+  "version": "3.0.0",
+  "description": "让她像真人一样睡觉：按睡眠周期一段段做梦、会失眠、入睡快慢随机、醒来时间随机、梦会被白天做过的事影响。",
+  "category": "social",
+  "tags": ["睡觉", "做梦", "心情"],
+  "author": "风止",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["filesystem", "plugin-config", "plugin-internals"]
+}
