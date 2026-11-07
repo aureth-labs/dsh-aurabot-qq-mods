@@ -96,10 +96,15 @@ export function createNearby({ api }) {
   function collect(cfg) {
     const now = Date.now()
     const hours = Math.max(1, Math.min(720, Number(cfg.hours) || 24))
-    const since = now - hours * 3600_000
-    if (cache && cache.since === since && now - cache.at < 60_000) return cache.rows
+    // 缓存键按 hours 和按天窗口算，不能按毫秒级的 since——
+    // since 每调用一次就往后挪一点，用它当键等于永远不命中。
+    const from = dayKey(new Date(now - hours * 3600_000))
+    const to = dayKey(new Date(now))
+    const key = `${hours}|${from}|${to}`
+    if (cache && cache.key === key && now - cache.at < 60_000) return cache.rows
 
-    const days = [...new Set([dayKey(new Date(since)), dayKey(new Date(now))])]
+    const since = now - hours * 3600_000
+    const days = from === to ? [to] : [from, to]
     const minChars = Math.max(1, Number(cfg.minChars) || 4)
     const rows = []
     const hub = api.core.hub
@@ -123,7 +128,7 @@ export function createNearby({ api }) {
       }
     }
 
-    cache = { since, at: now, rows }
+    cache = { key, at: now, rows }
     return rows
   }
 
