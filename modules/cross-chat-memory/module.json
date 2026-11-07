@@ -1,0 +1,14 @@
+{
+  "id": "cross-chat-memory",
+  "name": "跨聊天近况",
+  "version": "0.1.0",
+  "description": "让她知道自己在别的聊天里最近说过什么：主人私聊每轮自动带上别处近况；谁当面问「你跟谁聊了啥」时，她自己能翻到。默认不外传主人的私事，群与群之间不串。",
+  "category": "social",
+  "tags": ["记忆", "跨聊天", "上下文"],
+  "author": "RookieApe-tao",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["plugin-config", "plugin-internals"]
+}
