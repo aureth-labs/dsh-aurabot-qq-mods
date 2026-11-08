@@ -158,7 +158,9 @@ const cmd = rest[0] || 'help'
 if (cmd === 'help' || flags.help) { console.log(HELP); process.exit(0) }
 
 if (cmd === 'verify') {
-  const args = [join(MOD_DIR, 'test', 'verify.mjs')]
+  // 2026-11-10 修：原来指向 test/verify.mjs —— 那个文件早改名成 test/verify.test.mjs 了，
+  //   所以 `node lib/cli.mjs verify` 必然报「文件不存在」。
+  const args = [join(MOD_DIR, 'test', 'verify.test.mjs')]
   const env = { ...process.env }
   if (flags.live) env.LIVE = '1'
   try {
@@ -202,7 +204,9 @@ if (cmd === 'pending') {
 }
 
 if (cmd === 'confirm' || cmd === 'cancel') {
-  const r = await call(base, '/aurabot/api/ext/kanzhibo/probe?what=' + (cmd === 'confirm' ? 'ok' : 'no'))
+  // 2026-11-10：/probe 的 what=ok / no 现在要求 &open=1（这一步会真的点下去、可能花钱），
+  //   所以 CLI 这边也要带上，不然 confirm 会被挡回来。
+  const r = await call(base, '/aurabot/api/ext/kanzhibo/probe?what=' + (cmd === 'confirm' ? 'ok' : 'no') + '&open=1')
   if (!r.json) { console.error(r.text.slice(0, 200)); process.exit(1) }
   if (flags.json) { console.log(JSON.stringify(r.json, null, 2)); process.exit(0) }
   console.log((r.json.result && r.json.result.message) || (r.json.ok ? '好了' : '没成功'))
