@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 
 // 消息条数由代码算好塞进提示词。原来写的是「今天<N>条消息」让模型自己填，
 // 模型看不见总数只能瞎猜（晚报的「5月7日」就是这么来的，2026-11-08 一并修）。
-const systemPrompt = (total) => `你在给主人写今天的聊天日报。看完下面一整天的聊天记录，挑出真正值得她知道的事。
+export const systemPrompt = (total) => `你在给主人写今天的聊天日报。看完下面一整天的聊天记录，挑出真正值得她知道的事。
 
 输出格式（严格照这个来，不要多写）：
 今天${total}条消息，<一句话概括今天的气氛或主题>
@@ -52,16 +52,52 @@ function voiceStats(today, statePath) {
   }
 }
 
-const dayKey = (t = Date.now()) => {
+export const dayKey = (t = Date.now()) => {
   const d = new Date(t)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
-const cut = (s, n) => {
+export const cut = (s, n) => {
   const t = String(s || '').replace(/[\r\n]+/g, ' ').trim()
   return t.length > n ? t.slice(0, n) + '…' : t
 }
 // 没什么信息量的消息，别浪费字数
-const NOISE = /^(\[图片\]|\[表情\]|\[语音\]|\[文件\]|\[视频\]|嗯+|哦+|啊+|好+|哈+|收到|在吗|晚安|早安|早|睡了|1+)$/
+export const NOISE = /^(\[图片\]|\[表情\]|\[语音\]|\[文件\]|\[视频\]|嗯+|哦+|啊+|好+|哈+|收到|在吗|晚安|早安|早|睡了|1+)$/
+
+/**
+ * 把一天的聊天流水整理成喂给模型的分段文本。
+ * chatLog: [{ t, chatId, who, uid, text }]
+ * nameOf(群号) 只在需要显示群名时调用，方便测试时注入。
+ * 返回 { parts, total, per } —— parts 为空说明今天没什么可写的。
+ */
+export function buildInput(chatLog, { ownerQQ = '', budget = 400, includePrivate = true, nameOf = () => '' } = {}) {
+  const groups = new Map()
+  let total = 0
+  for (const e of chatLog || []) {
+    if (!e || !e.text) continue
+    const text = String(e.text).trim()
+    if (!text || NOISE.test(text)) continue
+    const isGroup = String(e.chatId || '').startsWith('group:')
+    if (!isGroup && includePrivate === false) continue
+    if (!groups.has(e.chatId)) groups.set(e.chatId, [])
+    groups.get(e.chatId).push(e)
+    if (e.who !== 'bot') total += 1
+  }
+  // 条数预算按聊天数平摊，每个聊天至少留 30 条，免得小群被大群挤没
+  const per = Math.max(30, Math.floor(Math.max(50, Number(budget) || 400) / Math.max(1, groups.size)))
+  const parts = []
+  for (const [chatId, rows] of groups) {
+    if (String(chatId) === `private:${ownerQQ}`) continue // 主人自己的私聊不进日报
+    const isGroup = String(chatId).startsWith('group:')
+    const gid = isGroup ? String(chatId).slice(6) : ''
+    const where = isGroup ? `群「${nameOf(gid) || gid}」` : '私聊'
+    const lines = rows.slice(-per).map((e) => {
+      const who = e.who === 'bot' ? '她自己' : e.who || e.uid || '某人'
+      return `${who}: ${cut(e.text, 120)}`
+    })
+    if (lines.length) parts.push(`【${where}】\n${lines.join('\n')}`)
+  }
+  return { parts, total, per }
+}
 
 export default {
   id: 'digest',
@@ -119,40 +155,20 @@ export default {
         try { log = hub.chatLogOf?.(today) || [] } catch (error) { log = [] }
         if (!log.length) return { ok: false, message: '今天还没有聊天记录' }
 
-        // 按聊天分组（群 / 私聊分开），过滤没营养的消息
-        const groups = new Map()
-        let total = 0
-        for (const e of log) {
-          if (!e || !e.text) continue
-          const text = String(e.text).trim()
-          if (!text || NOISE.test(text)) continue
-          const isGroup = String(e.chatId || '').startsWith('group:')
-          if (!isGroup && s.includePrivate === false) continue
-          if (!groups.has(e.chatId)) groups.set(e.chatId, [])
-          groups.get(e.chatId).push(e)
-          if (e.who !== 'bot') total += 1
-        }
+        // 按聊天分组（群 / 私聊分开），过滤没营养的消息；群名从这里注入，逻辑本身是纯的
+        const { parts, total } = buildInput(log, {
+          ownerQQ,
+          budget: s.maxMessages,
+          includePrivate: s.includePrivate !== false,
+          nameOf: (gid) => {
+            try {
+              return hub.groupName?.(gid) || ''
+            } catch (error) {
+              return ''
+            }
+          },
+        })
         if (!total) return { ok: false, message: '今天没有值得统计的消息' }
-
-        const budget = Math.max(50, Number(s.maxMessages) || 400)
-        const per = Math.max(30, Math.floor(budget / Math.max(1, groups.size)))
-        const parts = []
-        for (const [chatId, rows] of groups) {
-          if (String(chatId) === `private:${ownerQQ}`) continue // 自己跟主人的私聊不进日报
-          let where = chatId
-          if (String(chatId).startsWith('group:')) {
-            const gid = String(chatId).slice(6)
-            const name = (() => { try { return hub.groupName?.(gid) } catch (error) { return '' } })()
-            where = `群「${name || gid}」`
-          } else {
-            where = '私聊'
-          }
-          const lines = rows.slice(-per).map((e) => {
-            const who = e.who === 'bot' ? '她自己' : e.who || e.uid || '某人'
-            return `${who}: ${cut(e.text, 120)}`
-          })
-          if (lines.length) parts.push(`【${where}】\n${lines.join('\n')}`)
-        }
         if (!parts.length) return { ok: false, message: '今天没有可供整理的内容' }
 
         let answer = ''
