@@ -22,7 +22,7 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 
 // 日期由代码算好塞进提示词。原来写的是「<N>月<M>日晚报」让模型自己填，
 // 模型看不到今天的日期，就编了一个「5月7日」出来（2026-11-08 用户发现）。
-const todayLabel = () => {
+export const todayLabel = () => {
   const d = new Date()
   return `${d.getMonth() + 1}月${d.getDate()}日晚报`
 }
@@ -34,7 +34,7 @@ const DETAILS = {
   deep: { count: 4, rule: '每条 60~90 字、分两小句：第一句是什么（带关键数字或型号），第二句影响谁、为什么重要' },
 }
 
-const systemPrompt = (label, { detail = 'normal', interests = '', maxItems = 6 } = {}) => {
+export const systemPrompt = (label, { detail = 'normal', interests = '', maxItems = 6 } = {}) => {
   const d = DETAILS[detail] || DETAILS.normal
   // 常规档尊重面板里的「最多几条」，简报/详细档用固定条数（写死了才不会和前两条规则打架）
   const count = detail === 'normal' ? Math.max(1, Math.min(10, Number(maxItems) || 6)) : d.count
@@ -63,7 +63,7 @@ ${label}
 不要写「以下是」「希望对你有帮助」这类话。`
 }
 
-const pickTag = (s, tag) => {
+export const pickTag = (s, tag) => {
   const re = new RegExp(`<${tag}>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?</${tag}>`)
   const m = s.match(re)
   return m ? m[1].replace(/<!\[CDATA\[|\]\]>/g, '').trim() : ''
@@ -87,7 +87,7 @@ function fetchXml(url, timeoutMs = 15000) {
   })
 }
 
-function parseItems(xml, source = '') {
+export function parseItems(xml, source = '') {
   const out = []
   for (const m of String(xml).matchAll(/<item>([\s\S]*?)<\/item>/g)) {
     const s = m[1]
@@ -98,6 +98,30 @@ function parseItems(xml, source = '') {
     out.push({ title, link: pickTag(s, 'link'), ts: Number.isNaN(ts) ? 0 : ts, source })
   }
   return out
+}
+
+/** 按标题前 14 字去重（先去掉空白和标点）：同一件事被多家同时报道时保留先到的那个。 */
+export function dedupeByTitle(items) {
+  const seen = new Set()
+  const unique = []
+  for (const it of items) {
+    const k = String(it.title).replace(/[\s\p{P}]/gu, '').slice(0, 14)
+    if (k && seen.has(k)) continue
+    if (k) seen.add(k)
+    unique.push(it)
+  }
+  return unique
+}
+
+/** 兴趣加权：命中关键词的条目前置，其余按时间倒序。只影响排序，不影响模型最终挑哪几条。 */
+export function rankByInterest(items, interests) {
+  const words = String(interests || '').split(/[,，、\s]+/).filter(Boolean).slice(0, 12)
+  if (!words.length) return items
+  const score = (t) => words.reduce((n, w) => (String(t).includes(w) ? n + 1 : n), 0)
+  return [...items]
+    .map((x) => ({ x, s: score(x.title) }))
+    .sort((a, b) => (b.s - a.s) || (b.x.ts - a.x.ts))
+    .map((r) => r.x)
 }
 
 const dayKey = (t = Date.now()) => {
@@ -168,26 +192,7 @@ export default {
         }
       }
       // 多源之后同一件事会被好几家同时报道，按标题前 14 字去重，先到的（FEEDS 顺序）优先
-      const seen = new Set()
-      const unique = []
-      for (const it of all) {
-        const k = String(it.title).replace(/[\s\p{P}]/gu, '').slice(0, 14)
-        if (k && seen.has(k)) continue
-        if (k) seen.add(k)
-        unique.push(it)
-      }
-      return unique
-    }
-
-    // 兴趣加权：命中关键词的条目前置。只影响排序，不影响模型最终挑哪几条。
-    function rankByInterest(items, interests) {
-      const words = String(interests || '').split(/[,，、\s]+/).filter(Boolean).slice(0, 12)
-      if (!words.length) return items
-      const score = (t) => words.reduce((n, w) => (String(t).includes(w) ? n + 1 : n), 0)
-      return [...items]
-        .map((x) => ({ x, s: score(x.title) }))
-        .sort((a, b) => (b.s - a.s) || (b.x.ts - a.x.ts))
-        .map((r) => r.x)
+      return dedupeByTitle(all)
     }
 
     async function build(force = false) {
