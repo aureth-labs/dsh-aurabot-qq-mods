@@ -204,13 +204,13 @@ node lib/cli.mjs verify [--live]   # 跑模块自检（--live 才真起浏览器
 ## 自检
 
 ```bash
-node test/verify.mjs            # 180 项：注册、权限、总开关、送礼开关、登录/窗口、计时锚点、时段、去重、崩溃恢复、选点/唯一性/签名、闸门、点击器、灯牌判据、面板渲染、0.9.7 优化回归
+node test/verify.test.mjs            # 180 项：注册、权限、总开关、送礼开关、登录/窗口、计时锚点、时段、去重、崩溃恢复、选点/唯一性/签名、闸门、点击器、灯牌判据、面板渲染、0.9.7 优化回归
 node --test test/click.test.mjs     # 9 项执行级测试：假 CDP 真跑 find→唯一→命中→点击 全链 + 闸门状态机
 node --test test/install.test.mjs   # 3 项「装一遍」验证（复制到临时目录 → import → setup → panel 解析），CI 也跑这个
-set LIVE=1 && node test/verify.mjs   # 再加 3 项：真起 Edge / CDP 连上 / 收工能关
+set LIVE=1 && node test/verify.test.mjs   # 再加 3 项：真起 Edge / CDP 连上 / 收工能关
 ```
 
-> verify.mjs 大多是「源码字符串 grep」，抓不到运行时回归 —— 执行级的兜底在 click.test.mjs（0.9.7 加），
+> verify.test.mjs 大多是「源码字符串 grep」，抓不到运行时回归 —— 执行级的兜底在 click.test.mjs（0.9.7 加），
 > 它喂假 `evalJs/send` 把点击全链真正执行一遍，不用开浏览器。
 
 脚本喂的是假 `api`：不发 QQ、不改真配置、数据落在临时目录。Windows 用 `set`，macOS/Linux 用 `LIVE=1 node ...`。
@@ -294,7 +294,7 @@ QQ 里 `/看直播 自检` 会给一份体检单；面板里也能调 `GET /aura
 
 运维：截图目录按 7 天滚动清理；半自动红框改按候选 rect 画（合并扫描后 `mark(0)` 可能框错）；
 `escapeRe` 一行化、`clampCheckSec` 收敛 6 处重复；新增执行级测试 `test/click.test.mjs`（9 项，假 CDP）。
-verify.mjs 162 → 180 项。
+verify.test.mjs 162 → 180 项。
 
 ### 0.9.6 — 两个致命 BUG + 一批小修（2026-11-09）
 
@@ -306,7 +306,7 @@ verify.mjs 162 → 180 项。
 3. 小修：`checkSec` 挂着时热改不生效（`syncEnabled` 只在没定时器时才 `armTick`，与「改完立刻生效」矛盾）；
    自检 / 面板「不在时段内仍会进房」文案与实际相反（实际是关浏览器不进房）；
    `verifyGiftSent` 拿礼物名直接拼正则（「玫瑰(新)」会抛错，改用 `escapeRe`）；
-   verify.mjs 头部过时的 `verify/` 路径；日志标签乱码。回归检查补 5 条。
+   verify.test.mjs 头部过时的 `verify/` 路径；日志标签乱码。回归检查补 5 条。
 
 ### 0.9.4 — 最大化真正生效（2026-11-09）
 
