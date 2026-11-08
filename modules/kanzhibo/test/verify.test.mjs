@@ -1,7 +1,8 @@
 // 看直播模块的离线自检脚本（不是 Aurabot 模块 —— 它躺在 test/ 里，插件不会当入口文件加载）。
 // 用法（在模块文件夹里，或者任意目录只要路径对）：
-//   node test/verify.mjs                 # 只测逻辑：工具/命令/接口注册、时段判定、每日去重、崩溃恢复
-//   set LIVE=1 && node test/verify.mjs   # 额外真起一次 Edge + CDP（Windows），验证浏览器链路
+//   node test/verify.test.mjs                 # 只测逻辑：工具/命令/接口注册、时段判定、每日去重、崩溃恢复
+//   set LIVE=1 && node test/verify.test.mjs   # 额外真起一次 Edge + CDP（Windows），验证浏览器链路
+// 命名成 *.test.mjs 是为了被 CI 的通配符（modules/*/test/*.test.mjs）和 node --test 认到。
 //
 // 它给模块喂一个假的 api（不发 QQ、不改真配置、数据落在临时目录）。
 // 然后跑：工具/命令/接口能不能注册上、tick 的时段判定、灯牌与评论的每日去重、
