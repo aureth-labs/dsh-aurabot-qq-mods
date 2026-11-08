@@ -13,6 +13,9 @@ import { get } from 'node:https'
 
 const FEEDS = [
   { name: 'IT之家', url: 'https://www.ithome.com/rss/' },
+  { name: 'Solidot', url: 'https://www.solidot.org/index.rss' },
+  { name: '爱范儿', url: 'https://www.ifanr.com/feed' },
+  { name: '少数派', url: 'https://sspai.com/feed' },
 ]
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
@@ -24,12 +27,25 @@ const todayLabel = () => {
   return `${d.getMonth() + 1}月${d.getDate()}日晚报`
 }
 
-const systemPrompt = (label) => `你在给主人写今晚的科技新闻简报。下面是刚抓到的新闻标题（每条前面有序号）。
+// 详细度档位：面板里选，直接决定提示词里的条数和每条的写法。
+const DETAILS = {
+  brief: { count: 3, rule: '每条只写一句话、不超过 25 字，说清「发生了什么」就停，不要解释为什么重要' },
+  normal: { count: 6, rule: '每条不超过 45 字：先说是什么，再补一句为什么值得注意' },
+  deep: { count: 4, rule: '每条 60~90 字、分两小句：第一句是什么（带关键数字或型号），第二句影响谁、为什么重要' },
+}
+
+const systemPrompt = (label, { detail = 'normal', interests = '', maxItems = 6 } = {}) => {
+  const d = DETAILS[detail] || DETAILS.normal
+  // 常规档尊重面板里的「最多几条」，简报/详细档用固定条数（写死了才不会和前两条规则打架）
+  const count = detail === 'normal' ? Math.max(1, Math.min(10, Number(maxItems) || 6)) : d.count
+  const like = String(interests || '').split(/[,，、\s]+/).filter(Boolean).slice(0, 12)
+  return `你在给主人写今晚的科技新闻简报。下面是今天各来源抓到的标题（每条前面有序号，方括号里是来源媒体）。
 
 挑出真正值得他知道的几条。判断标准：
 一、影响面大——行业级、平台级的变化，不是某个小产品的促销
 二、跟 AI、开发、硬件、开源、互联网产品有关
 三、有信息量——能让他知道「发生了什么」，不是「又有新闻了」
+${like.length ? `四、他最近更关心这些方向：${like.join('、')}。同类新闻优先考虑，但别硬凑，没有就不写` : ''}
 
 一定要跳过的：股价涨跌、降价促销、明星八卦、发布会倒计时、纯娱乐、重复报道、时政。
 
@@ -38,13 +54,14 @@ ${label}
 
 第一行必须一字不差地照抄上面那行标题，不要改日期、不要加年份、不要自己算今天是几号。
 
-· 一句话说清这条是什么，然后说为什么值得注意
-· ...
+· ${d.rule}
+· 每一条的末尾都要用括号标出来源媒体，照抄输入里给出的那个名字，比如（IT之家）（少数派）；没有来源的条目不要自己编一个
 
-最多 6 条。每条不超过 45 字。
+最多 ${count} 条。
 如果今天确实没什么值得说的，就只输出一行：「今天没什么特别的。」
 
 不要写「以下是」「希望对你有帮助」这类话。`
+}
 
 const pickTag = (s, tag) => {
   const re = new RegExp(`<${tag}>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?</${tag}>`)
@@ -70,7 +87,7 @@ function fetchXml(url, timeoutMs = 15000) {
   })
 }
 
-function parseItems(xml) {
+function parseItems(xml, source = '') {
   const out = []
   for (const m of String(xml).matchAll(/<item>([\s\S]*?)<\/item>/g)) {
     const s = m[1]
@@ -78,7 +95,7 @@ function parseItems(xml) {
     if (!title) continue
     const raw = pickTag(s, 'pubDate')
     const ts = Date.parse(raw)
-    out.push({ title, link: pickTag(s, 'link'), ts: Number.isNaN(ts) ? 0 : ts })
+    out.push({ title, link: pickTag(s, 'link'), ts: Number.isNaN(ts) ? 0 : ts, source })
   }
   return out
 }
@@ -92,14 +109,33 @@ export default {
   id: 'morning',
   name: '每日晚报',
   version: '1.0.0',
-  description: '每晚定时把科技新闻筛成几条要点私聊推给主人，也能随时问她「今天有什么新闻」',
+  description: '每晚定时抓多个科技媒体，筛成几条要点私聊推给主人（标注来源），也能随时问她「今天有什么新闻」',
   api: 1,
   defaults: {
     enabled: true,
     atHour: 20,
     atMinute: 0,
     maxItems: 6,
+    detail: 'normal',
+    interests: '',
   },
+  settings: [
+    { key: 'enabled', label: '定时推送', type: 'switch', hint: '关掉只停定时；/晚报 命令随时能用' },
+    { key: 'atHour', label: '几点（小时）', type: 'number', min: 0, max: 23, step: 1 },
+    { key: 'atMinute', label: '几分', type: 'number', min: 0, max: 59, step: 5 },
+    {
+      key: 'detail',
+      label: '详细程度',
+      type: 'select',
+      options: [
+        { value: 'brief', label: '简报（3 条，每条一句话）' },
+        { value: 'normal', label: '常规（6 条，是什么 + 为什么重要）' },
+        { value: 'deep', label: '详细（4 条，每条带影响面）' },
+      ],
+    },
+    { key: 'interests', label: '更关心的话题', type: 'text', placeholder: 'AI 芯片, 开源, 游戏引擎', hint: '逗号分隔。命中的新闻会被优先挑出来，留空就不偏科' },
+    { key: 'maxItems', label: '最多几条（仅常规档生效）', type: 'number', min: 1, max: 10, step: 1 },
+  ],
   setup(api) {
     const readJson = (name, fallback) => {
       try {
@@ -124,14 +160,34 @@ export default {
       for (const feed of FEEDS) {
         try {
           const xml = await fetchXml(feed.url)
-          const items = parseItems(xml)
+          const items = parseItems(xml, feed.name)
           api.log.info(`[morning] ${feed.name} 抓到 ${items.length} 条`)
           all.push(...items)
         } catch (error) {
           api.log.warn(`[morning] ${feed.name} 抓取失败：${error.message}`)
         }
       }
-      return all
+      // 多源之后同一件事会被好几家同时报道，按标题前 14 字去重，先到的（FEEDS 顺序）优先
+      const seen = new Set()
+      const unique = []
+      for (const it of all) {
+        const k = String(it.title).replace(/[\s\p{P}]/gu, '').slice(0, 14)
+        if (k && seen.has(k)) continue
+        if (k) seen.add(k)
+        unique.push(it)
+      }
+      return unique
+    }
+
+    // 兴趣加权：命中关键词的条目前置。只影响排序，不影响模型最终挑哪几条。
+    function rankByInterest(items, interests) {
+      const words = String(interests || '').split(/[,，、\s]+/).filter(Boolean).slice(0, 12)
+      if (!words.length) return items
+      const score = (t) => words.reduce((n, w) => (String(t).includes(w) ? n + 1 : n), 0)
+      return [...items]
+        .map((x) => ({ x, s: score(x.title) }))
+        .sort((a, b) => (b.s - a.s) || (b.x.ts - a.x.ts))
+        .map((r) => r.x)
     }
 
     async function build(force = false) {
@@ -153,19 +209,24 @@ export default {
           return { ok: false, message: '一条新闻都没抓到（试试 /晚报 再跑一次）' }
         }
 
-        // 只要最近 30 小时内的，按时间倒序，避免旧闻
+        // 只要最近 30 小时内的，按时间倒序，再按主人的兴趣加权前置
         const cutoff = Date.now() - 30 * 3600 * 1000
-        const fresh = items
-          .filter((x) => !x.ts || x.ts >= cutoff)
-          .sort((a, b) => b.ts - a.ts)
-          .slice(0, 30)
+        const fresh = rankByInterest(
+          items.filter((x) => !x.ts || x.ts >= cutoff).sort((a, b) => b.ts - a.ts),
+          s.interests,
+        ).slice(0, 40)
 
         if (!fresh.length) return { ok: false, message: '今天没有新抓到的新闻' }
 
-        const text = fresh.map((x, i) => `${i + 1}. ${x.title}`).join('\n')
+        const text = fresh.map((x, i) => `${i + 1}. [${x.source || '来源未知'}] ${x.title}`).join('\n')
+        const detail = DETAILS[s.detail] ? s.detail : 'normal'
         let answer = ''
         try {
-          answer = await api.ask({ system: systemPrompt(todayLabel()), text, maxTokens: 700 })
+          answer = await api.ask({
+            system: systemPrompt(todayLabel(), { detail, interests: s.interests, maxItems: s.maxItems }),
+            text,
+            maxTokens: detail === 'deep' ? 900 : 700,
+          })
         } catch (error) {
           api.log.warn('[morning] 生成失败：', error.message)
           return { ok: false, message: '生成失败：' + error.message }
@@ -265,9 +326,10 @@ export default {
           const lines = fresh.slice(0, n).map((x, i) => {
             const t = x.ts ? new Date(x.ts) : null
             const hm = t ? `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')} ` : ''
-            return `${i + 1}. ${hm}${x.title}`
+            return `${i + 1}. ${hm}${x.title}（${x.source || '来源未知'}）`
           })
-          return { ok: true, message: `今天 ${todayLabel()}（共抓到 ${fresh.length} 条，给你最新的 ${lines.length} 条）：\n${lines.join('\n')}` }
+          const srcs = [...new Set(fresh.map((x) => x.source).filter(Boolean))].join('、')
+          return { ok: true, message: `今天 ${todayLabel()}（共抓到 ${fresh.length} 条，来自 ${srcs || '单一来源'}，给你最新的 ${lines.length} 条）：\n${lines.join('\n')}` }
         },
       })
     })
