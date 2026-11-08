@@ -11,7 +11,7 @@ const { profileToolVisible, profilePermits } = __lib('chat/access.js')
 export default {
   id: 'heybox',
   name: '刷小黑盒',
-  version: '1.5.0',
+  version: '1.5.1',
   api: 1,
   description: '用主人的账号逛小黑盒：看帖子和热评，点赞、评论、发帖。支持谷时逛、扫码登录和浏览器验证。',
   tab: 'heybox',
