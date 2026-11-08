@@ -1,4 +1,4 @@
-﻿// 桌宠模块（内置模块，id='pet'；注册在 src/modules/index.js 的 BUILTINS，全新安装即有）
+// 桌宠模块（内置模块，id='pet'；注册在 src/modules/index.js 的 BUILTINS，全新安装即有）
 //
 // ⚠ 来源与许可（别误当成自研）：桌宠的客户端形态（Electron 透明置顶窗 + 长轮询 + 气泡）、拖拽物理、
 // pet pack 目录约定、以及工作状态六档 / 碎碎念动画的命名约定，都移植自 dsh-pet
@@ -35,7 +35,7 @@ const MIN_MS = 60_000            // 一分钟（碎碎念间隔/静默窗口都�
 export default {
   id: 'pet',
   name: '桌宠',
-  version: '1.0.13',
+  version: '1.0.14',
   api: 1,
   description: '把大肥鱼请到桌面上：会冒气泡、做小动作，你在干活时也陪着你。',
 
@@ -76,6 +76,13 @@ export default {
     chatBehaviorMaxPerDay: 20,         // 聊天联动每日上限
     petScale: 1,                       // 人物大小倍率（0.5~2.0，1 = 原始 240px；客户端按窗口宽等比缩放）
     petReleaseLand: true,              // 松手后落地：开 = 按甩出速度抛出去并落回屏幕底部（原行为）；关 = 松手停在哪就在哪
+    // 甩抛物理（1.0.14，面板 PR #284 六键中的两键）：客户端把服务端下发的 physics 叠在素材包默认之上
+    petGravity: 1400,                  // 下落加速度 px/s²（200~4000；1400 = dsh-pet 原版手感）
+    petRestitution: 0.78,              // 落地反弹保留速度比例（0.3~0.95；0.78 = Q 弹不疯跳）
+    petAnimRate: 1,                    // 动画节奏倍率（0.5~2）：>1 更活泼（空闲轮播间隔 ÷ 它）
+    petShowBalance: true,              // 右键菜单「查看余额」：开才显示菜单项
+    petClickChase: false,              // 点击扑上来抓鼠标（默认关；关 = 点了只播点击动画不追）
+    petTeaseChase: false,              // 晃鼠标勾引追（默认关；关 = 晃鼠标不扑）
     // 对话框（主人找她聊的小窗，与碎碎念/聊天联动是三码事；永不发 QQ）
     petChatEnabled: false,             // 总开关：默认关（仿行为大脑，面板手动打开）
     petChatHotkey: 'Alt+P',            // 全局快捷键（单键 toggle）；留空 = 不启用；被占用保持关闭
@@ -132,6 +139,13 @@ export default {
     { key: 'chatBehaviorMaxPerDay', label: '聊天联动每日上限', type: 'number', min: 0, max: 9999 },
     { key: 'petScale', label: '人物大小（倍）', type: 'number', min: 0.5, max: 2, hint: '桌宠整体缩放倍率：0.5 = 一半大，2 = 两倍大，1 = 原始大小。面板「桌宠」卡的大小滑条改的也是这一项' },
     { key: 'petReleaseLand', label: '松手后落地', type: 'switch', hint: '拖动松手后按甩出速度抛出去、落回屏幕底部（带 Q 弹挤压）；关掉则松手停在哪就在哪，不抛也不落' },
+    // 甩抛物理与互动开关（1.0.14，与面板 PR #284 六键同步：宿主白名单已登记，这里补模块侧声明与下发）
+    { key: 'petGravity', label: '下落加速度', type: 'number', min: 200, max: 4000, hint: '甩抛后往下掉的加速度（px/s²）。默认 1400（原版手感）；调小飘得慢（月球感），调大掉得快更利落' },
+    { key: 'petRestitution', label: '落地反弹系数', type: 'number', min: 0.3, max: 0.95, hint: '落地时保留多少速度反弹（0~1 取小数）。默认 0.78（Q 弹）；调小像砸在地上，调大接近 0.95 会停不下来地跳' },
+    { key: 'petAnimRate', label: '动画节奏倍率', type: 'number', min: 0.5, max: 2, hint: '空闲小动作的节奏快慢：1 = 正常，2 = 间隔减半更活泼，0.5 = 更慵懒。只影响动画间隔，不改变物理与移动速度' },
+    { key: 'petShowBalance', label: '右键「查看余额」', type: 'switch', hint: '开 = 桌宠右键菜单显示「查看余额」菜单项（点了向插件查询 DeepSeek 账户余额，气泡展示）。默认开；关 = 菜单里不出现这一项' },
+    { key: 'petClickChase', label: '点击扑鼠标', type: 'switch', hint: '点击桌宠时扑上来抓鼠标（带冷却）。默认关：关 = 只播点击动画，不追鼠标' },
+    { key: 'petTeaseChase', label: '晃鼠标勾引追', type: 'switch', hint: '在桌宠旁边快速晃鼠标时她可能扑上来追（带冷却）。默认关：关 = 晃鼠标不触发追逐' },
     // 对话框（桌宠旁的小窗聊天：快捷键/右键菜单唤出，按碎碎念同款人格+记忆+当下状态回答，永不发 QQ）
     { key: 'petChatEnabled', label: '对话框', type: 'switch', hint: '开桌宠旁的对话小窗：快捷键或右键菜单唤出，只聊在小窗/气泡里，绝不发 QQ' },
     { key: 'petChatHotkey', label: '对话框快捷键', type: 'text', hint: '全局快捷键，按一次开、再按一次关（如 Alt+P）。留空 = 不启用；被别的程序占用时注册失败，桌宠会气泡提醒一次、功能保持关闭，此处的当前注册状态看「状态」卡' },
@@ -535,6 +549,36 @@ export default {
     /** 松手后落地开关：读不到一律当开（保持原物理行为），别让配置坏了把抛掷弄丢。 */
     function petReleaseLand() {
       return api.settings().petReleaseLand !== false
+    }
+
+    // ---------- 甩抛物理与互动开关（1.0.14，面板 PR #284 六键的服务端口径） ----------
+    /** 甩抛物理参数：从设置读 gravity/restitution，坏值回落 defaults 口径（gravity 1400 / restitution 0.78）。
+     *  客户端把它叠在素材包 physics 默认之上（设置优先于素材包默认），见 pet-client/main.js 的 pet:throw。 */
+    function petPhysics() {
+      const def = { gravity: 1400, restitution: 0.78 }
+      const g = Number(api.settings().petGravity)
+      const r = Number(api.settings().petRestitution)
+      return {
+        gravity: Number.isFinite(g) && g > 0 ? Math.min(4000, Math.max(200, g)) : def.gravity,
+        restitution: Number.isFinite(r) && r > 0 ? Math.min(0.95, Math.max(0.3, r)) : def.restitution,
+      }
+    }
+    /** 动画节奏倍率（0.5~2）：坏值回落 1（正常节奏），客户端把空闲轮播间隔除以它。 */
+    function petAnimRate() {
+      const v = Number(api.settings().petAnimRate)
+      return Number.isFinite(v) && v > 0 ? Math.min(2, Math.max(0.5, v)) : 1
+    }
+    /** 右键「查看余额」开关：`!== false` 口径 —— 默认开，只有明确写 false 才关（与 petReleaseLand 同口径）。 */
+    function petShowBalance() {
+      return api.settings().petShowBalance !== false
+    }
+    /** 点击扑鼠标开关：`=== true` 口径 —— 默认关，明确写 true 才开（高危偏好默认关，与 behaviorCloseWindowEnabled 同口径）。 */
+    function petClickChase() {
+      return api.settings().petClickChase === true
+    }
+    /** 晃鼠标勾引追开关：`=== true` 口径，同上。 */
+    function petTeaseChase() {
+      return api.settings().petTeaseChase === true
     }
 
     // ---------- pet pack（换形象，仿 dsh-pet 目录约定；运行数据只写数据目录） ----------
@@ -3057,6 +3101,26 @@ export default {
     }
 
     // ---------- 路由 ----------
+    // ---------- 余额查询（1.0.14，右键「查看余额」的服务端通道） ----------
+    // ⚠ key 获取通道的结论（2026-11-07 调研）：插件 api 面（makeApi）拿不到明文 DeepSeek API key——
+    //   宿主配置里只有 imageGen.apiKey / memory.vector.apiKey（各自用途不同，拿来查余额既不干净也不对）；
+    //   聊天模型的 key 走 DSH 网关（host.js 经 ctx.llm 列 provider/model），插件侧永远只见模型名不见 key。
+    // 所以这条路由按「诚实降级」实现：默认回 { ok:false, message }，客户端气泡显示友好文案，绝不造假数据。
+    // 未来宿主若开放 key 通道，只需在 petHooks.fetchBalance 注入实现（测试同款注入点），路由与客户端不用改。
+    async function fetchBalance() {
+      try {
+        if (typeof petHooks.fetchBalance === 'function') return await petHooks.fetchBalance()
+        return { ok: false, message: '暂无法获取余额：插件拿不到 DeepSeek API key（模型请求走 DSH 网关，不存明文 key）' }
+      } catch (error) {
+        // 绝不把 key 或请求头打进日志/响应：只透出兜底文案
+        return { ok: false, message: '余额查询失败了，过会儿再试试吧' }
+      }
+    }
+    api.route('/balance', async (req, res) => {
+      if (!guard(req, res).ok) return
+      const r = await fetchBalance()
+      api.core.http.send(res, r.ok ? 200 : 502, r)
+    })
     api.route('/events', (req, res) => pollEvents(req, res))
     api.route('/status', (req, res) => {
       if (!guard(req, res).ok) return
@@ -3097,6 +3161,14 @@ export default {
         scale: petScale(),
         // 松手后落地开关：false = 客户端松手后停在原地（不抛不落）；缺省当 true
         releaseLand: petReleaseLand(),
+        // 甩抛物理（1.0.14）：客户端把它叠在素材包 physics 默认之上，设置优先于素材包默认
+        physics: petPhysics(),
+        // 动画节奏倍率：客户端把空闲轮播间隔 ÷ 它（>1 更活泼）；坏值服务端已回落 1
+        animRate: petAnimRate(),
+        // 互动开关（1.0.14）：「查看余额」菜单显隐 / 点击扑鼠标 / 晃鼠标勾引追（布尔口径在取值函数里统一收口）
+        balanceEnabled: petShowBalance(),
+        clickChase: petClickChase(),
+        teaseChase: petTeaseChase(),
         work: { ...workSnapshot(), label: WORK_STATE_LABEL[workSnap.state] || '' },
         whisper: (({ enabled, source }) => ({ enabled, source }))(whisperStatus()),
         // 行为层：客户端的**反应层**（点击/勾引/摸摸/鼠标闲置）是本地直接演的，不看这一份的话
@@ -3402,6 +3474,7 @@ export default {
       petChatSweep,                          // 测试钩子：历史过期清理（定时器同函数，可注入 now）
       petChatHistory: chatHistory,           // 测试钩子：读历史（GET /chat/history 同函数）
       weatherFetchOnce,                      // 测试钩子：天气拉取（可配 petHooks.fetchWeather，不打真网络）
+      balance: fetchBalance,                 // 测试钩子：余额查询（可配 petHooks.fetchBalance；默认诚实降级回 ok:false）
       onSessionEvent,                        // host.js 把 ctx.on('session/event') 转发进来
       workStatus: () => ({ ...workSnapshot(), label: WORK_STATE_LABEL[workSnap.state] || '', text: workEndText(workSnap) }),
       status: () => {
@@ -3409,6 +3482,10 @@ export default {
         const w = workSettings()
         return {
           ...online(), focus: focusOn(), scale: petScale(), releaseLand: petReleaseLand(), carrier: s.carrier, modality: s.modality, bootId, seq,
+          // 甩抛物理与互动开关（1.0.14）：面板守卫 pet.physics / pet.animRate / pet.balanceEnabled /
+          // pet.clickChase / pet.teaseChase 看的就是这份（host.js /panel/pet/status 用 use('pet').status()）
+          physics: petPhysics(), animRate: petAnimRate(),
+          balanceEnabled: petShowBalance(), clickChase: petClickChase(), teaseChase: petTeaseChase(),
           pack: activePack(), playbackCount: playbacks.length,
           // 素材包概况：面板「素材包」卡用它显示状态（内建模块的 settings 不渲染表单，只能走 status + /panel/pet/*）
           packInfo: (() => {

@@ -12,8 +12,8 @@ import { parseIntent, matchDevice, canControl, formatDevices, classifyDevice } f
 
 export default {
   id: 'mijia',
-  name: '米家智控',
-  version: '1.1.1',
+  name: '逛米家（米家智控）',
+  version: '1.1.3',
   api: 1,
   description: '米家设备列表与开/关控制：扫码登录免账号密码，私聊说「开客厅灯」或用 /米家 命令，也能让她自己调工具',
   panel: 'panel.js',

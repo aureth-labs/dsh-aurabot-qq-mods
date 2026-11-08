@@ -7,16 +7,22 @@ const { useState, useEffect, useCallback, useRef } = React
 
 const TYPE_ICON = { light: '💡', switch: '🔌', ac: '❄️', curtain: '🪟', fan: '🌀', sensor: '📡', hub: '🎥', other: '📦' }
 
-return function Panel({ settings, save, toast }) {
-  // ---- 设置草稿（扫码协议没有账号密码，只剩授权与开关类）----
-  const [draft, setDraft] = useState({
-    enabled: settings.enabled === true,
-    whitelist: settings.whitelist || '',
-    privateOnly: settings.privateOnly !== false,
-    cacheSeconds: Number(settings.cacheSeconds) || 300,
-    homeName: String(settings.homeName || ''),
-  })
-  const set = (k, v) => setDraft((d) => ({ ...d, [k]: v }))
+return function Panel({ settings, draftSettings, setSettings, save, toast }) {
+  // ---- 设置：全部走宿主草稿（draftSettings / setSettings），与页面底部「保存设置」同一条链路 ----
+  // 为什么要这样：面板自己 useState 存一份草稿时，改动只活在组件内部——既不会同步进宿主的
+  // draft.ext.mijia（底部「有改动还没保存」不出现、切标签页组件重挂就全丢），而这个面板本身
+  // 又没有保存按钮，于是「授权名单、仅私聊、缓存秒数」改了跟没改一样。旧面板宿主不提供
+  // setSettings 时才退回本地草稿 + 面板自带的「保存设置」按钮（见下面 saveNow）。
+  const editable = typeof setSettings === 'function'
+  const [local, setLocal] = useState({})
+  const base = { ...(settings || {}), ...(draftSettings || {}) }
+  const cfg = editable ? base : { ...base, ...local }
+  const set = (k, v) => {
+    if (editable) return setSettings({ [k]: v })
+    setLocal((d) => ({ ...d, [k]: v }))
+  }
+  // 旧宿主兜底：直接把整份配置交给宿主写盘（新宿主不走这条路）
+  const saveNow = () => save(cfg)
 
   const [devices, setDevices] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -37,7 +43,7 @@ return function Panel({ settings, save, toast }) {
 
   const persist = async (skipToast) => {
     try {
-      await save(draft)
+      await saveNow()
       if (!skipToast) toast('设置已保存')
       return true
     } catch (e) {
@@ -421,7 +427,17 @@ return function Panel({ settings, save, toast }) {
     title: '💡 米家智控',
     right: h('span', { className: 'ab-flex', style: { gap: 8, alignItems: 'center' } },
       h('span', { className: 'ab-small ab-muted' }, '总开关'),
-      h(ui.Switch, { on: draft.enabled === true, title: '总开关', onChange: () => { const v = !(draft.enabled === true); set('enabled', v); save({ enabled: v }) } })),
+      // 总开关即切即存：它是「她能不能碰设备」的安全开关，不能等底部保存，免得以为关了其实没关。
+      // 新宿主直接写 ext.mijia；旧宿主（无 setSettings）退回整份 save + 本地面板按钮。
+      h(ui.Switch, {
+        on: cfg.enabled === true,
+        title: '总开关',
+        onChange: () => {
+          const v = !(cfg.enabled === true)
+          set('enabled', v)
+          if (!editable) save({ ...cfg, enabled: v })
+        },
+      })),
   },
 
     // ======== 扫码登录（无需账号密码）========
@@ -442,23 +458,28 @@ return function Panel({ settings, save, toast }) {
     // ======== 其他设置 ========
     h('div', { style: { marginTop: 12 } },
       field('授权名单（每行一个 QQ 号，主人永远放行）',
-        h('textarea', { className: 'ab-input', rows: 2, value: draft.whitelist, onChange: (e) => set('whitelist', e.target.value), style: { width: '100%' } })),
+        h('textarea', { className: 'ab-input', rows: 2, value: cfg.whitelist || '', onChange: (e) => set('whitelist', e.target.value), style: { width: '100%' } })),
       h('div', { style: { display: 'flex', gap: 16, alignItems: 'center' } },
         field('仅私聊可用',
           h('label', null,
-            h('input', { type: 'checkbox', checked: draft.privateOnly, onChange: (e) => set('privateOnly', e.target.checked) }),
+            h('input', { type: 'checkbox', checked: cfg.privateOnly !== false, onChange: (e) => set('privateOnly', e.target.checked) }),
             ' 开')),
         field('设备缓存秒数',
-          h('input', { className: 'ab-input', type: 'number', min: 30, max: 3600, step: 30, value: draft.cacheSeconds, onChange: (e) => set('cacheSeconds', e.target.value), style: { width: 120 } })))),
+          h('input', { className: 'ab-input', type: 'number', min: 30, max: 3600, step: 30, value: cfg.cacheSeconds ?? 300, onChange: (e) => set('cacheSeconds', e.target.value), style: { width: 120 } }))),
+      // 默认只看哪个家（上游 1.1.1 新增；改走宿主草稿链路 cfg，不再用本地 draft）
       field('默认只看哪个家（空=全部家庭；房间/设备会按这个家限定）',
         h('select', {
           className: 'ab-input',
-          value: draft.homeName,
+          value: cfg.homeName || '',
           style: { width: 220 },
           onChange: (e) => set('homeName', e.target.value),
         }, ['', ...homes.map((hm) => hm.name)].map((o) => h('option', { key: o || 'all', value: o }, o ? homeLabel(o) : '全部家庭')),
           homes.length ? null : h('option', { key: 'none', value: '' }, '（先扫码登录后才列得出家庭）')),
         h('div', { className: 'ab-small ab-muted', style: { marginTop: 2 } }, '只影响 QQ 消息与工具调用；面板筛选随时可切。')),
+      // 新宿主：改动进宿主草稿，靠页面底部「保存设置」统一落盘（与其它模块一致）。
+      editable ? null : h('div', { style: { marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' } },
+        h(ui.Btn, { kind: 'primary', onClick: () => persist(false) }, '保存设置'),
+        h('span', { className: 'ab-small ab-muted' }, '当前面板没有宿主草稿接口，改完要点这里保存'))),
 
     // ======== 设备列表（房间 / 类型筛选）========
     h('div', { style: { marginTop: 12 } },

@@ -1997,3 +1997,102 @@ test('客户端包：/client-package 返回合法 zip（含 main.js 与内嵌远
   assert.equal(r2.status, 200, '同机模式打包照常工作（面板不展示该按钮）')
 })
 
+// ---------- 1.0.14：面板六键（physics / animRate / 互动开关）+ 余额路由 ----------
+
+test('1.0.14：defaults 与 /config 下发甩抛物理与互动开关；坏值回落 defaults 口径', async () => {
+  const env = startModule()
+  // 默认值口径（与 defaults 一致，别让默认配置就「飞起来」或「砸地上」）。
+  // 注：fake api 的 settings() 不合 defaults（真实 makeApi 才合），所以 defaults 单独从 mod.defaults 验
+  assert.equal(mod.defaults.petGravity, 1400)
+  assert.equal(mod.defaults.petRestitution, 0.78)
+  assert.equal(mod.defaults.petAnimRate, 1)
+  assert.equal(mod.defaults.petShowBalance, true)
+  assert.equal(mod.defaults.petClickChase, false)
+  assert.equal(mod.defaults.petTeaseChase, false)
+  // 版本三处同步：module.json 与 index.mjs 一起升
+  assert.equal(mod.version, '1.0.14')
+  assert.equal(JSON.parse(readFileSync(join(MODULE_DIR, 'module.json'), 'utf8')).version, '1.0.14')
+
+  const cfg = await env.call('/config')
+  assert.equal(cfg.status, 200)
+  assert.deepEqual(cfg.json.physics, { gravity: 1400, restitution: 0.78 }, '/config.physics 默认口径')
+  assert.equal(cfg.json.animRate, 1, '/config.animRate 默认口径')
+  assert.equal(cfg.json.balanceEnabled, true, '/config.balanceEnabled 默认开')
+  assert.equal(cfg.json.clickChase, false, '/config.clickChase 默认关')
+  assert.equal(cfg.json.teaseChase, false, '/config.teaseChase 默认关')
+
+  // 正常值原样透传
+  env.api.saveSettings({ petGravity: 800, petRestitution: 0.5, petAnimRate: 1.5 })
+  const cfg2 = await env.call('/config')
+  assert.deepEqual(cfg2.json.physics, { gravity: 800, restitution: 0.5 })
+  assert.equal(cfg2.json.animRate, 1.5)
+
+  // 坏值回落：超界夹回 min/max；非数字回落 defaults（别让坏配置把桌宠弄失灵）
+  env.api.saveSettings({ petGravity: 99, petRestitution: 5, petAnimRate: 'abc' })
+  const cfg3 = await env.call('/config')
+  assert.deepEqual(cfg3.json.physics, { gravity: 200, restitution: 0.95 }, '超界夹回 200~4000 / 0.3~0.95')
+  assert.equal(cfg3.json.animRate, 1, '坏倍率回落 1')
+  env.api.saveSettings({ petGravity: 'x', petRestitution: null })
+  const cfg4 = await env.call('/config')
+  assert.deepEqual(cfg4.json.physics, { gravity: 1400, restitution: 0.78 }, '非数字回落默认')
+})
+
+test('1.0.14：status() 下发同款字段（面板守卫 pet.physics 等看的就是这份）', async () => {
+  const env = startModule()
+  const st = env.exports.status()
+  assert.deepEqual(st.physics, { gravity: 1400, restitution: 0.78 })
+  assert.equal(st.animRate, 1)
+  assert.equal(st.balanceEnabled, true)
+  assert.equal(st.clickChase, false)
+  assert.equal(st.teaseChase, false)
+  env.api.saveSettings({ petGravity: 3000, petAnimRate: 2, petShowBalance: false, petClickChase: true, petTeaseChase: true })
+  const st2 = env.exports.status()
+  assert.deepEqual(st2.physics, { gravity: 3000, restitution: 0.78 })
+  assert.equal(st2.animRate, 2)
+  assert.equal(st2.balanceEnabled, false)
+  assert.equal(st2.clickChase, true)
+  assert.equal(st2.teaseChase, true)
+})
+
+test('1.0.14：开关布尔口径——balanceEnabled !== false、click/teaseChase === true', async () => {
+  const env = startModule()
+  // balance：只有明确 false 才关；缺失/任意真值都当开
+  env.api.saveSettings({ petShowBalance: false })
+  assert.equal((await env.call('/config')).json.balanceEnabled, false, '明确 false 才关')
+  env.api.saveSettings({ petShowBalance: true })
+  assert.equal((await env.call('/config')).json.balanceEnabled, true)
+  // click/tease：只有明确 true 才开；缺失/任意非 true 都当关（高危偏好默认关）
+  env.api.saveSettings({ petClickChase: true, petTeaseChase: true })
+  const on = await env.call('/config')
+  assert.equal(on.json.clickChase, true)
+  assert.equal(on.json.teaseChase, true)
+  env.api.saveSettings({ petClickChase: 1, petTeaseChase: 'yes' })
+  const truthy = await env.call('/config')
+  assert.equal(truthy.json.clickChase, false, '非严格 true 不算开（=== true 口径）')
+  assert.equal(truthy.json.teaseChase, false)
+})
+
+test('1.0.14：/balance 默认诚实降级（ok:false）；注入 petHooks.fetchBalance 时透传结果', async () => {
+  // 默认：插件拿不到 DeepSeek key，回 ok:false + 友好文案（绝不造假数据）
+  const env = startModule()
+  const r = await env.call('/balance')
+  assert.equal(r.status, 502)
+  assert.equal(r.json.ok, false)
+  assert.ok(r.json.message, '带友好文案给客户端气泡')
+  // 注入：未来宿主开放 key 通道时，petHooks.fetchBalance 注入实现，路由透传 { ok, balance, currency }
+  const env2 = startModule({ hooks: { fetchBalance: async () => ({ ok: true, balance: '10.00', currency: 'CNY' }) } })
+  const r2 = await env2.call('/balance')
+  assert.equal(r2.status, 200)
+  assert.deepEqual(r2.json, { ok: true, balance: '10.00', currency: 'CNY' })
+  // 注入抛错也不炸：兜底回 ok:false（key 绝不出现在响应里）
+  const env3 = startModule({ hooks: { fetchBalance: async () => { throw new Error('sk-xxx 泄漏尝试') } } })
+  const r3 = await env3.call('/balance')
+  assert.equal(r3.status, 502)
+  assert.equal(r3.json.ok, false)
+  assert.ok(!r3.raw.includes('sk-xxx'), '注入抛出的内容绝不透传（防 key 进响应）')
+  // 鉴权：坏令牌 401，与其它路由同口径
+  const bad = await env.call('/balance', { token: 'deadbeef'.repeat(6) })
+  assert.equal(bad.status, 401)
+})
+
+

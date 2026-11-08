@@ -92,6 +92,20 @@ async function apiGet(pathname, query) {
   if (!res.ok) throw new Error('HTTP ' + res.status)
   return res.json()
 }
+/** 需要看失败响应体的 GET（1.0.14，/balance 用）：服务端降级回 **HTTP 502 + {ok:false,message}**，
+ *  apiGet 会把 4xx/5xx 直接抛掉、中文文案就丢了——这里不管状态码都把 body 读回来。 */
+async function apiGetAny(pathname) {
+  const host = readHost()
+  if (!host) return null
+  const url = `${host.baseUrl}${host.api}${pathname}`
+  try {
+    const res = await fetch(url, { headers: { 'x-pet-token': host.token }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
+    let data = null
+    try { data = await res.json() } catch { data = null }
+    if (data && typeof data === 'object') return data
+    return res.ok ? data : null
+  } catch { return null }
+}
 function apiPost(pathname, body) {
   const host = readHost()
   if (!host) return
@@ -148,6 +162,12 @@ function pushPackToRenderer() {
   })})`
   win.webContents.executeJavaScript(js).catch(() => {})
 }
+/** 把动画节奏倍率推给渲染页（1.0.14）：渲染页 scheduleIdle 的间隔 ÷ 它（>1 更活泼）。
+ *  独立于 pushPackToRenderer：包没变、只改节奏时也能即时生效（8 秒轮询刷新路径）。 */
+function pushAnimRate() {
+  if (!win || win.isDestroyed()) return
+  win.webContents.executeJavaScript(`window.__setAnimRate && window.__setAnimRate(${JSON.stringify(animRate)})`).catch(() => {})
+}
 let lastWorkKey = ''
 // 人物大小倍率（服务端 /config 的 scale，0.5~2.0）：整窗等比缩放 = setSize + setZoomFactor，
 // 布局（舞台/气泡/字体）随 zoom 一起缩，物理身体盒由 bodyBox 按窗口宽反推，天然对上。
@@ -162,6 +182,16 @@ let fitBaseH = REST_H
 // 关 = 拖到哪松手就停在哪（不抛也不落，连「温柔放下」的原地掉落也一并停掉）。
 // 拦截点放主进程 pet:throw 一处：渲染页的甩抛（pet:throw）和原地掉落（throwWith(0,0)）都走这条通道。
 let releaseLand = true
+// 甩抛物理与互动开关（1.0.14，服务端 /config 下发，8 秒轮询即时生效）：
+//   serverPhysics：{gravity, restitution} —— 甩抛时叠在素材包默认之上（设置优先于素材包默认）；
+//   animRate：动画节奏倍率 —— 推给渲染页，空闲轮播间隔 ÷ 它（>1 更活泼）；
+//   clickChase / teaseChase：点击扑鼠标 / 晃鼠标勾引追的独立闸（默认关；=== true 口径，服务端已收口）；
+//   balanceEnabled：右键菜单「查看余额」显隐（!== false 口径，默认开）。
+let serverPhysics = null
+let animRate = 1
+let clickChase = false
+let teaseChase = false
+let balanceEnabled = true
 function applyScale(s) {
   if (!win || win.isDestroyed()) return
   const v = Math.min(2, Math.max(0.5, Number(s) || 1))
@@ -183,6 +213,14 @@ async function refreshConfig() {
       focusOn = cfg.focus === true
       applyScale(cfg.scale)
       releaseLand = cfg.releaseLand !== false
+      // 甩抛物理与互动开关（1.0.14）：坏值一律回落安全口径，别让坏配置把桌宠弄失灵
+      serverPhysics = (cfg.physics && typeof cfg.physics === 'object') ? cfg.physics : null
+      const rate = Number(cfg.animRate)
+      animRate = Number.isFinite(rate) && rate > 0 ? Math.min(2, Math.max(0.5, rate)) : 1
+      clickChase = cfg.clickChase === true
+      teaseChase = cfg.teaseChase === true
+      balanceEnabled = cfg.balanceEnabled !== false
+      pushAnimRate() // 节奏倍率推给渲染页（改设置后 8 秒轮询内生效，不用重启桌宠）
       // 行为层配置：总开关 + 鼠标闲置分钟数 + 禁用清单，本地缓存，读不到用默认
       const b = cfg.behavior || {}
       behaviorCfg = {
@@ -407,7 +445,14 @@ function startThrow(vx, vy) {
   const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi)
   // 起点也夹进边界：上次若被扔到屏幕外，这一次甩就自动把桌宠拉回来
   let st = { x: clamp(wx - area.x, bounds.minX, bounds.maxX), y: clamp(wy - area.y, bounds.minY, bounds.maxY), vx, vy }
-  const ph = { ...physics.DEFAULT_PHYSICS, ...(pack && pack.physics ? pack.physics : {}) }
+  // 叠加顺序（1.0.14）：内置默认 ← 素材包 physics ← 服务端下发的 physics（/config 的 cfg.physics）。
+  // 设置优先于素材包默认：面板改了「下落加速度/反弹系数」要立刻压过包里的默认手感；
+  // 坏值兜底在服务端 petPhysics() 已做过，这里只做浅合并，没有下发就维持包默认（老包零退化）。
+  const ph = {
+    ...physics.DEFAULT_PHYSICS,
+    ...(pack && pack.physics ? pack.physics : {}),
+    ...(serverPhysics && typeof serverPhysics === 'object' ? serverPhysics : {}),
+  }
   const t0 = Date.now()
   let last = t0
   let lastPos = ''
@@ -1573,6 +1618,10 @@ let behaviorCfg = { enabled: true, idleCursorMinutes: behaviorApi.THRESHOLDS.IDL
  *  首次 /config 返回前 configLoaded=false：禁用清单未知，先按「不跑」处理——否则启动瞬间
  *  关掉的追鼠标/叼鼠标还会抓一下（一审 #20 唯一一条）。摸摸不受影响（不在禁用清单口径里）。 */
 const behaviorActionEnabled = (a) => behaviorCfg.configLoaded && !behaviorCfg.disabledActions.includes(a)
+// 互动闸（1.0.14，面板六键）：晃鼠标勾引追 / 点击扑鼠标各有独立开关（默认关）。
+// 既有禁用清单闸仍先判（两个闸是「且」的关系，关任何一个都不扑）；摸摸/闲置判定完全不受影响。
+const teaseChaseEnabled = () => teaseChase === true
+const clickChaseEnabled = () => clickChase === true
 const CURSOR_SAMPLES_MAX = 40
 let cursorSamples = []     // [{x,y,t}] 升序
 let lastCursorMoveAt = Date.now()
@@ -1608,7 +1657,7 @@ setInterval(() => {
       showBubble('（被摸到了…）', '', '', '', '', 'behavior', '行为')
       return playAnimByNames(['蹭', '贴贴', '摸摸', 'pat'])
     }, { dwellMs: behaviorApi.THRESHOLDS.PAT_DWELL_MS })
-  } else if (behaviorActionEnabled('chase_cursor') && behaviorApi.isTeasing(cursorSamples, box, now)) {
+  } else if (teaseChaseEnabled() && behaviorActionEnabled('chase_cursor') && behaviorApi.isTeasing(cursorSamples, box, now)) {
     react('tease', () => handleBehavior({ action: 'chase_cursor' }), { note: '主人在旁边快速晃鼠标勾引' })
   } else if (behaviorActionEnabled('steal_cursor') && behaviorApi.isCursorIdle(lastCursorMoveAt, now, behaviorCfg.idleCursorMinutes)) {
     lastCursorMoveAt = now // 触发一次后重新计时，避免每轮都打
@@ -1639,7 +1688,8 @@ ipcMain.on('pet:throw', (_e, { vx, vy }) => {
 ipcMain.on('pet:throw-stop', () => stopThrow())
 // 反应层①点击桌宠：渲染页单击（位移 <6px）上报 → 撒娇动画（渲染页 click 池已播）+ 追鼠标（带冷却）
 // 2026-11-01：追鼠标被禁用时只保留渲染页自己的点击动画，不再追/抓鼠标。
-ipcMain.on('pet:click', () => { if (behaviorActionEnabled('chase_cursor')) react('click', () => handleBehavior({ action: 'chase_cursor' }), { note: '主人点了桌宠' }) })
+// 1.0.14：petClickChase 开关（面板六键，默认关）也拦这条——关 = 点了只播点击动画，不扑鼠标。
+ipcMain.on('pet:click', () => { if (clickChaseEnabled() && behaviorActionEnabled('chase_cursor')) react('click', () => handleBehavior({ action: 'chase_cursor' }), { note: '主人点了桌宠' }) })
 // 渲染页命中检测：true=鼠标在宠物/气泡上（恢复窗口交互），false=在透明区（放行点击）
 ipcMain.on('pet:hit', (_e, hit) => {
   if (!win || win.isDestroyed()) return
@@ -1792,6 +1842,16 @@ ipcMain.on('pet:menu', () => {
     { label: houseAlive() ? '到屋外玩' : '回小屋', click: toggleHouse },
     { label: '回到初始位置', click: goHome },
     ...(actionSub ? [actionSub] : []),
+    // 「查看余额」（1.0.14，petShowBalance 开才显示）：走服务端 /balance 拿 { balance, currency }，
+    // 气泡展示（showBubble 是既有气泡通道）；拿不到 key / 请求失败时服务端回 ok:false，气泡显示友好文案。
+    ...(balanceEnabled ? [{
+      label: '查看余额',
+      click: async () => {
+        const r = await apiGetAny('/balance')
+        if (r && r.ok) showBubble(`钱包余额：${r.balance} ${r.currency || 'CNY'}～`, 'happy', '', '', '', '', '')
+        else showBubble((r && r.message) || '暂无法获取余额', 'neutral', '', '', '', '', '')
+      },
+    }] : []),
     { label: '收起气泡', click: hideBubble },
     { type: 'separator' },
     { label: '打开面板', click: openPanel },
