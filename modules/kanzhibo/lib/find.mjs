@@ -187,6 +187,25 @@ export const HIT_SRC = `(function (pick) {
     try { if (node.shadowRoot && node.shadowRoot.contains(pickEl)) return true } catch (e) {}
     return false
   }
+  // 2026-11-10 修 BUG（真机实测抖音直播页发现的）：
+  //   抖音的头像 / 徽章那一圈（.PvcS0FNI）被包在 pointer-events:none 的 <a><span> 里，
+  //   所以 elementFromPoint 采样时**跳过它**、返回的是它的祖先容器（比如 DIV.CsUBJdAJ）。
+  //   老判定只认「命中点在目标里」，于是 9 点全灭 → 「命中校验没过（只有 0/9 点命中）」，
+  //   粉丝团入口永远点不成（真机日志原文：「挡在上面的是：DIV、DIV」）。
+  //   命中点是**目标的祖先**时，点下去照样会落在那个祖先上（事件冒泡），所以算命中 ——
+  //   但只认「祖先比目标大不了多少」的（面积 ≤ 8 倍），免得整页遮罩被当成没挡住。
+  var pickArea = Math.max(1, r.width * r.height)
+  var ancestorHit = function (node) {
+    if (!node || node === pickEl) return false
+    if (node === doc.body || node === doc.documentElement) return false
+    var contains = false
+    try { contains = node.contains(pickEl) } catch (e) { contains = false }
+    if (!contains) return false
+    var nr = null
+    try { nr = node.getBoundingClientRect() } catch (e) { nr = null }
+    if (!nr || !nr.width || !nr.height) return false
+    return (nr.width * nr.height) <= pickArea * 8
+  }
   var inset = Math.max(3, Math.min(6, Math.round(r.width / 6)))
   var xs = [r.left + inset, r.left + r.width / 2, r.right - inset]
   var ys = [r.top + inset, r.top + r.height / 2, r.bottom - inset]
@@ -198,7 +217,7 @@ export const HIT_SRC = `(function (pick) {
       try { node = doc.elementFromPoint(lx, ly) } catch (e) { node = null }
       points.push({
         x: Math.round(lx + pickRoot.ox), y: Math.round(ly + pickRoot.oy),
-        ok: inside(node),
+        ok: inside(node) || ancestorHit(node),
         hit: node ? (((node.textContent || '').trim().slice(0, 18)) || node.tagName) : '（空）',
       })
     }
@@ -252,6 +271,11 @@ export const PAGE_TEXT_SRC = "(function (max) {\n  var SKIP = { SCRIPT: 1, STYLE
 
 /** 页面滚了多少（截图裁剪要用页面坐标，不是视口坐标）。 */
 export const SCROLL_SRC = `(function () { return { x: Math.round(scrollX || 0), y: Math.round(scrollY || 0) } })`;
+
+/**
+ * 「canvas 画出来的文字」不在 DOM 里，得走 CDP 无障碍树 —— 那部分在 lib/ax.mjs。
+ * 这里只留一句指针，免得以后又在 DOM 里白找一遍。
+ */
 
 /** 把外面的 spec 补成页面里能用的形状（region 用 0~1 的比例，别写死像素）。 */
 export function normalizeSpec(spec) {
@@ -380,6 +404,17 @@ export function plus100FromText(text) {
 }
 
 /**
+ * 聊天区里「送出了 XX」的播报 —— 灯牌送成功的头号证据。
+ *
+ * 2026-11-10 真机实测（抖音 PC 直播页）：现在的文案是
+ *   「Vv：送出了 点亮粉丝团 × 1」
+ * 老版本是「送出了 粉丝团灯牌 × 1」。
+ * 原来只认「粉丝团灯牌」这一种，所以**新版页面上这条证据永远匹配不上**，
+ * 灯牌明明送出去了却报「没确认到送出」。两种都认。
+ */
+export const BADGE_CHAT_RE = /送出了\s*(?:点亮粉丝团|粉丝团灯牌|粉丝团|灯牌)/
+
+/**
  * 聊天区里有没有「<自己昵称>：送出了 粉丝团灯牌 × N」这种系统提示。
  * 2026-11-09 真机踩到的坑：粉丝团面板是 Lynx 渲染的 iframe，body.textContent 长度是 0，
  * 面板里的「送1个基础灯牌 / +100」读不到；但**聊天区（主文档）一定会播报**这条，
@@ -390,9 +425,10 @@ export function plus100FromText(text) {
 export function badgeSentInChat(text, nick) {
   const t = String(text || '')
   const name = String(nick || '').trim()
+  const tail = '(?:点亮粉丝团|粉丝团灯牌|粉丝团|灯牌)'
   const pat = name
-    ? new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*[：:]\\s*送出了\\s*粉丝团灯牌')
-    : /[^\s：:]{1,24}\s*[：:]\s*送出了\s*粉丝团灯牌/
+    ? new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*[：:]\\s*送出了\\s*' + tail)
+    : new RegExp('[^\\s：:]{1,24}\\s*[：:]\\s*送出了\\s*' + tail)
   const m = pat.exec(t)
   return { hit: Boolean(m), snippet: m ? m[0].slice(0, 40) : '' }
 }

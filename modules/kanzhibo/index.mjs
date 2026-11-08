@@ -11,10 +11,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSy
 import { join } from 'node:path'
 import { createClicker } from './lib/click.mjs'
 import { createGate } from './lib/gate.mjs'
-import { PAGE_TEXT_SRC, taskProgressFromText, badgeHintsFromText, plus100FromText, badgeTaskRowFromText, endedFromText, CHAT_LINES_SRC, collapseNested, pickUnique, choosePoint, sameSig, normalizeSpec, describeHit } from './lib/find.mjs'
+import { createAxReader, axSig } from './lib/ax.mjs'
+import { PAGE_TEXT_SRC, taskProgressFromText, badgeHintsFromText, plus100FromText, badgeTaskRowFromText, endedFromText, CHAT_LINES_SRC, collapseNested, pickUnique, choosePoint, sameSig, normalizeSpec, describeHit, BADGE_CHAT_RE } from './lib/find.mjs'
 
 // 版本只写这一处：定义和自检里的字符串都读它，省得又出现「自检写着 v0.4.0」这种事。
-const VERSION = '0.9.7'
+// 2026-11-10 → 0.9.8：修灯牌入口点不成（命中校验把祖先当挡板）、面板读不到（改走无障碍树）、
+//   聊天证据认不出「送出了 点亮粉丝团」、余额兜底正则失效、/probe 能不花钱就点开等一堆问题。
+const VERSION = '0.9.8'
 
 // 点完之后等证据的时间（ms）。放在这里，失败文案里的秒数也从它算，避免又写死一个 12。
 const EVIDENCE_WAIT_MS = 20_000
@@ -770,6 +773,23 @@ export default {
     })
 
     /**
+     * 无障碍树（AX）通道。
+     * 2026-11-10 真机实测：抖音的粉丝团面板是 Lynx canvas 渲染的 —— DOM 里、innerText 里
+     * 一个字都读不到，只有 Chrome 的无障碍树里有（而且坐标就是页面坐标）。
+     * 详细实测记录见 lib/ax.mjs 开头。
+     */
+    const ax = createAxReader({
+      send: (method, params) => cdp.send(method, params),
+      evalJs: (expr) => evalJs(expr),
+      note: (t, l) => note(t, l),
+    })
+
+    /** 面板文字：DOM 读不到的那部分（canvas 画的）只能走这里。 */
+    const axText = async () => {
+      try { return await ax.text({ limit: 2000 }) } catch (e) { return '' }
+    }
+
+    /**
      * 主播下播了没有。
      * 抖音下播后 URL 仍然是 /live/<房间号>，光看地址会一直以为在直播间，
      * 于是 tick 每轮都「在房间里」，评论/灯牌的逻辑继续跑。页面出现这几句就是下播了。
@@ -806,6 +826,29 @@ export default {
       }
       const t = _pageText.text
       return t.length > max ? t.slice(t.length - max) : t
+    }
+
+    /**
+     * 读整页 + 面板的文字（DOM 那一份 + 无障碍树那一份）。
+     *
+     * 2026-11-10 真机实测：抖音的粉丝团面板是 **Lynx canvas** 渲染的，
+     * 面板里的「送1个基础灯牌 / +100 / 今日任务 1/3 / 点亮粉丝团」这些字
+     * 在 document.body.innerText 里**一个字都读不到**，只有 Chrome 的无障碍树里有。
+     * 所以两个都得读，缺一个就等于瞎。
+     *
+     * 窗口统一成 TEXT_WINDOW：算「点之前有几个 +100」和「点之后有几个 +100」必须同一个窗口，
+     * 否则会把面板里本来就有的 +100 算成这次的（2026-11-10 修的口径不一致）。
+     */
+    const TEXT_WINDOW = 20000
+    let _panelText = { at: 0, text: '' }
+    const panelText = async () => {
+      if (Date.now() - _panelText.at > 400) {
+        const dom = await pageText(TEXT_WINDOW)
+        let ax = ''
+        try { ax = await axText() } catch {}
+        _panelText = { at: Date.now(), text: dom + (ax ? '\n' + ax : '') }
+      }
+      return _panelText.text
     }
 
     /**
@@ -953,11 +996,13 @@ export default {
       const readTask = async () => {
         const dom = await readDomTask()
         if (dom === 'sent') return 'sent'
-        const t = await pageText(12000)
+        // 2026-11-10：改用 panelText（DOM + 无障碍树）—— 面板是 Lynx canvas，
+        //   「今日任务 X/3」在 innerText 里读不到，只有无障碍树里有。
+        const t = await panelText()
         // 2026-11-08：新版左上角直接写「今日任务 X/3」，X>=1 就说明今天动过了，
         //   不用再靠「已完成 / 已点亮」那套文案（新版界面上已经看不到了）。
         if (taskProgressFromText(t) >= 1) return 'sent'
-        if (!/灯牌/.test(t)) return dom
+        if (!/灯牌|点亮粉丝团/.test(t)) return dom
         if (/灯牌[^\n]{0,30}(已完成|已领取|已点亮)/.test(t)) return 'sent'
         return dom
       }
@@ -985,12 +1030,34 @@ export default {
      */
     async function closeTaskPanel() {
       try {
-        const t = await pageText(12000)
+        const t = await panelText()
         const h = badgeHintsFromText(t)
         const open = badgeTaskRowFromText(t) || h.hasIntimacy || h.hasRestoreMedal || h.hasStash
         if (!open) return false
         const c = await clickBy(TASK_ENTRY_EXPR, '今日任务')
-        if (!c || c.blocked) return false
+        if (c && !c.blocked) {
+          await sleep(400)
+          return true
+        }
+        // 2026-11-10 加：新版面板是 Lynx canvas，左上角根本没有「今日任务」这个入口，
+        //   面板右上角倒是有个叉（#__living_right_panel_id 里那个 svg）。没有入口就点叉收掉。
+        const x = await evalJs(`(() => {
+          const panel = document.querySelector('#__living_right_panel_id')
+          if (!panel) return null
+          const svgs = [...panel.querySelectorAll('svg')].filter((s) => {
+            const r = s.getBoundingClientRect()
+            return r.width >= 12 && r.width <= 60 && r.height >= 12 && r.height <= 60 && r.top < 120
+          })
+          if (!svgs.length) return null
+          const r = svgs[0].getBoundingClientRect()
+          return [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)]
+        })()`).catch(() => null)
+        if (!x) return false
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x[0], y: x[1], button: 'none', buttons: 0 }).catch(() => {})
+        await sleep(120)
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: x[0], y: x[1], button: 'left', buttons: 1, clickCount: 1 }).catch(() => {})
+        await sleep(60)
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x[0], y: x[1], button: 'left', buttons: 0, clickCount: 1 }).catch(() => {})
         await sleep(400)
         return true
       } catch { return false }
@@ -1039,6 +1106,53 @@ export default {
     //   每个最多 10 次 find，最坏 90 次全 DOM 扫描找一个按钮）。
     //   扫完再按优先级文字分组、逐组判唯一 —— 行为等价（同一文字内仍然要求唯一）。
     const BADGE_CONFIRM_SCAN = '^(?:' + BADGE_CONFIRM_TEXTS.map((t) => t.replace(/^\^/, '').replace(/\$$/, '')).join('|') + ')(?:\\s*[（(][^）)]{0,8}[）)])?$'
+
+    /**
+     * 无障碍树里的按钮名（Lynx canvas 面板专用）。
+     * 实测抖音的文案是「点亮粉丝团」「送灯牌」「加入粉丝团」这些。
+     * 注意「点亮粉丝团」在聊天区的播报里也会出现 —— 但聊天区在根 frame 里，
+     * 而 AX 的命中校验要求目标**落在某个 iframe（面板）上**，所以聊天区那条会被自动挡掉。
+     */
+    const BADGE_AX_NAMES = /^(送灯牌|点亮粉丝团|点亮粉丝团灯牌|点亮灯牌|送1个基础灯牌|一键点亮|点亮|赠送|续费|送出|立即续费)$/
+
+    /**
+     * AX 通道找「要按的那个按钮」（Lynx canvas 面板）。
+     *   名字 → 页面坐标 → 命中校验（这块位置得真的露在面板上）→ 连续两帧签名一样才收。
+     * 找不到 / 校验不过就返回 ok:false，让上层继续走别的路。
+     */
+    async function findBadgeConfirmAx() {
+      const cands = await ax.find(BADGE_AX_NAMES, { limit: 20 })
+      if (!cands.length) return { ok: false, reason: '无障碍树里没有「送灯牌 / 点亮」这类按钮' }
+      // 同一个名字、位置几乎重合的算一个
+      const groups = new Map()
+      for (const c of cands) {
+        const key = c.name + '|' + Math.round(c.x / 8) + '|' + Math.round(c.y / 8)
+        if (!groups.has(key)) groups.set(key, c)
+      }
+      const list = Array.from(groups.values())
+      if (list.length > 1) {
+        const names = list.slice(0, 3).map((x) => x.name).join(' / ')
+        return { ok: false, reason: '面板里同时找到 ' + list.length + ' 个可能的按钮（' + names + '），分不清该点哪个' }
+      }
+      const cand = list[0]
+      const h = await ax.hit(cand)
+      if (!h.ok) return { ok: false, reason: describeHit(h) }
+      const pt = choosePoint(h.points)
+      if (!pt) return { ok: false, reason: '没有可点位置' }
+      return {
+        ok: true,
+        label: '灯牌按钮（无障碍树）/ ' + cand.name + ' /',
+        spec: normalizeSpec({ ...BADGE_CONFIRM_SPEC, text: BADGE_CONFIRM_SCAN }),
+        allowMultiple: false,
+        cand: { text: cand.name, sig: axSig(cand), rect: { left: cand.x, top: cand.y, width: cand.w, height: cand.h }, area: cand.w * cand.h, tag: 'ax', clickable: true, where: 'ax' },
+        hit: h,
+        point: pt,
+        desc: describeHit(h),
+        channel: 'ax',
+        axSig: axSig(cand),
+      }
+    }
+
     /** 按优先级找「要按的那个按钮」：一次扫描 → 按文字分组判唯一 → 连续两帧同一签名才收。 */
     async function findBadgeConfirm(tries) {
       const rounds = Math.max(2, Math.min(6, Number(tries) || 2))
@@ -1064,26 +1178,140 @@ export default {
           if (!h.ok) { reasons.push(describeHit(h)); prev = null; continue }
           const pt = choosePoint(h.points)
           if (!pt) { reasons.push('没有可点位置'); prev = null; continue }
-          return { ok: true, label: '灯牌按钮 /' + text + '/', spec: normalizeSpec({ ...BADGE_CONFIRM_SPEC, text }), allowMultiple: false, cand: u.cand, hit: h, point: pt, desc: describeHit(h) }
+          return { ok: true, label: '灯牌按钮 /' + text + '/', spec: normalizeSpec({ ...BADGE_CONFIRM_SPEC, text }), allowMultiple: false, cand: u.cand, hit: h, point: pt, desc: describeHit(h), channel: 'dom' }
         }
+        // 2026-11-10 加：DOM 里找不到就问无障碍树 —— 现在的粉丝团面板是 Lynx canvas，
+        //   按钮的文字压根不在 DOM 里，只在无障碍树里。
+        const axr = await findBadgeConfirmAx()
+        if (axr.ok) {
+          // 连续两帧签名一样才收（和 DOM 通道一个规矩：别按一个正在动的按钮）
+          if (prev && prev.channel === 'ax' && prev.axSig === axr.axSig) return axr
+          prev = { channel: 'ax', axSig: axr.axSig }
+          if (round + 1 < rounds) { await sleep(250); continue }
+          return axr
+        }
+        reasons.push(axr.reason)
         if (round + 1 < rounds) await sleep(250)
       }
       return { ok: false, reason: '几个可能的按钮都没找到或不稳定（' + reasons.filter(Boolean).slice(0, 3).join('；') + '）' }
     }
 
     /**
-     * 点之前的三道确认（2026-11-08 按主人给的现场特征改）：
-     *   ① 入口：左上角「粉丝团」，或已经是「今日任务 0/3」；
-     *   ② 等面板出来后：要看到「1钻」和「可得 100 亲密度」这两条，才算真的开对了面板；
+     * 打开粉丝团面板。
+     *
+     * 2026-11-10 真机实测（现在的抖音 PC 版）：
+     *   · 左上角的入口**没有文字** —— 是主播头像上的一个图片徽章，
+     *     DOM 里 class 是哈希（.PvcS0FNI 这种），每版都变，不能写死；
+     *   · **悬停**头像会弹出一张「主播资料卡」（这张卡是普通 DOM，能读到「粉丝团 / 团成员：11.0万」）；
+     *   · 点卡里的「粉丝团」才会打开**粉丝团面板**（面板是 Lynx canvas，只有无障碍树读得到）。
+     * 所以顺序是：头像 → 资料卡 → 粉丝团 → 面板。
+     *
+     * 老的「入口上带文字（今日任务 / 粉丝团）」那种版式也还留着 —— 先试它，找不到再走上面的路。
+     */
+    async function openBadgePanel() {
+      // ① 老版式：入口本身带文字，直接按文字找（region 还是左上角那块）
+      const entry = await clicker.clickOnce({
+        label: '粉丝团/灯牌入口',
+        spec: BADGE_ENTRY_SPEC,
+        allowMultiple: true,
+        settleMs: 2600,
+      })
+      if (entry.ok) {
+        return { ok: true, entry: (entry.cand && entry.cand.text) || '', justOpened: true }
+      }
+
+      // ② 新版式：头像 → 资料卡 → 粉丝团
+      const badge = await evalJs(`(() => {
+        const nick = document.querySelector('[data-e2e="live-room-nickname"]')
+        if (!nick) return []
+        const nr = nick.getBoundingClientRect()
+        const out = []
+        for (const el of document.querySelectorAll('div,span,img,a,button')) {
+          const r = el.getBoundingClientRect()
+          if (!(r.width >= 18 && r.width <= 100 && r.height >= 18 && r.height <= 100)) continue
+          if (r.top > nr.top + 40 || r.bottom < nr.top - 10) continue
+          const gap = nr.left - r.right
+          if (gap < -6 || gap > 160) continue
+          let cs = null
+          try { cs = getComputedStyle(el) } catch (e) {}
+          // 越靠昵称、越像按钮的排前面
+          const score = Math.max(0, gap) + (cs && cs.cursor === 'pointer' ? 0 : 60) + r.width * r.height / 1500
+          out.push({ score, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), w: Math.round(r.width), h: Math.round(r.height) })
+        }
+        out.sort((a, b) => a.score - b.score)
+        return out.slice(0, 5)
+      })()`).catch(() => [])
+      if (!badge || !badge.length) {
+        return { ok: false, message: '入口没点成（粉丝团 / 今日任务都没找到），左上角也认不出头像：' + entry.reason }
+      }
+      for (const b of badge) {
+        // 悬停 → 资料卡会冒出来
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: b.x, y: b.y, button: 'none', buttons: 0 }).catch(() => {})
+        await sleep(1400)
+        const fan = await evalJs(`(() => {
+          const nodes = [...document.querySelectorAll('div,span,a,button')].filter((el) => {
+            const r = el.getBoundingClientRect()
+            if (!(r.width > 20 && r.height > 10 && r.width < 320 && r.height < 140)) return false
+            if (r.left > innerWidth * 0.35 || r.top > innerHeight * 0.55) return false
+            const t = (el.innerText || '').trim()
+            return /^粉丝团/.test(t)
+          })
+          if (!nodes.length) return null
+          nodes.sort((a, b) => a.getBoundingClientRect().width * a.getBoundingClientRect().height - b.getBoundingClientRect().width * b.getBoundingClientRect().height)
+          const el = nodes[0]
+          const sp = el.querySelector('span') || el
+          const r = sp.getBoundingClientRect()
+          return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), text: String(el.innerText || '').trim().slice(0, 24) }
+        })()`).catch(() => null)
+        if (!fan) continue
+        // 点资料卡里的「粉丝团」→ 粉丝团面板
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: fan.x, y: fan.y, button: 'none', buttons: 0 }).catch(() => {})
+        await sleep(200)
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: fan.x, y: fan.y, button: 'left', buttons: 1, clickCount: 1 }).catch(() => {})
+        await sleep(60)
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: fan.x, y: fan.y, button: 'left', buttons: 0, clickCount: 1 }).catch(() => {})
+        await sleep(3200)
+        const opened = await fanPanelOpen()
+        if (opened) return { ok: true, entry: '头像 → 资料卡 → ' + (fan.text || '粉丝团'), justOpened: true }
+      }
+      return { ok: false, message: '点了左上角头像也没打开粉丝团面板（资料卡里的「粉丝团」没找到）' }
+    }
+
+    /**
+     * 粉丝团面板开没开。
+     * 2026-11-10：不能只看文字 —— 聊天区的播报里也有「点亮粉丝团」，
+     *   光看文字会把「聊天里有人送了灯牌」当成「面板开着」。
+     *   所以先看 DOM 里那个面板容器（#__living_right_panel_id，里面有 iframe）在不在，
+     *   再看无障碍树里的文字对不对得上。
+     */
+    async function fanPanelOpen() {
+      const dom = await evalJs(`(() => {
+        const p = document.querySelector('#__living_right_panel_id')
+        if (!p) return false
+        return !!p.querySelector('iframe')
+      })()`).catch(() => false)
+      if (!dom) return false
+      const t = await panelText()
+      return /粉丝团|送灯牌|点亮粉丝团|加入粉丝团|粉丝团专属|级团|点亮成员/.test(t)
+    }
+
+    /**
+     * 点之前的三道确认（2026-11-10 按真机实测改）：
+     *   ① 入口：左上角头像 / 资料卡里的「粉丝团」，或已经是「今日任务 0/3」；
+     *   ② 等面板出来后：要看到「1钻」和「可得 100 亲密度」这类字，才算真的开对了面板；
      *   ③ 然后才去找「送灯牌 / 点亮」那个按钮（只找不点）。
      * 任何一条对不上就返回失败，绝不默认「大概是吧」。
+     *
+     * 2026-11-10 关键改动：面板文字要**同时**读 DOM 和无障碍树 ——
+     *   现在的粉丝团面板是 Lynx canvas 渲染的，DOM 里一个字都没有，只有无障碍树里有。
      */
     async function prepareBadge() {
       await ensureViewport()
 
-      // ① 先读进度：新版左上角就是「今日任务 X/3」。X>=1 说明今天已经送过，
-      //    这一步放在点入口之前 —— 否则明明送过了还会去点一下「今日任务」把面板打开。
-      const beforeText = await pageText(12000)
+      // ① 先读进度：DOM 和无障碍树都要读。
+      //    实测当前抖音版「今日任务 X/3」不在 innerText 里（它画在 canvas 上），
+      //    读不到就当 null（不当成 0），后面靠「面板状态」和聊天播报去判断。
+      const beforeText = await panelText()
       const progressBefore = taskProgressFromText(beforeText)
       const hasFanclub = /粉丝团/.test(beforeText)
       if (progressBefore !== null && progressBefore >= 1) {
@@ -1101,33 +1329,41 @@ export default {
         // 2026-11-09 优化：面板开着（badgeSent 读完后特意留着 / 主人手动开过）就别点入口了 ——
         //   入口是开关，点一下反而把面板关掉，然后「找不到按钮」白忙一轮。
         //   用面板独有的文案判断开没开，和 closeTaskPanel 同一套判据。
-        const t2 = await pageText(12000)
+        const t2 = await panelText()
         const h2 = badgeHintsFromText(t2)
         const panelOpen = badgeTaskRowFromText(t2) || h2.hasIntimacy || h2.hasRestoreMedal || h2.hasStash
         if (panelOpen) {
           prep = await findBadgeConfirm(6)
         } else {
-          const entry = await clicker.clickOnce({
-            label: '粉丝团/灯牌入口',
-            spec: BADGE_ENTRY_SPEC,
-            allowMultiple: true,
-            settleMs: 2600,
-          })
-          if (!entry.ok) return { ok: false, message: '入口没点成（粉丝团 / 今日任务都没找到）：' + entry.reason }
-          entryText = (entry.cand && entry.cand.text) || ''
-          panelJustOpened = true
+          const opened = await openBadgePanel()
+          if (!opened.ok) return { ok: false, message: opened.message }
+          entryText = opened.entry
+          panelJustOpened = opened.justOpened
           prep = await findBadgeConfirm(10)
         }
       }
-      if (!prep.ok) return { ok: false, message: '面板里没找到可点的「送灯牌 / 点亮」：' + prep.reason }
+      if (!prep.ok) {
+        // 2026-11-10：面板上只有「加入粉丝团（1钻石）」时，先把话说清楚 ——
+        //   那是**开通**按钮，不是「续灯牌」，点错就白花 1 钻。
+        const ptext2 = await panelText()
+        if (/加入粉丝团/.test(ptext2)) {
+          return { ok: false, message: '这个直播间还没加入粉丝团（面板上是「加入粉丝团（1钻石）」），要先加入才能点亮，这次不点' }
+        }
+        return { ok: false, message: '面板里没找到可点的「送灯牌 / 点亮」：' + prep.reason }
+      }
 
       // ② 面板内容确认。两种面板都认（2026-11-08 主人要求把恢复勋章也纳入）：
       //    A 续灯牌：「送1个基础灯牌 … +100」，按钮「送灯牌」
       //    B 恢复勋章：「点亮粉丝团恢复勋章 / 今日已暂存50亲密度」，按钮「点亮 (1钻)」
-      const panelText = await pageText(12000)
-      const hints = badgeHintsFromText(panelText)
+      const ptext = await panelText()
+      const hints = badgeHintsFromText(ptext)
       const isRestore = hints.hasRestoreMedal || hints.hasStash
-      const isRenew = hints.hasIntimacy || hints.hasOneCoin || badgeTaskRowFromText(panelText)
+      const isRenew = hints.hasIntimacy || hints.hasOneCoin || badgeTaskRowFromText(ptext)
+      // 2026-11-10 加：没加入粉丝团的面板长这样 —— 底下是「加入粉丝团（1钻石）」。
+      //   那是**开通**按钮，不是「续灯牌」，点错就白花 1 钻 → 直接停手并说清楚。
+      if (/加入粉丝团/.test(ptext) && !isRenew) {
+        return { ok: false, message: '这个直播间还没加入粉丝团（面板上是「加入粉丝团（1钻石）」），要先加入才能点亮，这次不点' }
+      }
       if (!isRestore && !isRenew) {
         return {
           ok: false,
@@ -1141,7 +1377,7 @@ export default {
         entry: entryText || (hasFanclub ? '粉丝团' : '今日任务'),
         panelJustOpened,
         progressBefore,
-        plusBefore: plus100FromText(panelText).count,
+        plusBefore: plus100FromText(ptext).count,
         hints,
         // B 类面板：勋章熄了，点「点亮 (1钻)」恢复；A 类：正常续灯牌
         kind: isRestore ? 'restore' : 'renew',
@@ -1162,9 +1398,9 @@ export default {
     async function badgeEvidence(beforeProgress, plusBefore, nick) {
       const from = beforeProgress
       const base = Number.isFinite(plusBefore) ? plusBefore : 0
-      // 点之前聊天区已有的「送出了 粉丝团灯牌」条数（别人的也算，靠差值区分）
+      // 点之前聊天区已有的「送出了 XX」条数（别人的也算，靠差值区分）
       const preChat = await chatLines(80)
-      const chatBefore = (preChat.lines || []).filter((l) => /送出了\s*粉丝团灯牌/.test(l)).length
+      const chatBefore = (preChat.lines || []).filter((l) => BADGE_CHAT_RE.test(l)).length
       const seenLines = new Set(preChat.lines || [])
       const deadline = Date.now() + EVIDENCE_WAIT_MS
       let lastProgress = null
@@ -1175,7 +1411,7 @@ export default {
         // 聊天区每轮都读（轻量：只查 ~15 个 item 节点）
         const c = await chatLines(80)
         for (const l of c.lines || []) seenLines.add(l)
-        const hits = Array.from(seenLines).filter((l) => /送出了\s*粉丝团灯牌/.test(l))
+        const hits = Array.from(seenLines).filter((l) => BADGE_CHAT_RE.test(l))
         lastChat = hits.length
         if (hits.length > chatBefore) {
           const own = nick ? hits.find((l) => l.includes(nick)) : hits[hits.length - 1]
@@ -1185,7 +1421,11 @@ export default {
         }
         // 整页文字比较重（要扫 50+ 个 root），每两轮读一次就够判断进度/余额
         if (round % 2 === 0) {
-          const t = await pageText(20000)
+          // 2026-11-10 修：面板里的字（+100 / 今日任务 / 亲密度）是 Lynx 画在 canvas 上的，
+          //   DOM 文字里读不到 → 必须把无障碍树的文字也算进来。
+          //   窗口统一用 TEXT_WINDOW（prepareBadge 算 plusBefore 时用的是同一个窗口），
+          //   否则「点之前」和「点之后」口径不一致，会把面板里本来就有的 +100 算成这次的。
+          const t = await panelText()
           const p = taskProgressFromText(t)
           if (p !== null) lastProgress = p
           const plus = plus100FromText(t)
@@ -1210,6 +1450,26 @@ export default {
       }
     }
 
+    /**
+     * AX 通道的执行段（Lynx canvas 面板专用）。
+     * 和 DOM 通道一个规矩：重新找一遍 → 签名必须一样 → 再验一次命中 → 才真点。
+     */
+    async function commitAx(prepared) {
+      const cands = await ax.find(BADGE_AX_NAMES, { limit: 20 })
+      const same = cands.find((c) => axSig(c) === prepared.axSig)
+      if (!same) {
+        return { ok: false, reason: '等你确认这会，目标不见了（' + ((prepared.cand && prepared.cand.text) || '那个按钮') + '），这次不点' }
+      }
+      const h = await ax.hit(same)
+      if (!h.ok) return { ok: false, reason: describeHit(h), hit: h }
+      const pt = choosePoint(h.points)
+      if (!pt) return { ok: false, reason: '找不到可点位置' }
+      await clicker.clickAt(pt.x, pt.y)
+      note('确认后点了' + (prepared.label || '灯牌按钮') + ' @' + pt.x + ',' + pt.y, 'info')
+      await sleep(1600)
+      return { ok: true, point: pt, cand: prepared.cand, hit: h }
+    }
+
     /** 执行：重新找 → 比对签名 → 再验命中 → 真点 → 查证据（只认 +100）。 */
     async function commitBadge(prepared, progressBefore, plusBefore) {
       await ensureViewport()
@@ -1219,11 +1479,15 @@ export default {
       let beforeProgress = progressBefore
       let basePlus = plusBefore
       if (beforeProgress === undefined || basePlus === undefined) {
-        const textBefore = await pageText(12000)
+        const textBefore = await panelText()
         if (beforeProgress === undefined) beforeProgress = taskProgressFromText(textBefore)
         if (basePlus === undefined) basePlus = plus100FromText(textBefore).count
       }
-      const r = await clicker.commit(prepared, { settleMs: 1600 })
+      // 2026-11-10：面板是 Lynx canvas 时按钮只存在于无障碍树里，DOM 通道的 commit 找不到它，
+      //   所以要按通道分开走。
+      const r = prepared && prepared.channel === 'ax'
+        ? await commitAx(prepared)
+        : await clicker.commit(prepared, { settleMs: 1600 })
       if (!r.ok) return { ok: false, message: r.reason }
       await sleep(1500)
       const file = await shot('badge-result')
@@ -1428,9 +1692,14 @@ export default {
     async function commitGift(prepared, name, beforeBalance, directSend) {
       await ensureViewport()
       if (await hasRecharge()) return { ok: false, message: '页面显示抖币不足 / 余额不足，停下来没送' }
+      // 2026-11-10 修 BUG：原来余额基准是在 clicker.commit **之后**才补读的
+      //   （beforeBalance == null ? await readBalance() : beforeBalance）—— 那时钱已经扣了，
+      //   after < before 永远不成立，「余额变少」这条证据整个是死的。
+      //   现在：基准一律在点之前读；读不到就当没有余额证据（后面还有成功提示 / 飘屏两条路）。
+      const base = beforeBalance == null ? await readBalance() : beforeBalance
       const r = await clicker.commit(prepared, { settleMs: directSend ? 1400 : 900 })
       if (!r.ok) return { ok: false, message: r.reason }
-      const proof = await verifyGiftSent(name, beforeBalance == null ? await readBalance() : beforeBalance)
+      const proof = await verifyGiftSent(name, base)
       if (await hasRecharge()) return { ok: false, message: '送完弹出了余额不足提示，去手机上看一眼，别重复送' }
       if (proof.ok) return { ok: true, message: '送了「' + name + '」×1（已确认：' + proof.how + '）' }
       return { ok: false, message: '按了，但读了 8 秒没找到送出的证据（' + proof.how + '），你去直播间看一眼，别重复送' }
@@ -1486,7 +1755,10 @@ export default {
       })()`).catch(() => null)
       if (typeof dom === 'number' && Number.isFinite(dom) && dom >= 0) return dom
       const t = await pageText(20000)
-      const m = /(\\d[\\d,]{0,6})\\s*(?:抖币|余额)/.exec(t)
+      // 2026-11-10 修 BUG：原来写的是 /(\\d[\\d,]{0,6})\\s*(?:抖币|余额)/ —— 普通 JS 正则字面量里
+      //   反斜杠只转义一次，`\\d` 会被当成「字面的反斜杠 + d」，所以这条兜底**永远匹配不到**。
+      //   实测：'剩余抖币 1234 抖币 余额充足' 用老写法匹配结果是 null，用新写法才匹配到 '1234 抖币'。
+      const m = /(\d[\d,]{0,6})\s*(?:抖币|余额)/.exec(t)
       return m ? Number(m[1].replace(/,/g, '')) : null
     }
 
@@ -1531,15 +1803,28 @@ export default {
 
       // 已经在直播间里就留着，别刷新 —— 刷新会把播放和评论都打断。
       // 只有明确指定了另一个直播间（id 不同）才换房。
+      //
+      // 2026-11-10 修 BUG：原来只比房间号（wantId）。目标是**主播主页**时 wantId 取不到，
+      //   于是 `!wantId` 直接当成「同一个房间」返回 —— 主人换了主播，模块还挂在老主播的房间里，
+      //   灯牌也送给老主播去了。现在多比一个「上次是用哪个目标进的」（记在 state 里），
+      //   目标变了就换房；目标是房间号时仍然按房间号比。
+      const lastTarget = String((loadState() || {}).lastTarget || '')
+      const sameTarget = !lastTarget || lastTarget === target
       if (isLiveUrl(url)) {
         const curId = liveRoomId(url)
         const wantId = liveRoomId(target) || (/^\d{6,}$/.test(String(target).trim()) ? String(target).trim() : '')
-        if (!wantId || !curId || wantId === curId) return { ok: true, url, joined: false }
+        if (wantId && curId) {
+          if (wantId === curId && sameTarget) return { ok: true, url, joined: false }
+        } else if (sameTarget) {
+          return { ok: true, url, joined: false }
+        }
+        note('目标变了（' + (target || '?') + '），换房', 'debug')
       }
 
       if (isLiveUrl(target)) {
         const want = target.trim()
         await navigate(want)
+        saveState({ lastTarget: target })
         note('进了直播间：' + want)
         return { ok: true, url: want, joined: true, roomId: liveRoomId(want) }
       }
@@ -1547,6 +1832,7 @@ export default {
       if (/^\d{6,}$/.test(String(target).trim())) {
         const one = 'https://live.douyin.com/' + String(target).trim()
         await navigate(one)
+        saveState({ lastTarget: target })
         note('进了直播间：' + one)
         return { ok: true, url: one, joined: true, roomId: liveRoomId(one) }
       }
@@ -1554,6 +1840,7 @@ export default {
         const how = await enterFromProfile(target)
         const now = await currentUrl()
         if (how && LIVE_RE.test(now)) {
+          saveState({ lastTarget: target })
           note('主播在播，已经进去了：' + now)
           return { ok: true, url: now, joined: true }
         }
@@ -1562,6 +1849,7 @@ export default {
       }
       if (/^https?:\/\//.test(target)) {
         await navigate(target)
+        saveState({ lastTarget: target })
         return { ok: true, url: target, joined: true }
       }
       throw new Error('地址看不懂，填 https://live.douyin.com/... 或 https://www.douyin.com/user/...')
@@ -1663,9 +1951,11 @@ export default {
               //   commitBadge 认的是「今日任务 / 飘屏 / 余额」三者之一，于是会出现
               //   「commitBadge 说送出去了，tick 转头打一条『送完还是没判到』」的自相矛盾日志
               //   （2026-11-07 21:18 实测）。commitBadge 已经写好 badgeDay，这里直接采信它的结论。
-              // 2026-11-09 顺带修：半自动等确认时别再跑一遍 badgeSent —— 它真的会去点「今日任务」
-              //   开合面板，确认前不该再动页面。
-              sent = r2.pending ? false : (r2.ok ? true : await badgeSent())
+              // 2026-11-10 再修一刀：失败分支原来还会再跑一遍 badgeSent() ——
+              //   它真的会去点「今日任务」开合面板（等主人确认之前不该再动页面），
+              //   而且只认「今日任务」那一行，会把 commitBadge 的结论覆盖掉。
+              //   现在：完全采信 doBadge/commitBadge 的结论，不重复动页面。
+              sent = r2.pending ? false : Boolean(r2.ok)
             }
             if (sent) {
               if (badgeDay !== today || badgeUrl !== url) {
@@ -1705,10 +1995,19 @@ export default {
         }
         return { ...r, url }
       } catch (error) {
-        note('挂直播出错：' + error.message, 'warn')
-        try { cdp.close() } catch {}
-        cdp = null
-        return { ok: false, message: error.message }
+        // 2026-11-10 修 BUG：原来这里无条件 cdp.close() + cdp = null —— 任何一点小异常
+        //   （一次 eval 超时、一个空指针）都把 CDP 连接掐断。后果很严重：
+        //   · 半自动模式下「等你确认」的闸门里存着已经准备好的动作，连接一断，
+        //     主人回「确认」时目标已经找不到了（这也是 0.9.7 那个 r2 作用域 bug 的帮凶）；
+        //   · 下一轮 tick 要重新连浏览器，又慢又可能连错标签页。
+        //   现在：只有「连接本身坏了」才断开；普通异常记日志就行，连接留着。
+        const msg = (error && error.message) ? error.message : String(error)
+        note('挂直播出错：' + msg, 'warn')
+        if (cdp && /websocket|not connected|socket|ECONN|连接断开|已关闭/i.test(msg)) {
+          try { cdp.close() } catch {}
+          cdp = null
+        }
+        return { ok: false, message: msg }
       } finally {
         busy = false
       }
@@ -2165,6 +2464,15 @@ export default {
           out.shotZoom = marked ? await shot('probe-mark-zoom', marked) : ''
           await clicker.unmark()
         }
+        // 2026-11-10 修：这几个分支会**真的点下去**（可能花钱），原来不受 ?open=1 约束 ——
+        //   文档写着「不花钱的点击要 ?open=1 才做」，但 what=ok 会走 confirmPending() 真点灯牌、
+        //   what=ask 在自动模式下会直接送、what=click 能点任意坐标。排查接口不能变成扣款接口。
+        const openOk = String(q.open || '') === '1'
+        if (what === 'ask' || what === 'ok' || what === 'no' || what === 'click') {
+          if (!openOk) {
+            return { ok: false, what, needOpen: true, message: '这一步会真的点下去（可能花钱），确认要动就加上 &open=1' }
+          }
+        }
         if (what === 'ask' || what === 'ok' || what === 'no') {
           if (what === 'ask') out.result = await doBadge()
           else if (what === 'ok') out.result = { message: await confirmPending() }
@@ -2212,9 +2520,21 @@ export default {
         if (what === 'chat') {
           const c = await chatLines(60)
           out.chat = { found: c.found, total: c.total, hit: c.hit, rect: c.rect, lines: c.lines }
-          out.hasBadgeSent = c.lines.some((l) => /送出了\s*粉丝团灯牌/.test(l))
-          const mine = c.lines.filter((l) => /送出了\s*粉丝团灯牌/.test(l))
+          out.hasBadgeSent = c.lines.some((l) => BADGE_CHAT_RE.test(l))
+          const mine = c.lines.filter((l) => BADGE_CHAT_RE.test(l))
           out.badgeSentLines = mine.slice(-3)
+        }
+        // 2026-11-10 加：读无障碍树。粉丝团面板是 Lynx canvas，DOM 里读不到，
+        //   全靠这条通道才能看清面板上有什么。
+        if (what === 'ax') {
+          const names = await ax.names({ limit: 2000 })
+          const kw = String(q.kw || '')
+          const hit = kw ? names.filter((n) => n.name.includes(kw)) : names
+          out.axTotal = names.length
+          out.axFrames = (await ax.frames()).length
+          out.axHit = hit.slice(0, Number(q.limit || 40)).map((n) => n.name)
+          out.axCandidates = await ax.find(new RegExp(String(q.re || '送灯牌|点亮|赠送|粉丝团')), { limit: 20 })
+          if (String(q.shot || '') === '1') out.shot = await shot('probe-ax')
         }
         if (what === 'pagetext') {
           const t = await pageText(20000)
@@ -2320,7 +2640,10 @@ export default {
     api.onDispose(() => {
       // 模块停下时不能再改配置；定时器一定要清掉，否则它会在模块停止后醒来，
       // 调用已经不能用的 api（浏览器也要带走 —— 它是 detached 启动的，不会自己退）。
-      if (tickTimer) { clearInterval(tickTimer); tickTimer = null }
+      // 2026-11-10 修：这里原来用 clearInterval 清 tickTimer —— 但 tickTimer 是
+      //   armTick 里 setTimeout 拿到的句柄（setInterval 和 setTimeout 在 Node 里
+      //   返回的是不同类型的对象，混用根本清不掉）。定时器清不掉 = 模块停了它还会醒。
+      if (tickTimer) { clearTimeout(tickTimer); tickTimer = null }
       if (gateLater) { try { gateLater() } catch {} gateLater = null }
       try { gate.dispose() } catch {}
       // 停模块时也要把那台浏览器带走 —— 它是 detached 启动的，不会自己退。

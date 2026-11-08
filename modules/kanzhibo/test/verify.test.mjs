@@ -343,7 +343,8 @@ console.log('\n=== 11.5 tick 与 commitBadge 结论一致 ===')
   // commitBadge 认「今日任务 / 飘屏 / 余额」，badgeSent 只认「今日任务」。
   // 修复前：tick 用 badgeSent 二次否决，日志自相矛盾，还会走 badgeReject 累计失败。
   const src = readFileSync(new URL('../index.mjs', import.meta.url), 'utf8')
-  ok('tick 采信 commitBadge 的结论，不再用 badgeSent 覆盖', /sent = r2\.pending \? false : \(r2\.ok \? true : await badgeSent\(\)\)/.test(src))
+  ok('tick 采信 commitBadge 的结论，不再用 badgeSent 覆盖', /sent = r2\.pending \? false : Boolean\(r2\.ok\)/.test(src))
+  ok('tick 失败分支不再多跑一遍 badgeSent（那会再点一次入口）', !/await badgeSent\(\)\)/.test(src))
 }
 
 console.log('\n=== 11.51 0.9.6 修复的回归检查 ===')
@@ -465,7 +466,8 @@ console.log('\n=== 11.97 聊天区结构化读取（2026-11-09 修「被页面�
   ok('聊天区优先用 webcast-chatroom 定位（不是靠猜容器）', /webcast-chatroom/.test(find))
   ok('有 chatLines() 直接读聊天容器', /const chatLines = async/.test(src))
   ok('badgeEvidence 里是「边读边累积」的循环（虚拟列表会丢节点）', /const seenLines = new Set/.test(src) && /seenLines\.add/.test(src))
-  ok('badgeEvidence 用累积聊天判「送出了 粉丝团灯牌」', /seenLines/.test(src) && /送出了\\s\*粉丝团灯牌/.test(src))
+  ok('badgeEvidence 用累积聊天判「送出了 点亮粉丝团 / 粉丝团灯牌」', /seenLines/.test(src) && /BADGE_CHAT_RE/.test(src))
+  ok('聊天证据认得抖音现在的文案「送出了 点亮粉丝团」', /点亮粉丝团/.test(find))
   ok('聊天读不到时仍保留进度兜底', /from === null \|\| p > from/.test(src))
 }
 
@@ -534,6 +536,73 @@ console.log('\n=== 11.9997 0.9.7 优化与加固（2026-11-09）===')
   ok('cleanShots 清理过期截图（定义 + 进房时顺手清）', /function cleanShots/.test(src) && (src.match(/cleanShots\(\)/g) || []).length >= 2)
   ok('checkSec 钳制收敛成 clampCheckSec（不再散写 6 处）', /const clampCheckSec = \(\) => Math\.max\(30, Math\.min\(1800/.test(src) && src.split('Math.max(30, Math.min(1800').length === 2, '只剩 helper 本体')
   ok('escapeRe 一行化', /escapeRe = \(s\) => String\(s \|\| ''\)\.replace\(/.test(src))
+}
+
+console.log('\n=== 11.9999 0.9.8 真机实测修复（2026-11-10）===')
+{
+  const src = readFileSync(new URL('../index.mjs', import.meta.url), 'utf8')
+  const find = readFileSync(new URL('../lib/find.mjs', import.meta.url), 'utf8')
+  const cli = readFileSync(new URL('../lib/cli.mjs', import.meta.url), 'utf8')
+  const axSrc = readFileSync(new URL('../lib/ax.mjs', import.meta.url), 'utf8')
+
+  // —— 命中校验：祖先命中（2026-11-10 真机实测）——
+  ok('命中校验认「命中点是目标的祖先」', /ancestorHit/.test(find) && /node\.contains\(pickEl\)/.test(find))
+  ok('祖先命中有面积护栏（免得整页遮罩被当成没挡住）', /pickArea \* 8/.test(find))
+  ok('祖先命中排除 body / html', /node === doc\.body \|\| node === doc\.documentElement/.test(find))
+
+  // —— AX 通道（面板是 Lynx canvas，DOM 里读不到）——
+  ok('有 AX 通道模块', /export function createAxReader/.test(axSrc))
+  ok('AX 树按 frame 逐个取（面板在 blob: iframe 里，只查根 frame 读不到）', /frameId: f\.id/.test(axSrc) && /Page\.getFrameTree/.test(axSrc))
+  ok('AX 命中校验要求目标落在面板 iframe 上', /不在任何面板/.test(axSrc) && /elementFromPoint/.test(axSrc))
+  ok('AX 坐标先换算成视口坐标再点', /r\.x - sx/.test(axSrc) && /r\.y - sy/.test(axSrc))
+  ok('面板文字 DOM + 无障碍树一起读', /const panelText = async/.test(src) && /axText\(\)/.test(src))
+  ok('「+100」的口径统一（点之前/点之后同一个窗口）', /const TEXT_WINDOW|const TEXT = 20000/.test(src) && /plus100FromText\(ptext\)\.count/.test(src))
+  ok('证据也读面板（canvas 上的 +100 只有无障碍树里有）', /const t = await panelText\(\)/.test(src))
+
+  // —— 入口（现在的抖音版入口没有文字）——
+  ok('有结构化入口（头像 → 资料卡 → 粉丝团）', /async function openBadgePanel/.test(src) && /data-e2e="live-room-nickname"/.test(src))
+  ok('没加入粉丝团时不去点「加入粉丝团」', /要先加入才能点亮/.test(src))
+  ok('有 AX 版的灯牌按钮查找 + 独立的执行段', /async function findBadgeConfirmAx/.test(src) && /async function commitAx/.test(src))
+
+  // —— 余额正则（老写法 `\\d` 永远匹配不到）——
+  const balSeg = src.slice(src.indexOf('async function readBalance'), src.indexOf('async function readBalance') + 2200)
+  const balFallback = balSeg.slice(balSeg.indexOf('const t = await pageText('))
+  const balLine = balFallback.split('\n').find((l) => /const m = \/\(/.test(l)) || ''
+  ok('readBalance 兜底正则不再双重转义', !!balLine && !/\\\\d/.test(balLine) && /\(\\d\[\\d,\]/.test(balLine))
+  ok('余额兜底正则确实能读出抖音页面上的「1234 抖币」', (() => {
+    const m = /(\d[\d,]{0,6})\s*(?:抖币|余额)/.exec('剩余抖币 1234 抖币 余额充足')
+    return !!m && Number(m[1].replace(/,/g, '')) === 1234
+  })())
+
+  // —— 送礼：余额基准必须在点之前读 ——
+  const giftSeg = src.slice(src.indexOf('async function commitGift'), src.indexOf('async function commitGift') + 1200)
+  ok('commitGift 先读余额再点（原来点在前面，基准永远不成立）', /const base = beforeBalance == null \? await readBalance\(\) : beforeBalance/.test(giftSeg) &&
+    giftSeg.indexOf('const base =') < giftSeg.indexOf('await clicker.commit(prepared'))
+
+  // —— tick：异常不再掐断 CDP ——
+  const catchSeg = src.slice(src.indexOf('} catch (error) {', src.indexOf('async function tick')), src.indexOf('} catch (error) {', src.indexOf('async function tick')) + 900)
+  ok('tick 出错不再无条件关掉 CDP（会把待确认闸门废掉）', !/catch \(error\) \{[\s\S]{0,200}cdp\.close\(\)[\s\S]{0,80}cdp = null[\s\S]{0,40}return/.test(catchSeg) && /websocket\|not connected/.test(catchSeg))
+  ok('tick 出错时错误信息不会 undefined', /\(error && error\.message\) \? error\.message : String\(error\)/.test(catchSeg))
+
+  // —— ensureInRoom：换主播要换房 ——
+  ok('ensureInRoom 会比对「上次是用哪个目标进的」', /lastTarget/.test(src) && /saveState\(\{ lastTarget: target \}\)/.test(src))
+
+  // —— /probe：会花钱的分支必须显式 open=1 ——
+  const probeSeg = src.slice(src.indexOf("api.route('/probe'"), src.indexOf("api.route('/probe'") + 6000)
+  ok('/probe 的 ask/ok/click 要求 ?open=1', /needOpen/.test(probeSeg) && /这一步会真的点下去/.test(probeSeg))
+  ok('/probe 有只读的 AX 通道（what=ax）', /what === 'ax'/.test(src) && /api\.route\('\/probe'/.test(src))
+
+  // —— 定时器 ——
+  ok('onDispose 用 clearTimeout 清 tickTimer（setTimeout 的句柄，clearInterval 清不掉）',
+    !/clearInterval\(tickTimer\)/.test(src) && /clearTimeout\(tickTimer\)/.test(src))
+
+  // —— CLI ——
+  ok('cli verify 指向改名后的 verify.test.mjs', /verify\.test\.mjs/.test(cli) && !/'verify\.mjs'/.test(cli))
+  ok('cli confirm/cancel 带上 open=1（/probe 现在要求）', /what=.*open=1/.test(cli))
+
+  // —— 聊天证据文案 ——
+  ok('聊天证据认得「送出了 点亮粉丝团」（抖音现在的文案）', /点亮粉丝团/.test(find))
+  ok('证据判断统一用 BADGE_CHAT_RE', /BADGE_CHAT_RE/.test(src))
 }
 
 console.log('\n=== 12. 命令行 ===')
