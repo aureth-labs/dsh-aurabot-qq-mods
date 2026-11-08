@@ -1,0 +1,15 @@
+{
+  "id": "wechat-bridge",
+  "name": "微信互通",
+  "version": "0.1.0",
+  "description": "通过本机 Agent WeChat 接入主人私聊，与 QQ 共用人格和记忆。",
+  "category": "social",
+  "tags": ["微信", "私聊", "记忆"],
+  "author": "hogolic",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": ["memory"],
+  "capabilities": ["network", "filesystem", "plugin-config", "plugin-internals"],
+  "homepage": "https://github.com/hogolic/aurabot-qq-wechat"
+}
