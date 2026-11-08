@@ -1,0 +1,24 @@
+{
+  "id": "persona-lab",
+  "name": "人格实验室",
+  "version": "0.2.1",
+  "description": "观察群友的说话习惯，并允许她在主人会话里追加或在授权后重写人格；带备份、撤销和定期自我反思。",
+  "category": "manage",
+  "tags": [
+    "人格",
+    "口癖",
+    "群聊",
+    "自我调整",
+    "备份"
+  ],
+  "author": "Misaki_0903",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "plugin-config",
+    "filesystem",
+    "plugin-internals"
+  ]
+}
