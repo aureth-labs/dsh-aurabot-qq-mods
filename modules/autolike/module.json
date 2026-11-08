@@ -1,0 +1,20 @@
+{
+  "id": "autolike",
+  "name": "自动回赞",
+  "version": "1.0.0",
+  "description": "有人给她的资料卡点赞，就顺手给对方回赞：可设次数、每日上限、同一人冷却，也能只回主人的赞。",
+  "category": "social",
+  "tags": [
+    "点赞",
+    "回赞",
+    "资料卡"
+  ],
+  "author": "DFH-clouds",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "plugin-config"
+  ]
+}
