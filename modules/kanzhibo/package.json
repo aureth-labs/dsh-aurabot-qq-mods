@@ -1,0 +1,15 @@
+{
+  "name": "aurabot-kanzhibo",
+  "version": "0.9.8",
+  "private": true,
+  "type": "module",
+  "description": "Aurabot 的抖音看直播扩展：独立浏览器经 CDP 挂在直播间，进房、定制评论、续粉丝团灯牌",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\"",
+    "verify": "node test/verify.test.mjs"
+  }
+}
