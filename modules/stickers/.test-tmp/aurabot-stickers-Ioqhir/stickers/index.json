@@ -1,0 +1,41 @@
+{
+  "items": [
+    {
+      "md5": "d8b2e6dbd98f8505df7e4f6d8404a1b9",
+      "file": "manual-d8b2e6dbd98f8505df7e4f6d8404a1b9.png",
+      "name": "正常",
+      "tags": [],
+      "from": "manual",
+      "at": 1794197372602,
+      "width": 100,
+      "height": 100,
+      "bytes": 64,
+      "emojiId": ""
+    },
+    {
+      "md5": "9ce2ae43f1dc9d5addf9172ca325d73b",
+      "file": "manual-9ce2ae43f1dc9d5addf9172ca325d73b.png",
+      "name": "被停用",
+      "tags": [],
+      "from": "manual",
+      "at": 1794197372602,
+      "width": 120,
+      "height": 120,
+      "bytes": 64,
+      "emojiId": "",
+      "off": true
+    },
+    {
+      "md5": "5d9cc94950dcab5e09d3baea1a435e67",
+      "file": "manual-5d9cc94950dcab5e09d3baea1a435e67.png",
+      "name": "命中黑名单",
+      "tags": [],
+      "from": "manual",
+      "at": 1794197372603,
+      "width": 140,
+      "height": 140,
+      "bytes": 64,
+      "emojiId": ""
+    }
+  ]
+}

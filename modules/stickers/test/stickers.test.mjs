@@ -22,6 +22,21 @@ import { imageSize, mimeOf, stickerSizeOk } from '../lib/_inbound.js'
 const MOD_DIR = fileURLToPath(new URL('../', import.meta.url))
 const meta = JSON.parse(readFileSync(join(MOD_DIR, 'module.json'), 'utf8'))
 
+/**
+ * 建临时目录：优先用系统临时目录，不可写时退到模块目录下（有些受限环境把 %TEMP% 锁了，
+ * 比如被沙箱拦住的终端）。两种情况都会返回一个自己的目录，测试结束由调用方删。
+ */
+function tmp(tag) {
+  const bases = [tmpdir(), join(MOD_DIR, '.test-tmp')]
+  for (const base of bases) {
+    try {
+      mkdirSync(base, { recursive: true })
+      return mkdtempSync(join(base, tag + '-'))
+    } catch (error) { /* 换下一个 */ }
+  }
+  throw new Error('找不到可写的临时目录')
+}
+
 // ── 造图：最小可解析的 PNG / GIF / JPEG / WEBP 头 ─────────────────────────
 
 function png(width, height, nonce = '') {
@@ -121,11 +136,11 @@ function makeEnv({ settings = {}, dryRun = false, owner = '10000', level = 'full
 const run = (t, args) => t.execute(args || {}, {})
 
 before(() => {
-  process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'aurabot-stickers-'))
+  process.env.AURABOT_DATA_DIR = tmp('aurabot-stickers')
 })
 beforeEach(() => {
   // 每个用例一块干净的数据目录
-  process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'aurabot-stickers-'))
+  process.env.AURABOT_DATA_DIR = tmp('aurabot-stickers')
 })
 
 // ── module.json / 元信息 ─────────────────────────────────────────────────
@@ -599,7 +614,7 @@ test('qq_edit_sticker：改名 / 改标签；删表情要主人发话；要改�
 })
 
 test('qq_edit_sticker：别人在场时不能借主人的场删库', async () => {
-  process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'aurabot-stickers-'))
+  process.env.AURABOT_DATA_DIR = tmp('aurabot-stickers')
   const { store, tool } = makeEnv({ dryRun: true, allOwner: false })
   await store.addFromBuffer(uniq(100, 100), { name: '委屈猫', from: 'manual' })
   const r = await run(tool('qq_edit_sticker'), { sticker: '委屈猫', delete: true })

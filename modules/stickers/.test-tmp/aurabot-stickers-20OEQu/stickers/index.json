@@ -1,0 +1,32 @@
+{
+  "items": [
+    {
+      "md5": "584497fd5f215736fafe39bd0808b3c5",
+      "file": "manual-584497fd5f215736fafe39bd0808b3c5.png",
+      "name": "委屈猫",
+      "tags": [
+        "委屈"
+      ],
+      "from": "manual",
+      "at": 1794197372620,
+      "width": 100,
+      "height": 100,
+      "bytes": 64,
+      "emojiId": ""
+    },
+    {
+      "md5": "bee61313052f4f48ac2ac6ac442abd5a",
+      "file": "manual-bee61313052f4f48ac2ac6ac442abd5a.png",
+      "name": "开心鱼",
+      "tags": [
+        "开心"
+      ],
+      "from": "manual",
+      "at": 1794197372620,
+      "width": 120,
+      "height": 120,
+      "bytes": 64,
+      "emojiId": ""
+    }
+  ]
+}
