@@ -14,13 +14,6 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    env:
-      # 2026-11-09 加：runner 默认是 UTC，但模块里的作息 / 曲线是按东八区设计的。
-      #   feed 的测试就栽在这：plan() 用「当天日期」做随机种子，UTC 和东八区在
-      #   22:00~24:00 之间会差一天，种子一变，tick() 把饥饿值拉偏 1，测试就挂
-      #   （实测：TZ=UTC 必挂、TZ=Asia/Shanghai 必过）。
-      #   这里显式定死时区，别让 CI 结果随 runner 的默认时区飘。
-      TZ: Asia/Shanghai
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
