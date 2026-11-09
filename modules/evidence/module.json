@@ -1,0 +1,21 @@
+{
+  "id": "evidence",
+  "name": "记忆证据",
+  "version": "1.0.0",
+  "description": "给记忆事实配证据链：按提及时间与来源打分、衰减、晋级或降级，避免凭空捏造和过期事实长期盘踞。",
+  "category": "manage",
+  "tags": [
+    "记忆",
+    "证据",
+    "衰减"
+  ],
+  "author": "Aurabot",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "filesystem"
+  ],
+  "homepage": "https://github.com/aureth-labs/dsh-aurabot-qq"
+}

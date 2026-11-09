@@ -1,0 +1,23 @@
+{
+  "id": "companion",
+  "name": "陪伴记忆",
+  "version": "1.0.0",
+  "description": "每轮对话注入一份可热更新的相处记忆快照：连续性状态、固定事实、活跃记忆，并在超预算时分层裁剪。",
+  "category": "creative",
+  "tags": [
+    "记忆",
+    "陪伴",
+    "快照"
+  ],
+  "author": "Aurabot",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "filesystem",
+    "plugin-config",
+    "plugin-internals"
+  ],
+  "homepage": "https://github.com/aureth-labs/dsh-aurabot-qq"
+}
