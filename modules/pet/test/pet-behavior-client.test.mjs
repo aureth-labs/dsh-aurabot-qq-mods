@@ -1,4 +1,4 @@
-﻿// pet-behavior-client.test.js —— 桌宠客户端行为层纯逻辑单测（node:test）
+// pet-behavior-client.test.js —— 桌宠客户端行为层纯逻辑单测（node:test）
 // 被测对象：fork/src/modules/pet/pet-client/behavior.js（CommonJS，与 physics.js 同款求值方式加载，
 // 因为 fork/package.json 是 type:module，直接 require 会按 ESM 解析）。
 // 覆盖：未知动作 refused、第三批占位 refused、勾引判定（构造光标样本序列）、摸摸判定（时间序列）、
@@ -818,9 +818,9 @@ test('反应层禁用契约：/config 下发 disabledActions，反应层三处�
   const src = readFileSync(new URL('../pet-client/main.js', import.meta.url), 'utf8')
   assert.ok(src.includes('disabledActions'), '/config 必须解析 disabledActions 进 behaviorCfg')
   assert.ok(/const behaviorActionEnabled/.test(src), '缺统一判禁入口')
-  assert.ok(/behaviorActionEnabled\('chase_cursor'\) && behaviorApi\.isTeasing/.test(src), '勾引→追鼠标要查禁用')
-  assert.ok(/behaviorActionEnabled\('steal_cursor'\) && behaviorApi\.isCursorIdle/.test(src), '鼠标闲置→叼鼠标要查禁用')
-  assert.ok(/pet:click[\s\S]{0,80}behaviorActionEnabled\('chase_cursor'\)/.test(src), '点击桌宠→追鼠标要查禁用')
+  assert.ok(/behaviorActionEnabled\('chase_cursor'\)[\s\S]{0,120}behaviorApi\.isTeasing/.test(src), '勾引→追鼠标要查禁用（本地合并版中间还有自己的 teaseChaseEnabled 开关）')
+  assert.ok(/behaviorActionEnabled\('steal_cursor'\)[\s\S]{0,120}behaviorApi\.isCursorIdle/.test(src), '鼠标闲置→叼鼠标要查禁用')
+  assert.ok(/pet:click[\s\S]{0,200}behaviorActionEnabled\('chase_cursor'\)/.test(src), '点击桌宠→追鼠标要查禁用')
   assert.ok(/configLoaded/.test(src), '首次配置返回前默认不跑（configLoaded），避免启动瞬间抓一下')
 })
 

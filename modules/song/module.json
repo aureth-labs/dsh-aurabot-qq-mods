@@ -1,0 +1,25 @@
+{
+  "id": "song",
+  "name": "点歌",
+  "version": "1.0.1",
+  "description": "按歌名或关键词点歌，拉取音源并推送播放，支持队列与失败回退。替换内置 song。",
+  "category": "social",
+  "tags": [
+    "音乐",
+    "点歌"
+  ],
+  "author": "Aurabot",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "replacesBuiltin": true,
+  "requires": [],
+  "capabilities": [
+    "network",
+    "filesystem",
+    "process",
+    "plugin-config",
+    "plugin-internals"
+  ],
+  "homepage": "https://github.com/aureth-labs/dsh-aurabot-qq"
+}

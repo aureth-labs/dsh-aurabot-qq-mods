@@ -1,6 +1,6 @@
 # 模块规范
 
-模块的写法看插件的扩展接口文档 [API.md](https://github.com/accomplish07zrh-eng/dsh-aurabot-qq/blob/main/src/modules/API.md)。这里只规定模块怎么进本仓库、怎么发布、插件怎么安装。
+模块的写法看插件的扩展接口文档 [API.md](https://github.com/aureth-labs/dsh-aurabot-qq/blob/main/src/modules/API.md)。这里只规定模块怎么进本仓库、怎么发布、插件怎么安装。
 
 ## 目录
 
@@ -102,12 +102,12 @@ CI 会扫描源码，用到却没声明就不通过。**能力声明不是沙箱
 
 ## 索引
 
-地址：`https://raw.githubusercontent.com/accomplish07zrh-eng/dsh-aurabot-qq-mods/registry/index.json`
+地址：`https://raw.githubusercontent.com/aureth-labs/dsh-aurabot-qq-mods/registry/index.json`
 
 ```json
 {
   "schema": 1,
-  "assetsBase": "https://github.com/accomplish07zrh-eng/dsh-aurabot-qq-mods/releases/download/",
+  "assetsBase": "https://github.com/aureth-labs/dsh-aurabot-qq-mods/releases/download/",
   "generatedAt": "2026-10-30T12:00:00.000Z",
   "modules": [
     {
