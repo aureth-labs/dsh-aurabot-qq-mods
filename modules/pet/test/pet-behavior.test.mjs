@@ -120,7 +120,7 @@ test('间隔 clamp：下限 1 分钟（配 0 分钟也不许更快）、每日�
   assert.equal(b.maxPerDay, 99999)
   assert.equal(b.enabled, true)
   assert.equal(b.closeWindowEnabled, false, '高危关窗开关默认关')
-  assert.equal(b.turnTitle, '桌宠 · 行为大脑（自己的回合）')
+  assert.equal(b.turnTitle, '桌宠', 'v1.1.0 起行为大脑与碎碎念共用会话，标题统一为「桌宠」')
   // 暂未开放的动作在状态里可查（骨架预留，客户端面板要显示它们）；第二批 drag_icon/hide_icon 已开放
   assert.ok(b.openActions.includes('chase_cursor'))
   assert.ok(b.openActions.includes('drag_icon'), '第二批：drag_icon 进入开放清单')
@@ -215,9 +215,9 @@ test('解析失败回退本地池子文案（不调动作、不发行为事件�
   assert.ok(r.text.length > 0, '回退要有一句池子文案')
   const after = JSON.parse(readFileSync(env.api.dataDir('behavior.json'), 'utf8'))
   assert.equal(after.count, 0, '回退不计入每日配额')
-  assert.equal(env.thinkCalls[0].title, '桌宠 · 行为大脑（自己的回合）')
+  assert.equal(env.thinkCalls[0].title, '桌宠', 'v1.1.0 起行为大脑与碎碎念共用会话，标题统一为「桌宠」')
   assert.equal(env.thinkCalls[0].noTools, true)
-  assert.equal(env.thinkCalls[0].key, 'behavior', '必须带 key：否则和碎碎念挤进同一条会话（看不到这条、还互相排队）')
+  assert.equal(env.thinkCalls[0].key, 'pet', 'v1.1.0 起行为大脑与碎碎念共用后台会话 key=pet（工作区只留一个「桌宠」窗口）')
   assert.ok(env.thinkCalls[0].timeoutMs >= 120_000, '超时 120s')
 })
 

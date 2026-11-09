@@ -43,6 +43,77 @@
     groundFriction: 2.5,  // 地面水平摩擦 /s
     ceilingBounce: true,  // 顶部要不要弹
     throwPower: 1,        // 总力度（K/C 与初速同乘）
+    petCollision: true,   // 多只桌宠互撞（collide.ts 移植）
+  }
+
+  // ---- collide.ts（宠物之间的碰撞：包围盒换算、重叠判定与一次弹性分离）----
+  // 不做多体求解，也不改渲染；只回答「撞没撞、撞后速度多少」。
+  // 必须始终成立：只算一次分离，不迭代求解。
+  var PET_BOUNCE_E = 0.995      // 多宠物碰撞恢复系数：能量损失约 0.5%，接近完全弹性
+  /** 身体包围盒（命中框比例换算到像素）：碰撞相交检测的几何。
+   *  box = 宠物包围盒左上角；bottomPad = 舞台脚底垫高。
+   *  hitBox 是素材 640×360 里的命中框 {x0,y0,x1,y1}，缺省用整幅。
+   *  注意 x/y/size 必须同系：dsh-pet 的窗口 = 宠物包围盒，直接传窗口坐标；
+   *  Aurabot 窗口比舞台大一圈，调用方要先把坐标平移到舞台左上角、size 传舞台宽。 */
+  function bodyPixelBox(o) {
+    var hb = o.hitBox || { x0: 0, y0: 0, x1: 640, y1: 360 }
+    var h = (o.size * 9) / 16
+    var pad = o.bottomPad || 0
+    return {
+      left: o.x + (hb.x0 / 640) * o.size,
+      top: o.y + pad + (hb.y0 / 360) * h,
+      right: o.x + (hb.x1 / 640) * o.size,
+      bottom: o.y + pad + (hb.y1 / 360) * h,
+    }
+  }
+  /** 两矩形是否相交。 */
+  function rectsOverlap(a, b) {
+    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
+  }
+  /** 飞行中的宠物撞到另一只：近乎弹性碰撞（动量守恒 + 恢复系数 0.995），质量 ∝ size²。
+   *  法向 = 两包围盒中心连线，法向速度按一维动量公式重分配，切向分量各自保留（无切向摩擦）。
+   *  返回 null = 中心重合定不出法向，或两者正在分离（避免重叠帧反复弹跳抖动）。
+   *  impactSpeed 是法向相对速度，供挤压强度换算。 */
+  function collidePet(fly, hit) {
+    var hf = ((fly.size * 9) / 16) / 2
+    var hh = ((hit.size * 9) / 16) / 2
+    var cx = hit.x + hit.size / 2 - (fly.x + fly.size / 2)
+    var cy = hit.y + hh - (fly.y + hf)
+    var dist = Math.sqrt(cx * cx + cy * cy)
+    if (dist < 1e-6) return null        // 中心重合：无法定碰撞法向，跳过本帧
+    var nx = cx / dist
+    var ny = cy / dist
+    // 相对速度在法向的投影（碰撞方向 = fly → hit，正 = 正在接近）
+    var vrel = (fly.vx - hit.vx) * nx + (fly.vy - hit.vy) * ny
+    if (vrel <= 0) return null          // 正在分离：不再弹（避免重叠帧反复触发）
+    var e = PET_BOUNCE_E
+    var m1 = fly.size * fly.size
+    var m2 = hit.size * hit.size
+    var v1n = fly.vx * nx + fly.vy * ny
+    var v2n = hit.vx * nx + hit.vy * ny
+    var v1n2 = ((m1 - e * m2) * v1n + (1 + e) * m2 * v2n) / (m1 + m2)
+    var v2n2 = ((m2 - e * m1) * v2n + (1 + e) * m1 * v1n) / (m1 + m2)
+    // 组合：切向分量（原速度 − 法向分量）不变 + 新法向分量
+    return {
+      fvx: fly.vx - v1n * nx + v1n2 * nx,
+      fvy: fly.vy - v1n * ny + v1n2 * ny,
+      hvx: hit.vx - v2n * nx + v2n2 * nx,
+      hvy: hit.vy - v2n * ny + v2n2 * ny,
+      impactSpeed: vrel,
+    }
+  }
+  /** 两个身体框重叠时的最短推出位移：只算几何、不碰速度。
+   *  速度交换在两者正在分离时返回 null，光靠它会让已经插在一起的两只直接穿过去；
+   *  补这一个纯位移量才能把它们推开。返回推 a 离 b 的位移（各让一半）；不重叠时返回 null。 */
+  function overlapPush(a, b) {
+    var ox = Math.min(a.right, b.right) - Math.max(a.left, b.left)
+    var oy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
+    if (ox <= 0 || oy <= 0) return null
+    var alongX = ox <= oy
+    var sign = alongX
+      ? ((a.left + a.right) / 2 >= (b.left + b.right) / 2 ? 1 : -1)
+      : ((a.top + a.bottom) / 2 >= (b.top + b.bottom) / 2 ? 1 : -1)
+    return alongX ? { dx: (sign * ox) / 2, dy: 0 } : { dx: 0, dy: (sign * oy) / 2 }
   }
 
   // ---- spring.ts ----
@@ -55,6 +126,245 @@
   function softClampSpeed(speed) {
     if (speed <= 0) return 0
     return MAX_THROW_SPEED * (1 - Math.exp(-speed / MAX_THROW_SPEED))
+  }
+
+  // ---- contact.ts（接触面求解：法向反弹 + 切向摩擦） ----
+  // 从 dsh-pet 的 shared/physics/contact.ts 移植。法向统一约定为「指向离开接触面的一侧」，
+  // 四条边因此共用同一套公式，只算速度，位置夹回仍由 throwStep 负责。
+  var REST_NORMAL = 40       // 法向速度低于它直接贴住（否则重力每帧反弹一次 = 贴面抖动）
+  var REST_TANGENT = 15      // 切向速度低于它认为已静止
+  var REST_NORMAL_EPS = 1    // 判「已经贴住」时法向的容差（比 REST_NORMAL 严得多）
+  var CONTACT_NORMALS = {
+    left: { nx: 1, ny: 0 },
+    right: { nx: -1, ny: 0 },
+    ceiling: { nx: 0, ny: 1 },
+    floor: { nx: 0, ny: -1 },
+  }
+  /** 求一次接触后的速度：法向按恢复系数反弹（低于阈值归零），切向只按摩擦衰减。
+   *  返回 {vx,vy,normalSpeed,tangentSpeed}；后两项供 isRestingOnContacts 判静止。 */
+  function resolveContact(speed, edge, physics, dt) {
+    var ph = physics || DEFAULT_PHYSICS
+    var n = CONTACT_NORMALS[edge]
+    var tx = -n.ny
+    var ty = n.nx
+    var vn = speed.vx * n.nx + speed.vy * n.ny
+    var vt = speed.vx * tx + speed.vy * ty
+    // 法向低于阈值就归零：否则重力持续压向同一面时每帧都被反弹回去，表现为贴面抖动。
+    var normalSpeed = Math.abs(vn) < REST_NORMAL ? 0 : Math.abs(vn) * ph.restitution
+    // 切向只衰减、不改方向：撞墙时它是 vy，落地与撞顶时它是 vx。
+    var tangentSpeed = vt * Math.max(0, 1 - ph.groundFriction * dt)
+    return {
+      vx: normalSpeed * n.nx + tangentSpeed * tx,
+      vy: normalSpeed * n.ny + tangentSpeed * ty,
+      normalSpeed: normalSpeed,
+      tangentSpeed: tangentSpeed,
+    }
+  }
+  /** 本步接触是否都已静止：每个接触面的法向≈0 且切向低于阈值。 */
+  function isRestingOnContacts(edges, speed) {
+    if (!edges || edges.length === 0) return false
+    for (var i = 0; i < edges.length; i++) {
+      var n = CONTACT_NORMALS[edges[i]]
+      var normal = Math.abs(speed.vx * n.nx + speed.vy * n.ny)
+      var tangent = Math.abs(speed.vx * -n.ny + speed.vy * n.nx)
+      if (!(normal < REST_NORMAL_EPS && tangent < REST_TANGENT)) return false
+    }
+    return true
+  }
+
+  // ---- 逐屏 AABB（多显示器） ----
+  // dsh-pet 的关键教训：**每块屏一套 AABB，而不是整个桌面一个大 AABB**。
+  // 不规则多屏布局下外接矩形含空洞，用它当边界会让桌宠飞进不可见区域。
+  var rectRight = function (r) { return r.x + r.width }
+  var rectBottom = function (r) { return r.y + r.height }
+  /** 点落在哪块矩形里：返回下标，都不在返回 -1。 */
+  function indexAtPoint(rects, px, py) {
+    for (var i = 0; i < rects.length; i++) {
+      var r = rects[i]
+      if (px >= r.x && px < rectRight(r) && py >= r.y && py < rectBottom(r)) return i
+    }
+    return -1
+  }
+  /** 离哪个矩形中心最近（落在空洞里时用）。 */
+  function nearestIndex(rects, px, py) {
+    var best = -1, bestD = Infinity
+    for (var i = 0; i < rects.length; i++) {
+      var r = rects[i]
+      var dx = px - (r.x + r.width / 2)
+      var dy = py - (r.y + r.height / 2)
+      var d = dx * dx + dy * dy
+      if (d < bestD) { bestD = d; best = i }
+    }
+    return best
+  }
+  /** 由工作区列表构造抛掷空间。
+   *  边界一律按**可见身体盒**算（不是整个窗口）：贴底 = 身体底边落在工作区底边，
+   *  贴左/右 = 身体左右缘可以越出屏幕 `allow` 像素（dsh-pet 的 sideAllow 语义）。
+   *
+   *  2026-11-05 修不对称：以前 minX 用 `a.x - offX - allow`、maxX 用
+   *  `rectRight(a) - winW + allow`，而 winW 里已经含了 offX、bodyW 和右边距 20。
+   *  结果左边能出屏 allow=37px、右边只能出屏 37-20=17px —— 拖到右边会比左边早停，
+   *  在 2.5K 屏上肉眼能看到「右边贴不住、左边贴得住」。
+   *  现在两边都按 `身体缘 ∓ allow` 对称算，与 throwBounds（单屏版）同一套公式。
+   *
+   *  纵向仍按**窗口整体**：窗口底边贴工作区底边。因为窗口在舞台下方还有 16px 底距，
+   *  把 bottomGap 掺进 maxY 会让窗口底部伸进任务栏，看起来就是「越过屏幕底」。
+   *
+   *  2026-11-05 二次改（跟进 dsh-pet 新版的 reachInset）：允许量改成**左右分开**。
+   *  旧版只有一个 sideAllow，暗含「身体居中」的假设；dsh-pet 新版按命中区与可见下限
+   *  （MIN_REACHABLE_PX）分别算左右，命中区不居中时也不会算错。单值 sideAllow 仍然兼容
+   *  （左右都用它），老调用与单测不用改。 */
+  function throwSpace(o) {
+    var areas = o.areas || []
+    var panels = (o.panels && o.panels.length === areas.length) ? o.panels : areas
+    var offX = o.offsetX || 0
+    var offY = o.offsetY || 0
+    var bodyW = o.bodyW
+    var bodyH = o.bodyH
+    var allowBoth = o.sideAllow || 0
+    var allowL = o.reachLeft == null ? allowBoth : o.reachLeft
+    var allowR = o.reachRight == null ? allowBoth : o.reachRight
+    var allow = Math.max(allowL, allowR)
+    var winW = o.winW || (offX + bodyW)
+    var winH = o.winH || (offY + bodyH)
+    var bounds = areas.map(function (a) {
+      // 身体右缘相对窗口左缘的偏移 = offX + bodyW
+      var bodyRight = offX + bodyW
+      return {
+        // 窗口左上角的允许范围。身体左缘 = x + offX，允许它到 a.x - allowL
+        minX: a.x - offX - allowL,
+        minY: a.y,
+        // 身体右缘 = x + bodyRight，允许它到 屏右 + allowR
+        maxX: rectRight(a) - bodyRight + allowR,
+        maxY: rectBottom(a) - winH,
+      }
+    })
+    return {
+      bounds: bounds, areas: areas, panels: panels,
+      bodyW: bodyW, bodyH: bodyH, offsetX: offX, offsetY: offY,
+      winW: winW, winH: winH, sideAllow: allow,
+    }
+  }
+  /** 身体中心落在哪块屏；在空洞里取最近的。 */
+  function screenOfBox(space, x, y) {
+    var cx = x + space.offsetX + space.bodyW / 2
+    var cy = y + space.offsetY + space.bodyH / 2
+    var hit = indexAtPoint(space.areas, cx, cy)
+    return hit >= 0 ? hit : nearestIndex(space.areas, cx, cy)
+  }
+  /** 多屏抛掷步进：边界取自身体中心所在屏，越界后先问越界侧有没有别的屏——
+   *  有就原样放行（自然跨屏飞行），没有才按该边反弹。
+   *  探测用完整面板 panels 而不是 workArea：任务栏位于屏缝时 workArea 之间会空出一条带，
+   *  按工作区探测会把接缝当墙，桌宠永远穿不过去。
+   *  返回 {x,y,vx,vy,screen,bounced,atRest,hit,contacts}。 */
+  function throwStepRegion(s, dtRaw, space, physics, lockScreen, gravity) {
+    var ph = physics || DEFAULT_PHYSICS
+    var dt = Math.min(Math.max(dtRaw, 0), MAX_STEP_DT)
+    var gx = gravity && gravity.gx != null ? gravity.gx : 0
+    var gy = gravity && gravity.gy != null ? gravity.gy : ph.gravity
+    var x = s.x, y = s.y, vx = s.vx, vy = s.vy
+    vx += gx * dt
+    vy += gy * dt
+    x += vx * dt
+    y += vy * dt
+    if (!space.areas.length) return { x: x, y: y, vx: vx, vy: vy, screen: -1, bounced: false, atRest: false, hit: null, contacts: [] }
+    var bounced = false
+    var hit = null
+    var contacts = []
+    var record = function (edge, speed) {
+      contacts.push(edge)
+      if (hit === null || speed > hit.speed) hit = { edge: edge, speed: speed }
+    }
+    var locked = typeof lockScreen === 'number' && lockScreen >= 0 && lockScreen < space.areas.length
+    var pick = function (i) { return locked ? lockScreen : i }
+
+    // ---- 横向 ----
+    var cur = screenOfBox(space, x, y)
+    var bi = pick(cur)
+    var b = space.bounds[bi]
+    var pa = space.panels[bi] || space.areas[bi]
+    var cy = y + space.offsetY + space.bodyH / 2
+    if (x < b.minX) {
+      if (locked || indexAtPoint(space.panels, pa.x - 1, cy) < 0) {
+        record('left', Math.abs(vx))
+        x = b.minX
+        var oL = resolveContact({ vx: vx, vy: vy }, 'left', ph, dt)
+        vx = oL.vx; vy = oL.vy
+        bounced = true
+      }
+    } else if (x > b.maxX) {
+      if (locked || indexAtPoint(space.panels, rectRight(pa), cy) < 0) {
+        record('right', Math.abs(vx))
+        x = b.maxX
+        var oR = resolveContact({ vx: vx, vy: vy }, 'right', ph, dt)
+        vx = oR.vx; vy = oR.vy
+        bounced = true
+      }
+    }
+
+    // ---- 纵向（横向若被夹回，身体中心可能已换屏，重新定位）----
+    cur = screenOfBox(space, x, y)
+    bi = pick(cur)
+    b = space.bounds[bi]
+    pa = space.panels[bi] || space.areas[bi]
+    var cx = x + space.offsetX + space.bodyW / 2
+    if (y < b.minY) {
+      // ceilingBounce=false：顶部无边界，不夹不弹——飞出去靠重力落回
+      if (ph.ceilingBounce && (locked || indexAtPoint(space.panels, cx, pa.y - 1) < 0)) {
+        record('ceiling', Math.abs(vy))
+        y = b.minY
+        var oC = resolveContact({ vx: vx, vy: vy }, 'ceiling', ph, dt)
+        vx = oC.vx; vy = oC.vy
+        bounced = true
+      }
+    } else if (y >= b.maxY) {
+      // 下方还有一块屏（上下排布的桌面）⇒ 不当地面，继续往下掉
+      if (locked || indexAtPoint(space.panels, cx, rectBottom(pa)) < 0) {
+        record('floor', Math.abs(vy))
+        y = b.maxY
+        var oF = resolveContact({ vx: vx, vy: vy }, 'floor', ph, dt)
+        vx = oF.vx; vy = oF.vy
+        bounced = true
+      }
+    }
+
+    cur = pick(screenOfBox(space, x, y))
+    return {
+      x: x, y: y, vx: vx, vy: vy,
+      screen: cur, bounced: bounced,
+      atRest: isRestingOnContacts(contacts, { vx: vx, vy: vy }),
+      hit: hit, contacts: contacts,
+    }
+  }
+
+  // ---- 点击穿透兜底判定（pointer-target.ts 移植） ----
+  // dsh-pet 的核心教训：窗口默认整窗穿透，常规链路只有 Electron 的 forward 鼠标钩子一个入口，
+  // 而**该钩子在 Windows 上会静默失效**——失效后悬浮、拖拽、点击与右键全无反应。
+  // 所以主进程必须自己轮询光标位置做兜底判定，不能只依赖渲染页上报。
+  var POINTER_POLL_MS = 60        // 光标轮询间隔
+  var OFF_BODY_RELEASE_MS = 400   // 光标停在窗口余量区的最长保持时间，超过即恢复穿透
+  /** 光标相对窗口的分区：'outside' | 'body' | 'margin'。
+   *  bodyRect 是宠物身体在**屏幕坐标**下的矩形（由主进程算好传进来）。 */
+  function pointerZone(bounds, point, bodyRect) {
+    var inWindow =
+      point.x >= bounds.x && point.x < bounds.x + bounds.width &&
+      point.y >= bounds.y && point.y < bounds.y + bounds.height
+    if (!inWindow) return 'outside'
+    if (!bodyRect) return 'margin'
+    var inBody = point.x >= bodyRect.left && point.x <= bodyRect.right &&
+      point.y >= bodyRect.top && point.y <= bodyRect.bottom
+    return inBody ? 'body' : 'margin'
+  }
+  /** 该不该让窗口保持穿透（setIgnoreMouseEvents 的第一个参数）。
+   *  busy 期间位置完全不参与：拖拽时宠物滞后于光标，按位置判定会断掉正在用的 pointermove/pointerup，
+   *  表现为「拖到一半突然不动了」。 */
+  function decideWindowIgnore(bounds, point, ignoring, busy, offBodyMs, bodyRect) {
+    if (busy) return false // 拖拽租约：绝不因位置判定被打断
+    var zone = pointerZone(bounds, point, bodyRect)
+    if (zone === 'outside') return true   // 窗外：恢复穿透
+    if (zone === 'body') return false     // 宠物身上：可交互
+    if ((offBodyMs || 0) >= OFF_BODY_RELEASE_MS) return true // 余量区停留超时：恢复穿透
+    return ignoring // 余量区：保持现状（菜单/弹窗由 busy 覆盖）
   }
 
   // ---- throw.ts ----
@@ -104,7 +414,10 @@
       height: h,
     }
   }
-  /** 抛体单步积分与边界反弹。返回 {x,y,vx,vy,bounced,atRest}。 */
+  /** 抛体单步积分与边界反弹。返回 {x,y,vx,vy,bounced,atRest,hit,contacts}。
+   *  反弹走 contact.ts 的**法向/切向分解**（法向按恢复系数弹、切向按摩擦衰减），
+   *  而不是旧实现的「按轴翻转 vx/vy」——旧写法撞墙时把竖直速度也一起抹掉，
+   *  斜着撞墙会突然垂直下坠，手感很怪。 */
   function throwStep(s, dtRaw, b, physics) {
     var ph = physics || DEFAULT_PHYSICS
     var dt = Math.min(Math.max(dtRaw, 0), MAX_STEP_DT)
@@ -113,25 +426,39 @@
     x += vx * dt
     y += vy * dt
     var bounced = false
-    if (x < b.minX) { x = b.minX; vx = Math.abs(vx) * ph.restitution; bounced = true }
-    else if (x > b.maxX) { x = b.maxX; vx = -Math.abs(vx) * ph.restitution; bounced = true }
-    if (y < b.minY) {
-      if (ph.ceilingBounce) { y = b.minY; vy = Math.abs(vy) * ph.restitution; bounced = true }
-    } else if (y >= b.maxY) {
-      y = b.maxY
-      vx *= Math.max(0, 1 - ph.groundFriction * dt)
-      if (Math.abs(vy) < REST_VY) vy = 0
-      else vy = -Math.abs(vy) * ph.restitution
+    var hit = null
+    var contacts = []
+    var record = function (edge, speed) {
+      contacts.push(edge)
+      // 同一步撞到两条边（角落）时 hit 留更重的那个，手感只按主撞击算
+      if (hit === null || speed > hit.speed) hit = { edge: edge, speed: speed }
+    }
+    if (x < b.minX) {
+      record('left', Math.abs(vx)); x = b.minX
+      var oL = resolveContact({ vx: vx, vy: vy }, 'left', ph, dt); vx = oL.vx; vy = oL.vy
+      bounced = true
+    } else if (x > b.maxX) {
+      record('right', Math.abs(vx)); x = b.maxX
+      var oR = resolveContact({ vx: vx, vy: vy }, 'right', ph, dt); vx = oR.vx; vy = oR.vy
       bounced = true
     }
-    // 静止判定只认「贴近地面」：旧实现里 `bounced && speed < REST_VY && |vy| < 1` 会在半空成立
-    // （刚蹭了侧壁 + 正好在抛物线顶点 vy≈0）→ 桌宠停在半空（悬空卡死不动的直接原因）。
-    // 另外判定成立时把位置吸附到地面、速度清零：不吸附会留下 <1px 的浮空偏差（视觉看不出来，
-    // 但这正是「落地不精确」类回归的来源），也让「最终落在地面」成为确定行为。
-    var nearGround = y >= b.maxY - 1
-    var atRest = nearGround && Math.abs(vy) < 1 && Math.abs(vx) < REST_VX
-    if (atRest) { y = b.maxY; vx = 0; vy = 0 }
-    return { x: x, y: y, vx: vx, vy: vy, bounced: bounced, atRest: atRest }
+    if (y < b.minY) {
+      // ceilingBounce=false：顶部无边界，不夹不弹——飞出去靠重力落回（y 保持越界）
+      if (ph.ceilingBounce) {
+        record('ceiling', Math.abs(vy)); y = b.minY
+        var oC = resolveContact({ vx: vx, vy: vy }, 'ceiling', ph, dt); vx = oC.vx; vy = oC.vy
+        bounced = true
+      }
+    } else if (y >= b.maxY) {
+      record('floor', Math.abs(vy)); y = b.maxY
+      var oF = resolveContact({ vx: vx, vy: vy }, 'floor', ph, dt); vx = oF.vx; vy = oF.vy
+      bounced = true
+    }
+    // 静止判定：所有接触面都贴住且切向低速（contact.ts 同口径）。
+    // 旧实现只看「贴近地面 + |vy|<1」，会在半空蹭墙后误判静止 → 桌宠悬空卡死。
+    var atRest = isRestingOnContacts(contacts, { vx: vx, vy: vy })
+    if (atRest) { vx = 0; vy = 0 }
+    return { x: x, y: y, vx: vx, vy: vy, bounced: bounced, atRest: atRest, hit: hit, contacts: contacts }
   }
   /** 一帧该积几步（整数 ≥ 1）：位移超过 SUBSTEP_PX 就拆步，防跳过落地/反弹帧。 */
   function throwSubsteps(vx, vy, dt) {
@@ -227,6 +554,26 @@
     estimateReleaseVelocity: estimateReleaseVelocity,
     landingSquash: landingSquash,
     squashScale: squashScale,
+    // ↓ 从 dsh-pet 补搬：接触面分解 / 逐屏边界 / 穿透兜底判定
+    resolveContact: resolveContact,
+    isRestingOnContacts: isRestingOnContacts,
+    // ↓ collide.ts：宠物互撞
+    bodyPixelBox: bodyPixelBox,
+    rectsOverlap: rectsOverlap,
+    collidePet: collidePet,
+    overlapPush: overlapPush,
+    PET_BOUNCE_E: PET_BOUNCE_E,
+    throwSpace: throwSpace,
+    throwStepRegion: throwStepRegion,
+    screenOfBox: screenOfBox,
+    indexAtPoint: indexAtPoint,
+    nearestIndex: nearestIndex,
+    pointerZone: pointerZone,
+    decideWindowIgnore: decideWindowIgnore,
+    POINTER_POLL_MS: POINTER_POLL_MS,
+    OFF_BODY_RELEASE_MS: OFF_BODY_RELEASE_MS,
+    REST_NORMAL: REST_NORMAL,
+    REST_TANGENT: REST_TANGENT,
   }
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api

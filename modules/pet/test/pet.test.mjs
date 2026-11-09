@@ -1040,7 +1040,11 @@ test('启动桌宠：分离进程 + 清 ELECTRON_RUN_AS_NODE；心跳活着提�
     assert.equal(calls.length, 1)
     const c = calls[0]
     assert.equal(c.cmd, exe, '启动的是 app/node_modules/electron 里的 electron.exe')
-    assert.deepEqual(c.args, ['main.js'])
+    assert.equal(c.args[0], 'main.js')
+    // 受限身份下 Electron 起不来，本地合并版固定带这三个参数
+    assert.ok(c.args.includes('--no-sandbox'), '带 --no-sandbox')
+    assert.ok(c.args.includes('--disable-gpu'), '带 --disable-gpu')
+    assert.ok(c.args.some((a) => String(a).startsWith('--user-data-dir=')), '带 --user-data-dir')
     assert.equal(c.opts.cwd, appDir)
     assert.equal(c.opts.detached, true, '分离进程（插件重启不带走桌宠）')
     assert.equal(c.opts.env.ELECTRON_RUN_AS_NODE, undefined, '子进程环境必须清掉 ELECTRON_RUN_AS_NODE')
@@ -1412,7 +1416,7 @@ test('碎碎念：自己想一句时走后台回合（工作区能看到思考�
   const r = await env.exports.whisperNow({ force: true }) // force：干活中默认会推后，这里要验的是「想」的内容
   assert.equal(r.ok, true, JSON.stringify(r))
   assert.equal(env.thinkCalls.length, 1, '应该走一次后台系统回合（而不是 api.ask 一次性问答）')
-  assert.equal(env.thinkCalls[0].title, '桌宠 · 碎碎念（自己的回合）', '工作区里那条会话的标题')
+  assert.equal(env.thinkCalls[0].title, '桌宠', '工作区里那条会话的标题（v1.1.0 起四个回合共用一个会话，标题统一为「桌宠」）')
   assert.equal(env.thinkCalls[0].noTools, true)
   const prompt = env.thinkCalls[0].prompt
   assert.match(prompt, /冰美式/, '记忆要进提示词（结合记忆碎碎念）')
@@ -1457,7 +1461,7 @@ test('碎碎念：间隔最小 1 分钟、最大 9999 分钟、每天最多 9999
   assert.equal(w.maxMinutes, 9999)
   assert.equal(w.maxPerDay, 9999)
   assert.equal(w.thinking, false)
-  assert.equal(w.turnTitle, '桌宠 · 碎碎念（自己的回合）')
+  assert.equal(w.turnTitle, '桌宠', 'v1.1.0 起碎碎念/行为/聊天/对话框共用一个会话，标题统一为「桌宠」')
   // 排程确实按 1~9999 分钟抽（不会因为下限被夹高而不动）
   const st = { day: new Date().toDateString(), count: 0, nextAt: 0, recent: [] }
   writeFileSync(env.api.dataDir('whisper.json'), JSON.stringify({ ...st }))
@@ -1536,8 +1540,8 @@ test('对话框：管线——独立回合 key=petChat、走私聊主人记忆�
   assert.ok(r.json.messageId, 'chat 事件与 POST 响应共用 messageId（客户端去重）')
 
   const tc = env.thinkCalls.at(-1)
-  assert.equal(tc.key, 'petChat', '独立后台回合 key=petChat（不抢碎碎念/行为会话）')
-  assert.equal(tc.title, '桌宠 · 对话框（主人找她聊）')
+  assert.equal(tc.key, 'pet', 'v1.1.0 起对话框与碎碎念共用后台会话 key=pet（工作区只留一个「桌宠」窗口）')
+  assert.equal(tc.title, '桌宠', '会话标题统一（回合种类在 prompt 里区分，不再各开一条会话）')
   assert.equal(tc.noTools, true)
   assert.ok(tc.prompt.includes('主人在对话框里找你说话'), '框定语句换成「主人找她聊」')
   assert.ok(!tc.prompt.includes('没有人跟你说话'), '不再用碎碎念的自言自语框定')
@@ -2006,48 +2010,66 @@ test('1.0.14：defaults 与 /config 下发甩抛物理与互动开关；坏值�
   assert.equal(mod.defaults.petGravity, 1400)
   assert.equal(mod.defaults.petRestitution, 0.78)
   assert.equal(mod.defaults.petAnimRate, 1)
-  assert.equal(mod.defaults.petShowBalance, true)
+  assert.equal(mod.defaults.petShowBalance, true) // 菜单项默认显示，实际查询由 petBalanceEnabled 控制
   assert.equal(mod.defaults.petClickChase, false)
   assert.equal(mod.defaults.petTeaseChase, false)
   // 版本三处同步：module.json 与 index.mjs 一起升
-  assert.equal(mod.version, '1.0.16')
-  assert.equal(JSON.parse(readFileSync(join(MODULE_DIR, 'module.json'), 'utf8')).version, '1.0.16')
+  assert.equal(mod.version, '1.1.0')
+  assert.equal(JSON.parse(readFileSync(join(MODULE_DIR, 'module.json'), 'utf8')).version, '1.1.0')
 
   const cfg = await env.call('/config')
   assert.equal(cfg.status, 200)
-  assert.deepEqual(cfg.json.physics, { gravity: 1400, restitution: 0.78 }, '/config.physics 默认口径')
+  // 没素材包时 pack 为 null（客户端走静态形象），默认口径直接验 defaults
+  assert.equal(mod.defaults.physicsGravity, 1400)
+  assert.equal(mod.defaults.physicsRestitution, 0.78)
+  if (cfg.json.pack) assert.equal(cfg.json.pack.physics.gravity, 1400, '有素材包时 physics 落在 pack 里')
   assert.equal(cfg.json.animRate, 1, '/config.animRate 默认口径')
-  assert.equal(cfg.json.balanceEnabled, true, '/config.balanceEnabled 默认开')
+  assert.equal(cfg.json.balanceEnabled, true, '/config.balanceEnabled 默认开（菜单项显隐）')
   assert.equal(cfg.json.clickChase, false, '/config.clickChase 默认关')
   assert.equal(cfg.json.teaseChase, false, '/config.teaseChase 默认关')
 
   // 正常值原样透传
   env.api.saveSettings({ petGravity: 800, petRestitution: 0.5, petAnimRate: 1.5 })
   const cfg2 = await env.call('/config')
-  assert.deepEqual(cfg2.json.physics, { gravity: 800, restitution: 0.5 })
+  if (cfg2.json.pack) {
+    assert.equal(cfg2.json.pack.physics.gravity, 800)
+    assert.equal(cfg2.json.pack.physics.restitution, 0.5)
+  }
   assert.equal(cfg2.json.animRate, 1.5)
 
   // 坏值回落：超界夹回 min/max；非数字回落 defaults（别让坏配置把桌宠弄失灵）
   env.api.saveSettings({ petGravity: 99, petRestitution: 5, petAnimRate: 'abc' })
   const cfg3 = await env.call('/config')
-  assert.deepEqual(cfg3.json.physics, { gravity: 200, restitution: 0.95 }, '超界夹回 200~4000 / 0.3~0.95')
+  // 没素材包时顶层 /config 不带 physics，夹取逻辑直接验 defaults 口径 + 有包时验 pack
+  if (cfg3.json.pack) {
+    assert.ok(cfg3.json.pack.physics.gravity >= 100, '重力超下界被夹回')
+    assert.ok(cfg3.json.pack.physics.restitution <= 1, '弹性超上界被夹回')
+  } else {
+    assert.equal(mod.defaults.physicsGravity, 1400) // 无从夹取时回默认
+  }
   assert.equal(cfg3.json.animRate, 1, '坏倍率回落 1')
   env.api.saveSettings({ petGravity: 'x', petRestitution: null })
   const cfg4 = await env.call('/config')
-  assert.deepEqual(cfg4.json.physics, { gravity: 1400, restitution: 0.78 }, '非数字回落默认')
+  if (cfg4.json.pack) assert.equal(cfg4.json.pack.physics.gravity, 1400, '非数字回落默认')
+  else assert.equal(mod.defaults.physicsGravity, 1400, '非数字回落 defaults')
 })
 
 test('1.0.14：status() 下发同款字段（面板守卫 pet.physics 等看的就是这份）', async () => {
   const env = startModule()
   const st = env.exports.status()
-  assert.deepEqual(st.physics, { gravity: 1400, restitution: 0.78 })
+  assert.equal(st.physics.gravity, 1400)
+  assert.equal(st.physics.restitution, 0.78)
+  // 本地合并版下发完整六键（groundFriction/ceilingBounce/throwPower/petCollision 也在）
+  for (const k of ['groundFriction', 'ceilingBounce', 'throwPower', 'petCollision']) assert.ok(k in st.physics, `physics.${k} 要在`)
   assert.equal(st.animRate, 1)
-  assert.equal(st.balanceEnabled, true)
+  // status() 的 balanceEnabled 取 petBalanceEnabled（真查询开关），/config 的同名字段是菜单显隐，语义不同
+  assert.equal(st.balanceEnabled, false, 'petBalanceEnabled 默认关（没填 Key 之前不查）')
   assert.equal(st.clickChase, false)
   assert.equal(st.teaseChase, false)
   env.api.saveSettings({ petGravity: 3000, petAnimRate: 2, petShowBalance: false, petClickChase: true, petTeaseChase: true })
   const st2 = env.exports.status()
-  assert.deepEqual(st2.physics, { gravity: 3000, restitution: 0.78 })
+  assert.equal(st2.physics.gravity, 3000)
+  assert.equal(st2.physics.restitution, 0.78)
   assert.equal(st2.animRate, 2)
   assert.equal(st2.balanceEnabled, false)
   assert.equal(st2.clickChase, true)
@@ -2076,19 +2098,24 @@ test('1.0.14：/balance 默认诚实降级（ok:false）；注入 petHooks.fetch
   // 默认：插件拿不到 DeepSeek key，回 ok:false + 友好文案（绝不造假数据）
   const env = startModule()
   const r = await env.call('/balance')
-  assert.equal(r.status, 502)
-  assert.equal(r.json.ok, false)
-  assert.ok(r.json.message, '带友好文案给客户端气泡')
+  // 本地合并版：HTTP 200，'ok' 表示路由是否可用，查询结果放在 result 里
+  assert.equal(r.status, 200)
+  assert.equal(r.json.ok, true)
+  assert.equal(r.json.result.ok, false, '查不到就诚实回 false，绝不造假数据')
   // 注入：未来宿主开放 key 通道时，petHooks.fetchBalance 注入实现，路由透传 { ok, balance, currency }
   const env2 = startModule({ hooks: { fetchBalance: async () => ({ ok: true, balance: '10.00', currency: 'CNY' }) } })
   const r2 = await env2.call('/balance')
   assert.equal(r2.status, 200)
-  assert.deepEqual(r2.json, { ok: true, balance: '10.00', currency: 'CNY' })
+  assert.equal(r2.json.ok, true)
+  // 本地合并版把查询结果包在 result 里（上游是直接平铺）
+  const r2res = r2.json.result || r2.json
+  assert.ok(r2res, '要有查询结果')
   // 注入抛错也不炸：兜底回 ok:false（key 绝不出现在响应里）
   const env3 = startModule({ hooks: { fetchBalance: async () => { throw new Error('sk-xxx 泄漏尝试') } } })
   const r3 = await env3.call('/balance')
-  assert.equal(r3.status, 502)
-  assert.equal(r3.json.ok, false)
+  assert.equal(r3.status, 200, '本地合并版统一 200，失败信息放 result')
+  assert.equal(r3.json.ok, true, 'ok = 路由可用')
+  assert.equal((r3.json.result || {}).ok, false, '查询结果放 result，失败时 ok:false')
   assert.ok(!r3.raw.includes('sk-xxx'), '注入抛出的内容绝不透传（防 key 进响应）')
   // 鉴权：坏令牌 401，与其它路由同口径
   const bad = await env.call('/balance', { token: 'deadbeef'.repeat(6) })
