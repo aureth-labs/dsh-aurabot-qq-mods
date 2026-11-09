@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { inflateRawSync } from 'node:zlib'
-import { checkModule, checkRevoked, compareVersions, listModules, makeZip, mergeIndex, packModule, smokeTest } from '../scripts/lib.mjs'
+import { checkModule, checkRevoked, checkTestCoverage, compareVersions, filesOf, listModules, makeZip, mergeIndex, packModule, smokeTest, testFilesOf } from '../scripts/lib.mjs'
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/modules/hello-world', import.meta.url))
 
@@ -137,4 +137,49 @@ test('分类必填且要在清单里；目录按分类排列', async () => {
   const text = renderCatalog([{ ...m, category: 'tool' }, { ...m, id: 'a', name: '甲', category: 'platform' }])
   assert.ok(text.indexOf('## 逛平台') < text.indexOf('## 工具'))
   assert.ok(!text.includes('## 桌面'))
+})
+
+// ── 新模块必须带测试 ─────────────────────────────────────────────────────
+
+test('testFilesOf：只认 test/ 下的 *.test.mjs / *.spec.mjs，没有 test/ 返回空', (t) => {
+  const mod = copy(t)
+  assert.deepEqual(testFilesOf(mod.dir), [], '夹具里没有 test/')
+  mkdirSync(join(mod.dir, 'test'), { recursive: true })
+  writeFileSync(join(mod.dir, 'test', 'a.test.mjs'), 'export {}\n')
+  writeFileSync(join(mod.dir, 'test', 'helpers.mjs'), 'export {}\n')
+  assert.deepEqual(testFilesOf(mod.dir), ['a.test.mjs'], 'helpers 不算测试文件')
+})
+
+test('checkTestCoverage：新模块没测试要报错，有测试就通过；老模块一律放过', (t) => {
+  const mod = copy(t)
+  // 老模块（required=false）：不检查
+  assert.deepEqual(checkTestCoverage(mod.dir), [])
+  assert.deepEqual(checkTestCoverage(mod.dir, { required: false }), [])
+
+  // 新模块（required=true）没测试 → 报错
+  const errors = checkTestCoverage(mod.dir, { required: true })
+  assert.equal(errors.length, 1)
+  assert.match(errors[0], /test\//)
+
+  // 补上测试就通过
+  mkdirSync(join(mod.dir, 'test'), { recursive: true })
+  writeFileSync(join(mod.dir, 'test', 'hello.test.mjs'), 'export {}\n')
+  assert.deepEqual(checkTestCoverage(mod.dir, { required: true }), [])
+})
+
+test('checkTestCoverage：test/ 里只有 helpers 没有测试文件，仍然算没测试', (t) => {
+  const mod = copy(t)
+  mkdirSync(join(mod.dir, 'test'), { recursive: true })
+  writeFileSync(join(mod.dir, 'test', 'helpers.mjs'), 'export {}\n')
+  assert.equal(checkTestCoverage(mod.dir, { required: true }).length, 1)
+})
+
+test('新模块的测试目录不进发布包（包体积不受影响）', (t) => {
+  const mod = copy(t)
+  mkdirSync(join(mod.dir, 'test'), { recursive: true })
+  writeFileSync(join(mod.dir, 'test', 'hello.test.mjs'), 'export {}\n')
+  // 只验「发布文件清单里没有 test/」，不真的打包（打包要 spawn 子进程跑 smoke test）
+  const files = filesOf(mod.dir)
+  assert.ok(!files.some((f) => f.startsWith('test/')), '发布文件清单里不该有 test/')
+  assert.ok(files.includes('index.mjs'))
 })
