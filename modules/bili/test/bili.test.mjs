@@ -6,7 +6,7 @@
 
 import { test, before, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -24,11 +24,25 @@ const MOD_DIR = fileURLToPath(new URL('../', import.meta.url))
 const meta = JSON.parse(readFileSync(join(MOD_DIR, 'module.json'), 'utf8'))
 const BV = 'BV1xx411c7mD'
 
+/**
+ * 建临时目录：优先用系统临时目录，不可写时退到模块目录下（有些受限环境把 %TEMP% 锁了）。
+ * 两种情况都会返回一个自己的目录。
+ */
+function tmp(tag) {
+  for (const base of [tmpdir(), join(MOD_DIR, '.test-tmp')]) {
+    try {
+      mkdirSync(base, { recursive: true })
+      return mkdtempSync(join(base, tag + '-'))
+    } catch (error) { /* 换下一个 */ }
+  }
+  throw new Error('找不到可写的临时目录')
+}
+
 before(() => {
-  process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'aurabot-bili-'))
+  process.env.AURABOT_DATA_DIR = tmp('aurabot-bili')
 })
 beforeEach(() => {
-  process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'aurabot-bili-'))
+  process.env.AURABOT_DATA_DIR = tmp('aurabot-bili')
 })
 
 // ── module.json / 元信息 ─────────────────────────────────────────────────
