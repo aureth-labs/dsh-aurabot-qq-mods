@@ -313,17 +313,18 @@ test('睡觉：陪伴记忆的相处状态会被更新成「正在做梦」', as
 
 // ── 做梦 / 遗忘 ──────────────────────────────────────────────────────────
 
-test('做梦：调一次模型，产出碎片进状态，并记下「这段里过了多久」', async () => {
+test('做梦：调一次模型，产出碎片进状态，时间轴那行只进 spans 不进碎片', async () => {
   const env = makeEnv({ reply: replyByPrompt() })
   await env.handle.sleep()
-  await env.handle.sleep() // 幂等，下面直接跑一段
   const before = env.thinks.length
   env.commands.get('做梦').run()
-  await new Promise((r) => setTimeout(r, 50))
+  await new Promise((r) => setTimeout(r, 60))
   assert.ok(env.thinks.length > before, '调用了模型')
   const st = env.readState()
   assert.ok(st.frags.length > 0, '有幸存碎片')
   assert.ok(st.frags.every((f) => !/这段里过了多久/.test(f)), '时间轴那行不进碎片')
+  assert.ok(st.spans.some((s) => /这段里过了多久/.test(s)), '时间轴那行进 spans')
+  assert.equal(new Set(st.frags).size, st.frags.length, '碎片不能重复')
 })
 
 test('REM 提示词：带上段号 / 身体感要求 / 禁止清单式 / 不许「我梦见」开头', async () => {
@@ -563,7 +564,7 @@ test('起床：关掉 dreamResidue 就不写余韵', async () => {
 
 test('起床：噩梦掉心情、好梦涨心情', async () => {
   const nudges = []
-  /** 睡满一夜（段数做够、睡够 8 小时），免得「没睡饱」把心情再压下去，专门验证梦本身的调子。 */
+  /** 睡满一夜（段数做够、睡够 8 小时、睡眠深度固定），专门验证梦本身的调子。 */
   const sleptWell = async (env, wakeLine) => {
     await env.handle.sleep()
     const st = env.readState()
@@ -571,12 +572,12 @@ test('起床：噩梦掉心情、好梦涨心情', async () => {
       ...st,
       cyclesDone: 4,
       sleptAt: Date.now() - 8 * 3_600_000,
+      sleepDepth: 'normal', // 不固定的话，抽到 light 会再压 1 点，好梦就被挤成 0 了
       frags: ['台阶很凉', '有人在喊我'],
     })
     env.thinks.length = 0
-    const origApi = env.api
     // 醒来那一步的模型输出换成指定的梦
-    origApi.think = async (prompt, opts) => {
+    env.api.think = async (prompt, opts) => {
       env.thinks.push({ prompt, opts })
       return promptKind(prompt) === 'wake' ? wakeText().replace('台阶很凉，我一个人坐着。别的都想不起来了。', wakeLine) : ''
     }

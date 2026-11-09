@@ -881,9 +881,14 @@ export default {
      * 前半夜忘得最狠（几乎全丢），后半夜稍微记得多一点。
      * 注意：幸存碎片必须是**去重**的——真人不会把同一个画面原样记两遍；
      * 「重复意象」是隔着几段又模糊地回来，不是当场复制一份。
+     *
+     * 时间轴那行（【这段里过了多久：…】）要在**遗忘之前**摘出去：它不是画面，
+     * 而是「这一段梦里过了多久」的元信息，只进 spans。以前是先遗忘再过滤，
+     * 那行有机会把整段一起挤掉，导致这一段一个碎片都不剩。
      */
+    const SPAN_RE = /这段里过了多久/
     function forget(lines, cycle, total) {
-      const uniq = [...new Set(lines)]
+      const uniq = [...new Set(lines)].filter((s) => !SPAN_RE.test(s))
       if (!uniq.length) return []
       // 越靠后保留率越高：第1段 ~18%，最后一段 ~45%
       const t = total <= 1 ? 1 : (cycle - 1) / (total - 1)
@@ -891,6 +896,9 @@ export default {
       const keepCount = Math.max(1, Math.round(uniq.length * keepRate * (0.7 + Math.random() * 0.6)))
       return shuffle(uniq).slice(0, keepCount)
     }
+
+    /** 从一段梦里挑出时间轴那行（没有就返回空串）。 */
+    const spanOf = (lines) => (lines || []).find((s) => SPAN_RE.test(s)) || ''
 
     // ---------- 开始睡 ----------
     async function sleepNow(manual) {
@@ -1054,10 +1062,10 @@ export default {
         return false
       }
 
-      const survivors = forget(lines, cycle, total).filter((s) => !/这段里过了多久/.test(s))
+      const survivors = forget(lines, cycle, total)
       harvestMotifs(lines.join('\n'))
       st.frags = [...new Set([...(st.frags || []), ...survivors])]
-      st.spans = [...(st.spans || []), lines[0] || '']
+      st.spans = [...(st.spans || []), spanOf(lines)]
       st.cyclesDone = cycle
       st.nightlyTries = 0
       st.lastDream = lines.join('\n')
@@ -1549,9 +1557,13 @@ export default {
           const night = st.night || ymd(new Date())
           const lines = await doRemCycle(1, 2, Date.now(), night)
           if (lines) {
-            st.frags = [...(st.frags || []), ...forget(lines, 1, 2)]
+            // 和 tickCycle 一致：时间轴那行只进 spans，不算碎片；
+            // 否则手动 /做梦 会把它当成一个画面存下来。
+            st.frags = [...new Set([...(st.frags || []), ...forget(lines, 1, 2)])]
             harvestMotifs(lines.join('\n'))
             st.night = night
+            st.spans = [...(st.spans || []), spanOf(lines)]
+            st.lastDream = lines.join('\n')
             save(st)
           }
         })().catch((error) => api.log.warn('手动做梦失败：', error.message))
