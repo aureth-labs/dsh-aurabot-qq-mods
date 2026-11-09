@@ -1,0 +1,22 @@
+{
+  "id": "sticker-kit",
+  "name": "表情进阶",
+  "version": "1.0.0",
+  "description": "按画面/梗/场合/情绪检索表情（知识库来自 stickers 模块的表情库）",
+  "category": "social",
+  "tags": [
+    "表情包",
+    "检索",
+    "知识库"
+  ],
+  "author": "风止",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [
+    "stickers"
+  ],
+  "capabilities": [
+    "plugin-internals"
+  ]
+}
