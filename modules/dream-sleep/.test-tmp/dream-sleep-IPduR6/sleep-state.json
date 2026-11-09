@@ -1,0 +1,24 @@
+{
+  "schema": 2,
+  "sleepAt": 0,
+  "sleptAt": 1794197373225,
+  "wokeAt": 1794211413225,
+  "toldAt": 0,
+  "night": "2026-11-09",
+  "cyclesDone": 0,
+  "nextCycleAt": 1794197883225,
+  "frags": [
+    "桌上那封信没写完"
+  ],
+  "spans": [],
+  "residue": "",
+  "residueNight": "",
+  "lastDream": "",
+  "nightlyTries": 0,
+  "tellTries": 0,
+  "dreamChaos": false,
+  "bodyAt": "2026-11-09 12:09 躺下",
+  "sleepDepth": "light",
+  "onsetMin": 8,
+  "insomniac": false
+}

@@ -21,6 +21,20 @@ const meta = JSON.parse(readFileSync(join(MOD_DIR, 'module.json'), 'utf8'))
 
 const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
+/**
+ * 建临时目录：优先用系统临时目录，不可写时退到模块目录下（有些受限环境把 %TEMP% 锁了）。
+ * 两种情况都会返回一个自己的目录。
+ */
+function tmp(tag) {
+  for (const base of [tmpdir(), join(MOD_DIR, '.test-tmp')]) {
+    try {
+      mkdirSync(base, { recursive: true })
+      return mkdtempSync(join(base, tag + '-'))
+    } catch (error) { /* 换下一个 */ }
+  }
+  throw new Error('找不到可写的临时目录')
+}
+
 // ── 假 api ───────────────────────────────────────────────────────────────
 
 /**
@@ -28,7 +42,7 @@ const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0
  * @param {(prompt:string)=>string} o.reply  假的 api.think：按提示词返回文本
  */
 function makeEnv({ settings = {}, reply, config = {}, companion = null, mood = null, pet = null } = {}) {
-  const dataDir = mkdtempSync(join(tmpdir(), 'dream-sleep-'))
+  const dataDir = tmp('dream-sleep')
   const dreams = join(dataDir, 'dreams')
   mkdirSync(dreams, { recursive: true })
   // auraRoot() 会顺着 DSH_HOME 找用户真实数据（bili.json / diary.json / chatlog），
@@ -791,7 +805,7 @@ test('规则里写清了：会真的睡、梦记在哪、想不起来就别编',
 
 test('梦记目录可以自定义（设置项 dreamDir 优先）', async () => {
   const env = makeEnv({ reply: replyByPrompt() })
-  const custom = mkdtempSync(join(tmpdir(), 'dreams-custom-'))
+  const custom = tmp('dreams-custom')
   env.s.dreamDir = custom
   await env.handle.sleep()
   await env.handle.wake()

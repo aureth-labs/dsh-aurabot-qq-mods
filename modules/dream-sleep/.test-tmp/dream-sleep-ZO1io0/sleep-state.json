@@ -1,0 +1,23 @@
+{
+  "schema": 2,
+  "sleepAt": 1794197973368,
+  "sleptAt": 0,
+  "wokeAt": 1794197373368,
+  "toldAt": 0,
+  "night": "2026-11-09",
+  "cyclesDone": 0,
+  "nextCycleAt": 0,
+  "frags": [],
+  "spans": [],
+  "residue": "",
+  "residueNight": "",
+  "lastDream": "## 还记得的\n我在海边笑，阳光很好，抱着谁。\n\n## 身体\n嗓子干得咽不下去\n\n## 想跟老大说\n我醒了。\n\n## 梦里出现过\n台阶\n干瘪的小鱼\n有人喊我\n\n## 分不清的\n好像真的有人喊过我，我没回头",
+  "nightlyTries": 0,
+  "tellTries": 0,
+  "dreamChaos": false,
+  "bodyAt": "2026-11-09 12:09 躺下",
+  "sleepDepth": "deep",
+  "onsetMin": 1,
+  "insomniac": false,
+  "file": "H:\\nuonuo\\.tmp\\rb\\dream-sleep\\modules\\dream-sleep\\.test-tmp\\dream-sleep-ZO1io0\\dreams\\2026-11-09.md"
+}
