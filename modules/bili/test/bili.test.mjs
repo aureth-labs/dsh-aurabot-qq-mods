@@ -4,9 +4,9 @@
 // 跑法见仓库根 scripts/plugin-env.mjs：
 //   AURABOT_PLUGIN_DIR=<插件目录> node --import ./scripts/plugin-env.mjs --test "modules/bili/test/*.test.mjs"
 
-import { test, before, beforeEach } from 'node:test'
+import { test, before, after, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -26,17 +26,27 @@ const BV = 'BV1xx411c7mD'
 
 /**
  * 建临时目录：优先用系统临时目录，不可写时退到模块目录下（有些受限环境把 %TEMP% 锁了）。
- * 两种情况都会返回一个自己的目录。
+ * 回退到模块目录的那份由本文件在 after 里删，别留垃圾、更别被误提交。
  */
+const madeInModule = []
 function tmp(tag) {
   for (const base of [tmpdir(), join(MOD_DIR, '.test-tmp')]) {
     try {
       mkdirSync(base, { recursive: true })
-      return mkdtempSync(join(base, tag + '-'))
+      const dir = mkdtempSync(join(base, tag + '-'))
+      if (base !== tmpdir()) madeInModule.push(dir)
+      return dir
     } catch (error) { /* 换下一个 */ }
   }
   throw new Error('找不到可写的临时目录')
 }
+
+after(() => {
+  for (const dir of madeInModule) {
+    try { rmSync(dir, { recursive: true, force: true }) } catch (error) { /* 删不掉就算了 */ }
+  }
+  madeInModule.length = 0
+})
 
 before(() => {
   process.env.AURABOT_DATA_DIR = tmp('aurabot-bili')
