@@ -1,0 +1,14 @@
+{
+  "id": "stardew",
+  "name": "星露谷",
+  "version": "1.0.0",
+  "description": "让鱼自己在后台玩《星露谷物语》：读游戏文字状态、自己决定做什么，再让 SMAPI 模组去执行。需要游戏开着并装了 Blind Whale Farmer 模组。",
+  "category": "tool",
+  "tags": ["星露谷", "游戏", "自己玩"],
+  "author": "neige",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.3.0",
+  "requires": [],
+  "capabilities": ["network", "filesystem", "process", "dynamic-code", "plugin-config", "plugin-internals"]
+}
