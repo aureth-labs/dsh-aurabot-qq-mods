@@ -1,0 +1,25 @@
+{
+  "id": "stickers",
+  "name": "表情包",
+  "version": "1.1.0",
+  "description": "偷表情、回复时按情绪配表情、她自己改名删图；带黑名单/白名单规则、分页搜索、批量启停、规则预览。",
+  "category": "social",
+  "tags": [
+    "表情包",
+    "偷图",
+    "配表情"
+  ],
+  "author": "风止 / Aurabot",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "network",
+    "filesystem",
+    "process",
+    "plugin-config",
+    "plugin-internals"
+  ],
+  "replacesBuiltin": true
+}
