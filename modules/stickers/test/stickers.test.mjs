@@ -5,7 +5,7 @@
 // 跑法见仓库根 scripts/plugin-env.mjs：
 //   AURABOT_PLUGIN_DIR=<插件目录> node --import ./scripts/plugin-env.mjs --test "modules/stickers/test/*.test.mjs"
 
-import { test, before, beforeEach } from 'node:test'
+import { test, before, after, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -24,18 +24,30 @@ const meta = JSON.parse(readFileSync(join(MOD_DIR, 'module.json'), 'utf8'))
 
 /**
  * 建临时目录：优先用系统临时目录，不可写时退到模块目录下（有些受限环境把 %TEMP% 锁了，
- * 比如被沙箱拦住的终端）。两种情况都会返回一个自己的目录，测试结束由调用方删。
+ * 比如被沙箱拦住的终端）。
+ * 注意回退到模块目录时要自己负责清理——不然测试跑完会留下垃圾、甚至被误提交。
+ * 落在系统临时目录的那份由系统管，模块目录下的这份统一在 after 里删。
  */
+const madeInModule = []
 function tmp(tag) {
-  const bases = [tmpdir(), join(MOD_DIR, '.test-tmp')]
-  for (const base of bases) {
+  for (const base of [tmpdir(), join(MOD_DIR, '.test-tmp')]) {
     try {
       mkdirSync(base, { recursive: true })
-      return mkdtempSync(join(base, tag + '-'))
+      const dir = mkdtempSync(join(base, tag + '-'))
+      if (base !== tmpdir()) madeInModule.push(dir)
+      return dir
     } catch (error) { /* 换下一个 */ }
   }
   throw new Error('找不到可写的临时目录')
 }
+
+/** 全部测试跑完，把落在模块目录下的临时目录删掉。 */
+after(() => {
+  for (const dir of madeInModule) {
+    try { rmSync(dir, { recursive: true, force: true }) } catch (error) { /* 删不掉就算了 */ }
+  }
+  madeInModule.length = 0
+})
 
 // ── 造图：最小可解析的 PNG / GIF / JPEG / WEBP 头 ─────────────────────────
 
