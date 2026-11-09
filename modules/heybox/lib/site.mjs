@@ -132,11 +132,19 @@ function textOf(value) {
 const htmlEscape = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 const countWords = (s) => String(s || '').replace(/\s/g, '').length
 
-/** 从各种写法的链接里挖出 link_id */
+/** 从各种写法的链接里挖出 link_id（app 端分享的链接里，link_id 可能是 16 进制，如 855a72949646） */
 export function linkIdOf(input) {
-  const s = String(input || '')
-  const m = s.match(/link\/(\d+)/)
+  const s = String(input || '').trim()
+  if (!s) return ''
+  // 1) app 端分享链接的 ?link_id=xxx（可能是 16 进制，接口原样接受，不用转十进制）
+  let m = s.match(/[?&]link_id=([0-9a-zA-Z]+)/)
   if (m) return m[1]
+  // 2) 网页路径 /app/bbs/link/xxx
+  m = s.match(/link\/([0-9a-zA-Z]+)/)
+  if (m) return m[1]
+  // 3) 直接给的 id（数字或 16 进制）
+  if (/^[0-9a-zA-Z]{6,}$/.test(s)) return s
+  // 4) 兜底：老写法，抠出整串数字
   const digits = s.replace(/\D/g, '')
   return digits.length >= 6 ? digits : ''
 }
@@ -337,7 +345,7 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
 
   async function watch(link) {
     const id = linkIdOf(link)
-    if (!id) return { ok: false, message: '没看出帖子编号（要 /link/数字 或者 6 位以上的数字 id）' }
+    if (!id) return { ok: false, message: '没看出帖子编号（给帖子链接，或者 /link/ 后面的 id）' }
     const d = await detail(id)
     return {
       ok: true,
