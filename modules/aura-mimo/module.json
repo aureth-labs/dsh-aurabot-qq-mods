@@ -1,0 +1,14 @@
+{
+  "id": "aura-mimo",
+  "name": "aura-mimo",
+  "version": "1.0.0",
+  "description": "用一段参考音频零训练克隆音色，接入小米 MiMo TTS，让她用自己的声音说话。",
+  "category": "creative",
+  "tags": ["语音", "TTS", "音色克隆", "MiMo"],
+  "author": "zcx1021",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["network", "filesystem", "plugin-config", "plugin-internals"]
+}

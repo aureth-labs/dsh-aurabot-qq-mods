@@ -2010,8 +2010,8 @@ test('1.0.14：defaults 与 /config 下发甩抛物理与互动开关；坏值�
   assert.equal(mod.defaults.petClickChase, false)
   assert.equal(mod.defaults.petTeaseChase, false)
   // 版本三处同步：module.json 与 index.mjs 一起升
-  assert.equal(mod.version, '1.0.15')
-  assert.equal(JSON.parse(readFileSync(join(MODULE_DIR, 'module.json'), 'utf8')).version, '1.0.15')
+  assert.equal(mod.version, '1.0.16')
+  assert.equal(JSON.parse(readFileSync(join(MODULE_DIR, 'module.json'), 'utf8')).version, '1.0.16')
 
   const cfg = await env.call('/config')
   assert.equal(cfg.status, 200)
@@ -2093,6 +2093,20 @@ test('1.0.14：/balance 默认诚实降级（ok:false）；注入 petHooks.fetch
   // 鉴权：坏令牌 401，与其它路由同口径
   const bad = await env.call('/balance', { token: 'deadbeef'.repeat(6) })
   assert.equal(bad.status, 401)
+})
+
+// ---------- 渲染页静态自检：index.html 不许有重复声明（1.0.15 真实翻车回归） ----------
+
+test('index.html：animRate / __setAnimRate 各只声明一次（重复声明=SyntaxError 整页挂=桌宠全透明）', () => {
+  // 1.0.15 真实事故：`let animRate` 在文件开头与 L285 各写了一遍，渲染页一启动就
+  // 抛 "Identifier 'animRate' has already been declared"，整段 <script> 不执行，
+  // 窗口/进程/心跳全活着但画面全透明——用户看到的就是「更新后桌宠不显示」。
+  // 这里做静态断言把这类「同一标识符声明两遍」挡在打包前。
+  const html = readFileSync(join(MODULE_DIR, 'pet-client', 'index.html'), 'utf8')
+  const letAnimRate = [...html.matchAll(/^\s*let animRate\b/gm)].length
+  assert.equal(letAnimRate, 1, `let animRate 只能声明一次，现在 ${letAnimRate} 次`)
+  const setAnimRate = [...html.matchAll(/window\.__setAnimRate\s*=/g)].length
+  assert.equal(setAnimRate, 1, `window.__setAnimRate 只能定义一次，现在 ${setAnimRate} 次`)
 })
 
 

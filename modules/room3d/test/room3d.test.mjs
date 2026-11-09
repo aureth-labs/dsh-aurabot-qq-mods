@@ -120,7 +120,9 @@ test('setup 注册关键路由与设置项', () => {
     assert.ok(routes[p], `缺路由 ${p}`)
   }
   const keys = mod.default.settings.map((s) => s.key)
-  for (const k of ['adminPin', 'perception', 'roomAssetUrl']) assert.ok(keys.includes(k), `缺设置 ${k}`)
+  for (const k of ['perception', 'roomAssetUrl']) assert.ok(keys.includes(k), `缺设置 ${k}`)
+  // adminPin 已移除：前端密码只挡按钮、服务端 /api/room/* 无校验，属无实际保护的机制
+  assert.ok(!keys.includes('adminPin'), 'adminPin 设置项应已移除')
 })
 
 test('health：没素材时 ready=false', async () => {
@@ -177,16 +179,22 @@ test('prompt 注入：把位置事实加在用户消息最前，问到房间时�
   assert.ok(!out2[0].text.includes('光线'), '没问到就只给位置事实')
 })
 
-test('page：管理密码按设置填进去，不印占位符', async () => {
-  const { api, routes } = makeApi({ settings: { adminPin: '1234' }, hooks: { skipAutoAssets: true } })
+test('page：原样返回页面，不再注入任何密码占位符', async () => {
+  // 从前这里会校验「设置里的 adminPin 被填进页面」。那套前端密码已移除：
+  // 它只挡按钮，服务端 /api/room/* 的写接口没有任何校验，留着只会误导人。
+  const { api, routes } = makeApi({ settings: {}, hooks: { skipAutoAssets: true } })
   mod.default.setup(api)
   let sent = null
   const res = {}
   api.core.http.send = (_res, code, body) => { sent = { code, body: String(body) } }
   await routes['/page']({}, res)
   assert.equal(sent.code, 200)
-  assert.ok(!sent.body.includes('__ROOM_ADMIN_PIN__'))
-  assert.ok(sent.body.includes('1234'))
+  assert.ok(!sent.body.includes('__ROOM_ADMIN_PIN__'), '不应再有占位符')
+  // 注释里会提到 ADMIN_PIN 作为历史说明，所以只查代码特征，不查裸字符串
+  assert.ok(!/const\s+ADMIN_PIN\s*=/.test(sent.body), '页面里不应再有 ADMIN_PIN 常量声明')
+  assert.ok(!sent.body.includes('pin-input'), '页面里不应再有密码输入框')
+  assert.ok(!/function\s+adminModal/.test(sent.body), '页面里不应再有密码弹窗')
+  assert.ok(!/sessionStorage\.setItem\(\s*'room_admin'/.test(sent.body), '页面里不应再写解锁状态')
 })
 
 // ---------- 素材包解压的安全契约（zip-slip / 符号链接 / 明文 http） ----------
