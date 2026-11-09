@@ -1,0 +1,22 @@
+{
+  "id": "autonomy",
+  "name": "自己找事做",
+  "version": "1.1.0",
+  "description": "在没人说话的空档里自己排程做点小事，每天有次数上限，不会打扰主人。",
+  "category": "creative",
+  "tags": [
+    "自主",
+    "陪伴"
+  ],
+  "author": "Aurabot",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "filesystem",
+    "plugin-config",
+    "plugin-internals"
+  ],
+  "homepage": "https://github.com/aureth-labs/dsh-aurabot-qq"
+}
