@@ -292,6 +292,9 @@ export class ActivityStateMachine {
 
     const idleSeconds = this.latestSystem && typeof this.latestSystem.idle === 'number' ? this.latestSystem.idle : null
     const hour = new Date(now).getHours()
+    // 没有前台窗口时 currentWindowStartedAt 还是初始的 0，直接减 now 会得到十几亿秒，
+    // 快照里写成「这个窗口待了 1800000000 秒」。没窗口就是 0。
+    const hasWindow = Boolean(this.currentWindow)
 
     return {
       at: now,
@@ -303,7 +306,7 @@ export class ActivityStateMachine {
       skipProbability,
       period: hourToPeriod(hour),
       idleSeconds,
-      dwellSeconds: Math.round((now - this.currentWindowStartedAt) / 1000),
+      dwellSeconds: hasWindow ? Math.round((now - this.currentWindowStartedAt) / 1000) : 0,
       window: win
         ? { category: win.category, subcategory: win.subcategory, canonical: win.canonical, title: win.title, proc: win.proc, intensity, genre }
         : null,

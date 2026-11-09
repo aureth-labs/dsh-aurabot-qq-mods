@@ -179,7 +179,9 @@ export function describeSamplerError(error) {
 export function formatSample(obs) {
   if (!obs) return ''
   const title = typeof obs.title === 'string' ? obs.title.slice(0, 40) : ''
-  return `${obs.proc || '?'}｜${title || '(无标题)'}｜idle=${obs.idle}s`
+  // idle 缺失时写 ?，别写 `idle=undefineds` —— 日志里那种字符串会误导排查
+  const idle = typeof obs.idle === 'number' && Number.isFinite(obs.idle) ? `${Math.round(obs.idle)}s` : '?'
+  return `${obs.proc || '?'}｜${title || '(无标题)'}｜idle=${idle}`
 }
 
 export { dirname }

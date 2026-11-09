@@ -230,6 +230,11 @@ function advanceReflections(previous, facts, now, events) {
     const existing = out.find((r) => r.id === id)
     const evidence = topicFacts.reduce((sum, f) => sum + f.evidence, 0)
     if (existing) {
+      // 事实删了又加回来（同一批 id）时，之前作废的待写反思要能复活
+      if (existing.status === 'archived') {
+        existing.status = 'pending'
+        events.push({ type: 'reflection-pending', id, topic })
+      }
       existing.evidence = Math.round(evidence * 10000) / 10000
       existing.fact_ids = ids
       existing.at = new Date(now).toISOString()
@@ -257,6 +262,23 @@ function advanceReflections(previous, facts, now, events) {
     if (current.join('|') !== refl.fact_ids.join('|') && refl.status === 'ready') {
       refl.status = 'stale'
       events.push({ type: 'reflection-stale', id: refl.id, topic: refl.topic_id })
+    }
+  }
+
+  // 撑起这条反思的事实全没了（被删 / 被合并）→ 还欠着的反思直接作废。
+  // 不处理的话，renderDigest 会一直让她去写一段「关于已经删掉的事」的反思。
+  // 只丢 pending（还没写、没有正文），ready/stale 留着 —— 那是她真写下来的痕迹。
+  for (const refl of out) {
+    if (refl.status !== 'pending') continue
+    if (!Array.isArray(refl.fact_ids) || refl.fact_ids.length === 0) continue
+    const alive = refl.fact_ids.some((id) => {
+      const fact = facts[id]
+      return fact && fact.stage !== 'gone'
+    })
+    if (!alive) {
+      refl.status = 'archived'
+      refl.at = new Date(now).toISOString()
+      events.push({ type: 'reflection-dropped', id: refl.id, topic: refl.topic_id })
     }
   }
 
@@ -377,6 +399,8 @@ export function renderDigest(store, options = {}) {
   }
 
   if (lines.length === 0) return ''
+  // maxLines=0 时不该只吐一个「【记忆证据】」空标题，那点 token 纯浪费
+  if (!(maxLines > 0)) return ''
   const body = lines.slice(0, maxLines).join('\n')
   return `【记忆证据】\n${body}`
 }

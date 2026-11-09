@@ -171,6 +171,9 @@ function overlaps(start, end, spans) {
  * 换成 sha256 后只是选词表和 N.E.K.O 不同，确定性（前缀稳定）完全一样。
  */
 export function stablePoolChoice(pool, ctx) {
+  // 空池子直接给空串：下面要按 pool.length 取模，长度为 0 时 % 0 会抛 Division by zero。
+  // 调用方（rewriteText）在拿不到候选时应当保持原文，所以这里返回空串是安全的口径。
+  if (!Array.isArray(pool) || pool.length === 0) return ''
   const h = createHash('sha256')
   if (ctx.person) h.update(Buffer.from(ctx.person, 'utf8'))
   const components = [

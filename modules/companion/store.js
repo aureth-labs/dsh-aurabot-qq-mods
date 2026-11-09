@@ -86,6 +86,12 @@ export class MemoryStore {
   constructor(dir) {
     this.dir = dir
     this.records = new Map()
+    /**
+     * 已删除的 id。saveRecords() 会从磁盘合并回外部写入的新卡，
+     * 如果不记这一笔，remove() 刚删掉的卡会被下一轮合并复活
+     * （删除 → 落盘 → 读盘合并 → 卡又回来了）。
+     */
+    this.removedIds = new Set()
     this.state = emptyState()
     this.recordsPath = path.join(dir, 'records.json')
     this.statePath = path.join(dir, 'state.json')
@@ -136,6 +142,7 @@ export class MemoryStore {
   }
 
   async put(record) {
+    this.removedIds.delete(record.id)
     this.records.set(record.id, record)
     await this.saveRecords()
     return record
@@ -143,6 +150,7 @@ export class MemoryStore {
 
   async remove(id) {
     if (!this.records.delete(id)) return false
+    this.removedIds.add(id)
     await this.saveRecords()
     await this.purgeArchive(id)
     return true
@@ -151,6 +159,7 @@ export class MemoryStore {
   /**
    * 保存前从磁盘合并：外部工具（迁移脚本、备份还原）写进去的新卡要保留，
    * 不让内存里的旧卡把它们覆盖掉。同 id 时以内存里的版本为准（lifecycle 改过）。
+   * 已明确删除的 id 不再回填，否则删除会被合并逻辑撤销。
    */
   async saveRecords() {
     let disk = []
@@ -160,7 +169,7 @@ export class MemoryStore {
     } catch (error) {}
     const have = new Set(this.records.keys())
     for (const r of disk) {
-      if (r && typeof r.id === 'string' && r.id && !have.has(r.id)) this.records.set(r.id, r)
+      if (r && typeof r.id === 'string' && r.id && !have.has(r.id) && !this.removedIds.has(r.id)) this.records.set(r.id, r)
     }
     const doc = { version: 1, updated_at: new Date().toISOString(), records: this.list() }
     await writeAtomic(this.recordsPath, JSON.stringify(doc, null, 2))

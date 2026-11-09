@@ -68,18 +68,27 @@ export default {
       return { ...DEFAULTS, ...fromFile, ...fromPanel, ...tune() }
     }
 
-    /** 自己调参数：只认几个数字字段，写进 tune.json，不动主人的配置文件。 */
+    /**
+     * 自己调参数：只认几个数字字段，写进 tune.json，不动主人的配置文件。
+     * 每个字段按 settings 里声明的范围夹取——面板会拦越界值，自己写文件不会，
+     * 所以这里必须自己夹，否则 maxPerDay 写成 999 就真的一天跑 999 次、烧主人的钱。
+     */
+    const TUNE_RANGES = {
+      everyMin: [5, 1440],
+      idleMin: [5, 1440],
+      maxPerDay: [1, 24],
+      quietFrom: [0, 23],
+      quietTo: [0, 23],
+    }
     function setTune(next = {}) {
       const old = tune()
       const merged = { ...old }
-      for (const k of ['everyMin', 'idleMin', 'maxPerDay', 'quietFrom', 'quietTo']) {
+      for (const [k, [min, max]] of Object.entries(TUNE_RANGES)) {
         if (next[k] === undefined) continue
         const n = Number(next[k])
         if (!Number.isFinite(n)) continue
-        merged[k] = Math.max(0, Math.round(n))
+        merged[k] = Math.min(max, Math.max(min, Math.round(n)))
       }
-      // 次数上限至少 1，别把自己调到不动
-      if (merged.maxPerDay !== undefined) merged.maxPerDay = Math.max(1, merged.maxPerDay)
       writeFileSync(tuneFile, JSON.stringify(merged, null, 2))
       return { ok: true, tune: merged }
     }
@@ -187,7 +196,8 @@ export default {
       let raw = null
       try { raw = await api.core.http.body(req) } catch { raw = null }
       if (typeof raw === 'string') { try { raw = JSON.parse(raw) } catch { raw = null } }
-      if (!raw || typeof raw !== 'object') {
+      // 数组也是 object，得明确排掉，否则 [1,2] 会被当成一组合法参数静默吞掉
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
         return { ok: false, message: '要传一组参数，比如 {"maxPerDay":5}' }
       }
       return setTune(raw)

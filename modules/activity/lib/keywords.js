@@ -110,7 +110,9 @@ export const UNKNOWN = Object.freeze({ category: 'unknown', subcategory: null, c
 
 export function classifyTitle(tables, title) {
   if (!title) return UNKNOWN
-  const low = title.toLowerCase()
+  // 采样脚本给的 title 不保证是字符串（解析失败可能是数字），先归一，
+  // 别让一次脏样本把整轮 classify 抛出去 —— classifyProc 一直是这么做的。
+  const low = String(title).toLowerCase()
   for (const [needle, result] of tables.title) {
     if (matches(needle, low)) return result
   }
@@ -128,7 +130,7 @@ export function classifyProc(tables, proc) {
 
 export function classifyDomain(tables, title) {
   if (!title) return UNKNOWN
-  const low = title.toLowerCase()
+  const low = String(title).toLowerCase()
   for (const [needle, result] of tables.domain) {
     if (matches(needle, low)) return result
   }
