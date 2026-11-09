@@ -1,0 +1,22 @@
+{
+  "id": "activity",
+  "name": "活动记录",
+  "version": "1.0.0",
+  "description": "定时采样当前前台窗口，按应用分类记录一天在哪些程序上花了多久，生成可查的日志与统计。",
+  "category": "desktop",
+  "tags": [
+    "活动",
+    "统计",
+    "Windows"
+  ],
+  "author": "Aurabot",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "filesystem",
+    "process"
+  ],
+  "homepage": "https://github.com/aureth-labs/dsh-aurabot-qq"
+}

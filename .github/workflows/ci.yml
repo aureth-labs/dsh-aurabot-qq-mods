@@ -44,7 +44,7 @@ jobs:
           done
       - name: 跑搬来的模块的测试（要插件源码）
         run: |
-          git clone -q --depth 1 --branch release/1.2.0 https://github.com/accomplish07zrh-eng/dsh-aurabot-qq "$RUNNER_TEMP/plugin"
+          git clone -q --depth 1 --branch release/1.2.0 https://github.com/aureth-labs/dsh-aurabot-qq "$RUNNER_TEMP/plugin"
           AURABOT_PLUGIN_DIR="$RUNNER_TEMP/plugin" node --import ./scripts/plugin-env.mjs --test "modules/*/test/*.test.mjs"
       - name: 试打包
         run: node scripts/pack.mjs --out dist
