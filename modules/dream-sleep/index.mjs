@@ -958,10 +958,17 @@ export default {
       let onsetMin = 0  // 躺下到真正睡着要几分钟
       if (onsetMode === 'fast') onsetMin = 0.5
       else if (onsetMode === 'slow') onsetMin = randIntHuman(15, 45)
+      else if (onsetMode === 'normal') onsetMin = randIntHuman(5, 20)
       else if (onsetMode === 'random') {
         // 30% 秒睡 / 50% 正常 5-20 分钟 / 20% 很久 25-60 分钟
         if (onsetRoll < 0.3) onsetMin = 0.5
         else if (onsetRoll < 0.8) onsetMin = randIntHuman(5, 20)
+        else onsetMin = randIntHuman(25, 60)
+      } else {
+        // 认不出的档位（手改配置文件写错了）：按「随机」处理，别悄悄变成秒睡
+        const roll = Math.random()
+        if (roll < 0.3) onsetMin = 0.5
+        else if (roll < 0.8) onsetMin = randIntHuman(5, 20)
         else onsetMin = randIntHuman(25, 60)
       }
       // 失眠夜：躺很久也睡不着
