@@ -22,7 +22,7 @@ export default {
   id: 'stardew',
   api: 1,
   name: '星露谷',
-  version: '1.0.0',
+  version: '1.1.0',
   description: '让她自己在后台玩《星露谷物语》：读游戏文字状态、自己决定做什么，再让 SMAPI 模组去执行。需要游戏开着并装了 Blind Whale Farmer 模组。',
   panel: 'panel.js',
 
