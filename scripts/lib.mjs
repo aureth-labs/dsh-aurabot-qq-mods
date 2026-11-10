@@ -103,6 +103,33 @@ export function scanCapabilities(dir) {
   return Object.keys(CAPABILITIES).filter((cap) => CAPABILITIES[cap].re.test(code))
 }
 
+/** 模块自带的测试文件（相对 test/ 的路径）。测试不进发布包，但必须真的能跑。 */
+export function testFilesOf(dir) {
+  const testDir = join(dir, 'test')
+  if (!existsSync(testDir)) return []
+  const out = []
+  const walk = (d) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      if (e.isDirectory()) { if (e.name !== 'node_modules') walk(join(d, e.name)) }
+      else if (e.isFile() && /\.(test|spec)\.[cm]?[jt]s$/.test(e.name)) out.push(relative(testDir, join(d, e.name)).split(sep).join('/'))
+    }
+  }
+  try { walk(testDir) } catch (error) { return [] }
+  return out.sort()
+}
+
+/**
+ * 新模块必须带能跑的测试。
+ * 为什么只卡新模块：仓库里已有的模块有些是搬过来的、测试在插件侧（比如 dsh-persona、file-inbox），
+ * 一律要求会当场把 main 变红；但新提交的模块从第一天就该有回归，别等出了事再补。
+ * @returns {string[]} 错误列表
+ */
+export function checkTestCoverage(dir, { required = false } = {}) {
+  if (!required) return []
+  if (testFilesOf(dir).length) return []
+  return ['新模块要带 test/ 目录和至少一个 *.test.mjs（跑法：node --test "modules/<id>/test/*.test.mjs"）']
+}
+
 /** 单个模块的全部静态检查。 */
 export function checkModule(mod, known) {
   const errors = []
