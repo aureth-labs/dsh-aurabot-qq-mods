@@ -537,6 +537,38 @@
       "publishedAt": "2026-11-09T09:54:57.521Z"
     },
     {
+      "id": "night",
+      "name": "长夜如梦",
+      "version": "1.0.0",
+      "description": "作息、睡眠阶段、REM 做梦、概率唤醒：她会困、会睡、会做梦，睡着时叫不一定醒。",
+      "category": "social",
+      "tags": [
+        "作息",
+        "睡眠",
+        "做梦",
+        "长夜",
+        "精力"
+      ],
+      "author": "zcx1021",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "night-v1.0.0",
+      "file": "night-v1.0.0.zip",
+      "path": "night-v1.0.0/night-v1.0.0.zip",
+      "size": 40145,
+      "sha256": "a6823eb9f7d6c787d09566a27187e51c2ec7e400520fc12f3b430c3497e0b021",
+      "commit": "dd16128ccf19336c1098c8c1549e63fa76ef41eb",
+      "publishedAt": "2026-11-10T05:16:07.274Z"
+    },
+    {
       "id": "pet",
       "name": "桌宠",
       "version": "1.0.17",
@@ -949,5 +981,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-10T04:45:09.858Z"
+  "generatedAt": "2026-11-10T05:16:07.274Z"
 }
