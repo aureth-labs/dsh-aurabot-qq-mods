@@ -5,7 +5,7 @@
     {
       "id": "aura-mimo",
       "name": "aura-mimo",
-      "version": "1.1.1",
+      "version": "1.1.2",
       "description": "用一段参考音频零训练克隆音色，调小米 MiMo TTS 合成语音。可以单独用，也可以改名为 voice 接管内置语音。",
       "category": "creative",
       "tags": [
@@ -27,18 +27,18 @@
         "plugin-internals"
       ],
       "replacesBuiltin": false,
-      "tag": "aura-mimo-v1.1.1",
-      "file": "aura-mimo-v1.1.1.zip",
-      "path": "aura-mimo-v1.1.1/aura-mimo-v1.1.1.zip",
-      "size": 25561,
-      "sha256": "ab4f3197fa5947c08d4db7f9c7a6d22e30b9655a0dbcb2a4424f06780633f3db",
-      "commit": "a6d4b169f1b2e736980f18d8bcb458057990f461",
-      "publishedAt": "2026-11-10T04:11:56.958Z"
+      "tag": "aura-mimo-v1.1.2",
+      "file": "aura-mimo-v1.1.2.zip",
+      "path": "aura-mimo-v1.1.2/aura-mimo-v1.1.2.zip",
+      "size": 25844,
+      "sha256": "42d84f77d72c10f2685ab8ec3c9bf7214e2cea7abea4cf1a9f784b4092d7e1c6",
+      "commit": "7791e955408ea84c2a40c9b4a250617aa1be77ce",
+      "publishedAt": "2026-11-10T04:45:09.858Z"
     },
     {
       "id": "autonomy",
       "name": "自主生活",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "description": "让她自己决定这一刻做什么、下次什么时候醒。运行时不预设任何权限：调模型、操作手机都要主人在面板里逐项授权后才生效。",
       "category": "desktop",
       "tags": [
@@ -60,13 +60,13 @@
       ],
       "replacesBuiltin": false,
       "homepage": "https://github.com/asyncxt/aurabot-mod-autonomy",
-      "tag": "autonomy-v0.6.0",
-      "file": "autonomy-v0.6.0.zip",
-      "path": "autonomy-v0.6.0/autonomy-v0.6.0.zip",
-      "size": 44323,
-      "sha256": "1333fe9d11ccada94d26fe69bf7cbdf7760f3bc74f7747c615541a9fc1cd3c00",
-      "commit": "ae9fed288dbe87476f3e76c86e85ee5a2863f115",
-      "publishedAt": "2026-11-09T12:20:16.126Z"
+      "tag": "autonomy-v0.6.1",
+      "file": "autonomy-v0.6.1.zip",
+      "path": "autonomy-v0.6.1/autonomy-v0.6.1.zip",
+      "size": 44324,
+      "sha256": "27c05ceaec78a0c27637e17e42c7b6323067c080a4fe591e518e9c78cccaf407",
+      "commit": "7791e955408ea84c2a40c9b4a250617aa1be77ce",
+      "publishedAt": "2026-11-10T04:45:09.858Z"
     },
     {
       "id": "beg-for-money",
@@ -539,7 +539,7 @@
     {
       "id": "pet",
       "name": "桌宠",
-      "version": "1.0.16",
+      "version": "1.0.17",
       "description": "把大肥鱼请到桌面上：会冒气泡、做小动作，你在干活时也陪着你。",
       "category": "desktop",
       "tags": [
@@ -560,13 +560,13 @@
       ],
       "replacesBuiltin": false,
       "homepage": "https://github.com/accomplish07zrh-eng/dsh-aurabot-qq",
-      "tag": "pet-v1.0.16",
-      "file": "pet-v1.0.16.zip",
-      "path": "pet-v1.0.16/pet-v1.0.16.zip",
-      "size": 223118,
-      "sha256": "d3f9cf77df2459f1d2fe15bd81fa79f03d47b4e75ed4e2f41ce4885d120d9f2d",
-      "commit": "cdf4e3db0310ddd89d2d8150825c552884ac9a74",
-      "publishedAt": "2026-11-09T01:58:01.771Z"
+      "tag": "pet-v1.0.17",
+      "file": "pet-v1.0.17.zip",
+      "path": "pet-v1.0.17/pet-v1.0.17.zip",
+      "size": 223775,
+      "sha256": "6f8711bc8ed4c8f870b74bf008e83436066c43d530c7a6b539f235492a46111c",
+      "commit": "7791e955408ea84c2a40c9b4a250617aa1be77ce",
+      "publishedAt": "2026-11-10T04:45:09.858Z"
     },
     {
       "id": "phone",
@@ -949,5 +949,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-10T04:11:56.958Z"
+  "generatedAt": "2026-11-10T04:45:09.858Z"
 }
