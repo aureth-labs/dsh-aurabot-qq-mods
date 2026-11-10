@@ -729,6 +729,38 @@
       "publishedAt": "2026-11-08T18:06:23.101Z"
     },
     {
+      "id": "qwen-tts",
+      "name": "千问百炼语音",
+      "version": "1.0.0",
+      "description": "通过阿里云百炼合成语音，提供音色、语气及试听设置",
+      "category": "creative",
+      "tags": [
+        "语音",
+        "千问",
+        "百炼"
+      ],
+      "author": "mrnobodynan",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "process",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "qwen-tts-v1.0.0",
+      "file": "qwen-tts-v1.0.0.zip",
+      "path": "qwen-tts-v1.0.0/qwen-tts-v1.0.0.zip",
+      "size": 19664,
+      "sha256": "15720e142e516db614d05e844cb7476b1d3272c04a82458cacb7933528640c90",
+      "commit": "120ab6a18ff3a600c7755e7cbc2a10b4db01dda0",
+      "publishedAt": "2026-11-10T15:27:35.433Z"
+    },
+    {
       "id": "roast-mode",
       "name": "毒舌模式",
       "version": "1.0.4",
@@ -1078,5 +1110,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-10T15:27:10.465Z"
+  "generatedAt": "2026-11-10T15:27:35.433Z"
 }
