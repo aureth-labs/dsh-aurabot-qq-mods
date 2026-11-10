@@ -1,0 +1,15 @@
+{
+  "id": "moegirl",
+  "name": "萌娘百科",
+  "version": "1.0.0",
+  "description": "外接萌娘百科：遇到不认识的动漫游戏角色、作品、梗，能搜出条目并读正文；带本地缓存，查过的不重复请求。",
+  "category": "tool",
+  "tags": ["知识库", "萌娘百科", "ACG", "外接"],
+  "author": "旭光Ⅺ",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["network", "filesystem"],
+  "homepage": ""
+}
