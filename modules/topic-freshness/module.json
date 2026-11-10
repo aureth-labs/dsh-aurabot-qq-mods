@@ -1,0 +1,21 @@
+{
+  "id": "topic-freshness",
+  "name": "话题时效",
+  "version": "1.0.0",
+  "description": "群聊里只在最近 N 分钟还在聊的话题上接话；超过时效的老话题不再回头捡，免得说重复的话显得累赘。",
+  "category": "social",
+  "tags": [
+    "群聊",
+    "话题",
+    "别翻旧账"
+  ],
+  "author": "旭光Ⅺ",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "plugin-config"
+  ],
+  "homepage": ""
+}
