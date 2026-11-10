@@ -29,15 +29,17 @@ const MIME = {
 export default {
   id: 'room3d',
   name: '房间',
-  version: '1.0.2',
+  version: '1.0.0',
   api: 1,
   description: '给她一个自己的 3D 房间：屋里空着，只有她一个人（大肥鱼），家具自己摆；她看得见自己在哪。',
   panel: 'panel.js',
   defaults: {
-      perception: true,
+    adminPin: '0000',
+    perception: true,
     roomAssetUrl: 'https://github.com/RookieApe-tao/room3d-assets/releases/download/v1/room3d-assets.zip',
   },
   settings: [
+    { key: 'adminPin', label: '房间管理密码（改家具/地板/猫要输）', type: 'text' },
     { key: 'perception', label: '每轮让她知道自己在房间哪儿（关掉省 token）', type: 'switch' },
     { key: 'roomAssetUrl', label: '动作素材包下载地址', type: 'text', hint: '动作视频（.webm）zip 直链，模块启动发现缺素材时自动下载落位（国内网络可换 Gitee 等镜像直链）。zip 里素材要放在文件夹里（archive 自带的单层仓库目录会自动剥）' },
   ],
@@ -376,9 +378,19 @@ export default {
     })
 
     // 静态页面与资产
+    // 管理密码写在设置里，发页面的时候再填进去，不把密码印死在 html 里
+    const adminPin = () => {
+      try {
+        const s = api.settings() || {}
+        const pin = String(s.adminPin || '').trim()
+        return pin || '0000'
+      } catch {
+        return '0000'
+      }
+    }
     api.route('/page', async (req, res) => {
       try {
-        const html = readFileSync(join(dir, 'lib', 'index3d.html'), 'utf8')
+        const html = readFileSync(join(dir, 'lib', 'index3d.html'), 'utf8').replaceAll('__ROOM_ADMIN_PIN__', adminPin())
         send(res, 200, html, 'text/html; charset=utf-8')
       } catch (error) {
         send(res, 500, String(error.message || error), 'text/plain; charset=utf-8')

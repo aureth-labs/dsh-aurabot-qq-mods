@@ -3267,20 +3267,65 @@ function buildActorPanel() {
 }
 
 
-/* ================= 编辑入口 ================= */
-// 这里原本有一套「管理密码」：ADMIN_PIN 由服务端在发页面时填进来，前端用
-// sessionStorage 记住解锁状态，管着改家具 / 地板 / 猫 / 角色这几个按钮。
-//
-// 它没有实际保护作用：只挡前端按钮，服务端 /api/room/* 的 10 个写接口
-// 完全没有校验，任何人直接 POST 就能改。留着反而会让人以为「加了密码所以安全」。
-//
-// 所以整块去掉，管理按钮直接可用 —— 房间状态本来就只有本机能访问。
+/* ================= 管理密码 ================= */
+const ADMIN_PIN = '__ROOM_ADMIN_PIN__';
+let UNLOCKED = sessionStorage.getItem('room_admin') === '1';
 
-function requireAdmin(cb) { cb(); }
+function adminModal(cb) {
+  if (document.getElementById('pin-mask')) return;
+  const mask = document.createElement('div');
+  mask.id = 'pin-mask';
+  mask.style.cssText = 'position:fixed;inset:0;z-index:200;display:flex;align-items:center;'
+    + 'justify-content:center;background:rgba(6,9,14,.78)';
+  mask.innerHTML = `
+    <div style="width:230px;background:#1b212b;border:1px solid rgba(255,255,255,.18);
+      border-radius:14px;padding:16px;color:#e9eef6;font-size:13px;text-align:center">
+      <div style="margin-bottom:10px;opacity:.75">请输入管理密码</div>
+      <input id="pin-input" type="password" inputmode="numeric" maxlength="8" autocomplete="off"
+        style="width:100%;box-sizing:border-box;padding:9px 10px;border-radius:9px;font-size:18px;
+        letter-spacing:6px;text-align:center;border:1px solid rgba(255,255,255,.22);
+        background:#11161e;color:#fff;outline:none">
+      <div id="pin-err" style="height:16px;color:#ff8a8a;font-size:11px;margin-top:6px"></div>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button id="pin-cancel" style="flex:1;padding:8px;border-radius:9px;border:1px solid #555;
+          background:#2a2f38;color:#e9eef6">取消</button>
+        <button id="pin-ok" style="flex:1;padding:8px;border-radius:9px;border:0;
+          background:#ffcf72;color:#20160a;font-weight:600">确定</button>
+      </div>
+    </div>`;
+  document.body.appendChild(mask);
+  const inp = mask.querySelector('#pin-input');
+  const err = mask.querySelector('#pin-err');
+  setTimeout(() => inp.focus(), 50);
+
+  function close() { mask.remove(); }
+  function submit() {
+    if (inp.value === ADMIN_PIN) {
+      UNLOCKED = true;
+      sessionStorage.setItem('room_admin', '1');
+      close();
+      cb();
+    } else {
+      err.textContent = '密码不对';
+      inp.value = '';
+      inp.focus();
+    }
+  }
+  mask.querySelector('#pin-ok').onclick = submit;
+  mask.querySelector('#pin-cancel').onclick = close;
+  inp.onkeydown = (e) => { if (e.key === 'Enter') submit(); };
+  mask.onclick = (e) => { if (e.target === mask) close(); };
+}
+
+function requireAdmin(cb) {
+  if (UNLOCKED) { cb(); return; }
+  adminModal(cb);
+}
 
 function gateButton(btn) {
-  // 保留这个函数名只是为了不动下面的调用点；现在它什么也不做。
   if (!btn) return;
+  const orig = btn.onclick;
+  btn.onclick = (e) => requireAdmin(() => { if (orig) orig.call(btn, e); });
 }
 
 
