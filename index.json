@@ -354,7 +354,7 @@
     {
       "id": "heybox",
       "name": "刷小黑盒",
-      "version": "1.5.1",
+      "version": "1.5.2",
       "description": "用主人的账号逛小黑盒：看帖子和热评，点赞、评论、发帖。支持谷时逛、扫码登录和浏览器验证。",
       "category": "platform",
       "tags": [
@@ -375,13 +375,13 @@
       ],
       "replacesBuiltin": false,
       "homepage": "https://github.com/accomplish07zrh-eng/dsh-aurabot-qq",
-      "tag": "heybox-v1.5.1",
-      "file": "heybox-v1.5.1.zip",
-      "path": "heybox-v1.5.1/heybox-v1.5.1.zip",
-      "size": 77363,
-      "sha256": "7af79a85032c0de2077063d9d8f52bcb2ce2a065fb97ed68a3a7f3457ce67fa6",
-      "commit": "8c2e49dc9a5ef2e27569f804a06645b00ab64830",
-      "publishedAt": "2026-11-08T16:24:59.880Z"
+      "tag": "heybox-v1.5.2",
+      "file": "heybox-v1.5.2.zip",
+      "path": "heybox-v1.5.2/heybox-v1.5.2.zip",
+      "size": 80451,
+      "sha256": "b2dce5b631749f0c7ba93ee34e26a3ea7f38feb6d35c7c51874cf2070f31729b",
+      "commit": "0218b62366b0fadb35dc09e514d7f3370ac8893f",
+      "publishedAt": "2026-11-10T12:49:57.996Z"
     },
     {
       "id": "history-vault",
@@ -1078,5 +1078,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-10T07:53:05.145Z"
+  "generatedAt": "2026-11-10T12:49:57.996Z"
 }
