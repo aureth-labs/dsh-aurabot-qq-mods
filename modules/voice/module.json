@@ -1,0 +1,15 @@
+{
+  "id": "voice",
+  "name": "豆包语音 2.0",
+  "version": "1.0.0",
+  "description": "用豆包语音 2.0 复刻音色把她的回复念成语音条，替换内置语音",
+  "category": "creative",
+  "tags": ["语音", "TTS", "豆包", "音色复刻", "接管语音"],
+  "author": "z7oux_n",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["network", "filesystem", "plugin-config", "plugin-internals"],
+  "replacesBuiltin": true
+}
