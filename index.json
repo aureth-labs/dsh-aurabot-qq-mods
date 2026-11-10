@@ -917,6 +917,39 @@
       "publishedAt": "2026-11-06T06:03:15.318Z"
     },
     {
+      "id": "voice",
+      "name": "豆包语音 2.0",
+      "version": "1.0.0",
+      "description": "用豆包语音 2.0 复刻音色把她的回复念成语音条，替换内置语音",
+      "category": "creative",
+      "tags": [
+        "语音",
+        "TTS",
+        "豆包",
+        "音色复刻",
+        "接管语音"
+      ],
+      "author": "wuxingx",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": true,
+      "tag": "voice-v1.0.0",
+      "file": "voice-v1.0.0.zip",
+      "path": "voice-v1.0.0/voice-v1.0.0.zip",
+      "size": 8288,
+      "sha256": "0cd0a7c833dd8b14b2b7b1d57fe5f8a9953e48646da05e12fb45a813999719c6",
+      "commit": "f2d4e1a7d652473973b08a3e90b98e48bfe2ca81",
+      "publishedAt": "2026-11-10T05:16:39.213Z"
+    },
+    {
       "id": "windows-ops",
       "name": "逛电脑（Windows 自动化）",
       "version": "1.2.1",
@@ -981,5 +1014,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-10T05:16:07.274Z"
+  "generatedAt": "2026-11-10T05:16:39.213Z"
 }
