@@ -1,0 +1,15 @@
+{
+  "id": "speak-natural",
+  "name": "说话自然度",
+  "version": "1.0.0",
+  "description": "让她像正常人打字一样说话：短、不解释、不总结、不堆颜文字；发出去前再兜底剪掉书面语开头和括号动作。",
+  "category": "social",
+  "tags": ["说话方式", "去AI味", "聊天增强"],
+  "author": "旭光Ⅺ",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["plugin-internals"],
+  "homepage": ""
+}
