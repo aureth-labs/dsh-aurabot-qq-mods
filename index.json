@@ -5,14 +5,15 @@
     {
       "id": "aura-mimo",
       "name": "aura-mimo",
-      "version": "1.0.0",
-      "description": "用一段参考音频零训练克隆音色，接入小米 MiMo TTS，让她用自己的声音说话。",
+      "version": "1.1.1",
+      "description": "用一段参考音频零训练克隆音色，调小米 MiMo TTS 合成语音。可以单独用，也可以改名为 voice 接管内置语音。",
       "category": "creative",
       "tags": [
         "语音",
         "TTS",
         "音色克隆",
-        "MiMo"
+        "MiMo",
+        "接管语音"
       ],
       "author": "zcx1021",
       "license": "MIT",
@@ -26,13 +27,13 @@
         "plugin-internals"
       ],
       "replacesBuiltin": false,
-      "tag": "aura-mimo-v1.0.0",
-      "file": "aura-mimo-v1.0.0.zip",
-      "path": "aura-mimo-v1.0.0/aura-mimo-v1.0.0.zip",
-      "size": 23294,
-      "sha256": "c607e4848d482a52930b15949f5aa962c6d5285cdd74405060d899aa0081f4b9",
-      "commit": "93d91e03c708ed3cbc3bb34f4b1b7eaa64138a18",
-      "publishedAt": "2026-11-09T04:04:03.200Z"
+      "tag": "aura-mimo-v1.1.1",
+      "file": "aura-mimo-v1.1.1.zip",
+      "path": "aura-mimo-v1.1.1/aura-mimo-v1.1.1.zip",
+      "size": 25561,
+      "sha256": "ab4f3197fa5947c08d4db7f9c7a6d22e30b9655a0dbcb2a4424f06780633f3db",
+      "commit": "a6d4b169f1b2e736980f18d8bcb458057990f461",
+      "publishedAt": "2026-11-10T04:11:56.958Z"
     },
     {
       "id": "autonomy",
@@ -724,6 +725,39 @@
       "publishedAt": "2026-11-05T12:14:07.525Z"
     },
     {
+      "id": "stardew",
+      "name": "星露谷",
+      "version": "1.1.0",
+      "description": "让鱼自己在后台玩《星露谷物语》：读游戏文字状态、自己决定做什么，再让 SMAPI 模组去执行。需要先装游戏侧模组 Blind Whale Farmer（原文见 README，游戏模组不随本模块分发，请去原帖下载）。",
+      "category": "tool",
+      "tags": [
+        "星露谷",
+        "游戏",
+        "自己玩"
+      ],
+      "author": "neige",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.3.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "process",
+        "dynamic-code",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "stardew-v1.1.0",
+      "file": "stardew-v1.1.0.zip",
+      "path": "stardew-v1.1.0/stardew-v1.1.0.zip",
+      "size": 23363,
+      "sha256": "df2a52bd323d3c4ee9b13a683d33f64c659ad131275afd5b06b88e5da93d3940",
+      "commit": "a6d4b169f1b2e736980f18d8bcb458057990f461",
+      "publishedAt": "2026-11-10T04:11:56.958Z"
+    },
+    {
       "id": "starmap",
       "name": "星图",
       "version": "1.1.0",
@@ -915,5 +949,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-09T16:12:08.199Z"
+  "generatedAt": "2026-11-10T04:11:56.958Z"
 }
