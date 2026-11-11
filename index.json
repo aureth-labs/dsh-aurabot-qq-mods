@@ -478,6 +478,38 @@
       "publishedAt": "2026-11-09T14:07:11.920Z"
     },
     {
+      "id": "love-mode",
+      "name": "快来跟我恋爱吧",
+      "version": "1.5.0",
+      "description": "教她怎么爱你：六种关系模式，AI 自动生成你们的画像，一键自动匹配。",
+      "category": "social",
+      "tags": [
+        "恋爱",
+        "人格",
+        "陪伴",
+        "模式"
+      ],
+      "author": "liaojiabo",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "plugin-config",
+        "filesystem",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "homepage": "https://github.com/accomplish07zrh-eng/dsh-aurabot-qq-mods",
+      "tag": "love-mode-v1.5.0",
+      "file": "love-mode-v1.5.0.zip",
+      "path": "love-mode-v1.5.0/love-mode-v1.5.0.zip",
+      "size": 76919,
+      "sha256": "bb7521e28e9607e0d9a454bd1e06d5de04d6ee91efa5e0175f8d4ec273c707b2",
+      "commit": "c314aab8d30cdc0ec664900d6d7fa1250ecd103b",
+      "publishedAt": "2026-11-11T08:34:44.509Z"
+    },
+    {
       "id": "meme-wiki",
       "name": "梗百科",
       "version": "0.2.6",
@@ -667,7 +699,7 @@
     {
       "id": "phone",
       "name": "手机逛逛",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "description": "通过 ADB 操控 Android 手机：按主人教好的流程自动签到/浏览/点赞，或自由推理完成一句话任务",
       "category": "platform",
       "tags": [
@@ -688,13 +720,13 @@
         "plugin-internals"
       ],
       "replacesBuiltin": false,
-      "tag": "phone-v0.4.0",
-      "file": "phone-v0.4.0.zip",
-      "path": "phone-v0.4.0/phone-v0.4.0.zip",
+      "tag": "phone-v0.4.1",
+      "file": "phone-v0.4.1.zip",
+      "path": "phone-v0.4.1/phone-v0.4.1.zip",
       "size": 118709,
-      "sha256": "e87bd979be47d0a3d70237fe9f8f34ea7f784004ff1fce4b8b8af4a945174723",
-      "commit": "ae9fed288dbe87476f3e76c86e85ee5a2863f115",
-      "publishedAt": "2026-11-09T12:20:16.126Z"
+      "sha256": "b02f852140d9471953cf528f49b1e02cb93781c50ace715369f67fe921a11024",
+      "commit": "c314aab8d30cdc0ec664900d6d7fa1250ecd103b",
+      "publishedAt": "2026-11-11T08:34:44.509Z"
     },
     {
       "id": "price-watch",
@@ -1110,5 +1142,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-11T03:22:02.681Z"
+  "generatedAt": "2026-11-11T08:34:44.509Z"
 }
