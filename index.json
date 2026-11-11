@@ -885,6 +885,39 @@
       "publishedAt": "2026-11-05T12:14:07.525Z"
     },
     {
+      "id": "shitu",
+      "name": "识图",
+      "version": "1.0.0",
+      "description": "给看不了图的模型配一双只认字的眼睛：自动装好本地 OCR，把图片和表情包里的字读出来交给她；图里没字时再借一个能看图的模型说一句画面里是什么",
+      "category": "tool",
+      "tags": [
+        "识图",
+        "OCR",
+        "表情包",
+        "本地"
+      ],
+      "author": "h752603-source",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.3.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "process",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "shitu-v1.0.0",
+      "file": "shitu-v1.0.0.zip",
+      "path": "shitu-v1.0.0/shitu-v1.0.0.zip",
+      "size": 63802,
+      "sha256": "09dfb85658a54e73d612677f8089ad7fb0f3893d124d72c887ad7166019c86a2",
+      "commit": "8c55c7e09f3ca34f04b6f4869037eb248e7f2cdc",
+      "publishedAt": "2026-11-11T08:36:13.298Z"
+    },
+    {
       "id": "stardew",
       "name": "星露谷",
       "version": "1.1.0",
@@ -1142,5 +1175,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-11T08:34:44.509Z"
+  "generatedAt": "2026-11-11T08:36:13.298Z"
 }
