@@ -134,7 +134,7 @@
     {
       "id": "browser-ops",
       "name": "逛网页（浏览器自动化）",
-      "version": "1.2.4",
+      "version": "1.2.5",
       "description": "封装 CDP 专用浏览器（独立登录资料）：提供打开网页、点击、输入、滚动、截屏、页面快照等原子操作，供其他模块经 api.use('browser-ops') 复用。",
       "category": "platform",
       "tags": [
@@ -155,13 +155,13 @@
         "plugin-internals"
       ],
       "replacesBuiltin": false,
-      "tag": "browser-ops-v1.2.4",
-      "file": "browser-ops-v1.2.4.zip",
-      "path": "browser-ops-v1.2.4/browser-ops-v1.2.4.zip",
-      "size": 42444,
-      "sha256": "888e216d9c95ab7b80b8406d57412ba9fae6b7d567c9eaf084a3d0a8ef9d8dfd",
-      "commit": "20d277db3380a5b8f58a7f62c32ba41bfb51a372",
-      "publishedAt": "2026-11-11T03:22:02.681Z"
+      "tag": "browser-ops-v1.2.5",
+      "file": "browser-ops-v1.2.5.zip",
+      "path": "browser-ops-v1.2.5/browser-ops-v1.2.5.zip",
+      "size": 42682,
+      "sha256": "df6641d871c33cf5caf08703f17560b116ffb1589f67e52eb217736f9fcc2651",
+      "commit": "1592a45be37ae5ec3aa197533fb42d3800716e72",
+      "publishedAt": "2026-11-11T10:10:02.938Z"
     },
     {
       "id": "daily-art",
@@ -197,7 +197,7 @@
     {
       "id": "douyin",
       "name": "刷抖音",
-      "version": "2.3.4",
+      "version": "2.3.5",
       "description": "用专用浏览器刷抖音：看推荐、点赞评论，把好玩的视频分享给主人，也能看别人发来的抖音链接。",
       "category": "platform",
       "tags": [
@@ -218,13 +218,13 @@
       ],
       "replacesBuiltin": false,
       "homepage": "https://github.com/accomplish07zrh-eng/dsh-aurabot-qq",
-      "tag": "douyin-v2.3.4",
-      "file": "douyin-v2.3.4.zip",
-      "path": "douyin-v2.3.4/douyin-v2.3.4.zip",
-      "size": 49284,
-      "sha256": "15fba71e9e8fbeac0206467ef50ac38fd8d0d770536f865365e0868fcadd9454",
-      "commit": "20d277db3380a5b8f58a7f62c32ba41bfb51a372",
-      "publishedAt": "2026-11-11T03:22:02.681Z"
+      "tag": "douyin-v2.3.5",
+      "file": "douyin-v2.3.5.zip",
+      "path": "douyin-v2.3.5/douyin-v2.3.5.zip",
+      "size": 49522,
+      "sha256": "8a18bfd81370ca7b173bffa762e7a9c0632ca48c9677b9eb7cc7cce575f3534d",
+      "commit": "1592a45be37ae5ec3aa197533fb42d3800716e72",
+      "publishedAt": "2026-11-11T10:10:02.938Z"
     },
     {
       "id": "dsh-persona",
@@ -354,7 +354,7 @@
     {
       "id": "heybox",
       "name": "刷小黑盒",
-      "version": "1.5.6",
+      "version": "1.5.7",
       "description": "用主人的账号逛小黑盒：看帖子和热评，点赞、评论、发帖。支持谷时逛、扫码登录和浏览器验证。",
       "category": "platform",
       "tags": [
@@ -375,13 +375,13 @@
       ],
       "replacesBuiltin": false,
       "homepage": "https://github.com/accomplish07zrh-eng/dsh-aurabot-qq",
-      "tag": "heybox-v1.5.6",
-      "file": "heybox-v1.5.6.zip",
-      "path": "heybox-v1.5.6/heybox-v1.5.6.zip",
-      "size": 82335,
-      "sha256": "05f0cea889c85e90cfdb4fa453a439dbceea7d5f52d19b5f4060da9bfd1e6804",
-      "commit": "20d277db3380a5b8f58a7f62c32ba41bfb51a372",
-      "publishedAt": "2026-11-11T03:22:02.681Z"
+      "tag": "heybox-v1.5.7",
+      "file": "heybox-v1.5.7.zip",
+      "path": "heybox-v1.5.7/heybox-v1.5.7.zip",
+      "size": 82573,
+      "sha256": "99980c99b78aac4d5217f7cd62f3506529431b760103b7498b6bfbb683cf3540",
+      "commit": "1592a45be37ae5ec3aa197533fb42d3800716e72",
+      "publishedAt": "2026-11-11T10:10:02.938Z"
     },
     {
       "id": "history-vault",
@@ -1144,7 +1144,7 @@
     {
       "id": "xhs",
       "name": "刷小红书",
-      "version": "0.3.4",
+      "version": "0.3.5",
       "description": "用专用浏览器刷小红书：逛推荐/搜索、看笔记写记忆、点赞收藏评论（人格生成、每日上限）、认别人发来的小红书链接、看主人的私信并回复；发帖走「草稿 → 主人确认」两步，绝不闷头发。各能力独立开关，默认全关。",
       "category": "platform",
       "tags": [
@@ -1165,15 +1165,15 @@
         "plugin-internals"
       ],
       "replacesBuiltin": false,
-      "tag": "xhs-v0.3.4",
-      "file": "xhs-v0.3.4.zip",
-      "path": "xhs-v0.3.4/xhs-v0.3.4.zip",
-      "size": 97148,
-      "sha256": "94da73849bf7956c4378dd98c098a2514c7c72a9492924832aac729b54418a9d",
-      "commit": "20d277db3380a5b8f58a7f62c32ba41bfb51a372",
-      "publishedAt": "2026-11-11T03:22:02.681Z"
+      "tag": "xhs-v0.3.5",
+      "file": "xhs-v0.3.5.zip",
+      "path": "xhs-v0.3.5/xhs-v0.3.5.zip",
+      "size": 97386,
+      "sha256": "54d432fcd172b4795faa1d8801969b32f06911c3c390457f08e62f80874bfe6b",
+      "commit": "1592a45be37ae5ec3aa197533fb42d3800716e72",
+      "publishedAt": "2026-11-11T10:10:02.938Z"
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-11T08:36:13.298Z"
+  "generatedAt": "2026-11-11T10:10:02.938Z"
 }
