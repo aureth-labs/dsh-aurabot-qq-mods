@@ -3,6 +3,40 @@
   "assetsBase": "https://github.com/aureth-labs/dsh-aurabot-qq-mods/releases/download/",
   "modules": [
     {
+      "id": "ai-brief",
+      "name": "AI 新闻推送",
+      "version": "2.2.1",
+      "description": "早报/午报/晚报三合一：知乎热榜 + 全网热榜（微博/抖音/头条）+ 论坛热帖，带吐槽和完整链接",
+      "category": "tool",
+      "tags": [
+        "新闻",
+        "早报",
+        "晚报",
+        "论坛",
+        "AI资讯"
+      ],
+      "author": "chienchen-png",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "process",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "ai-brief-v2.2.1",
+      "file": "ai-brief-v2.2.1.zip",
+      "path": "ai-brief-v2.2.1/ai-brief-v2.2.1.zip",
+      "size": 21533,
+      "sha256": "2acd1733671bb1f768a7f666477c41797ac8944dff7301a0f3405b5fc87094c9",
+      "commit": "60bd267535ab0bd360c76de72433b9609c840d43",
+      "publishedAt": "2026-11-12T04:18:02.203Z"
+    },
+    {
       "id": "aura-mimo",
       "name": "aura-mimo",
       "version": "1.1.2",
@@ -1175,5 +1209,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-11T10:10:02.938Z"
+  "generatedAt": "2026-11-12T04:18:02.203Z"
 }
