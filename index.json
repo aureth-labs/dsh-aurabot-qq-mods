@@ -827,13 +827,14 @@
     {
       "id": "price-watch",
       "name": "价格监控",
-      "version": "1.0.1",
-      "description": "盯住商品价格：超级好价、早期好价、降价提醒、本插件记录的历史最低价；/监控价格 与 /查询价格 支持多平台比价。",
+      "version": "1.1.0",
+      "description": "盯住商品价格：超级好价、早期好价、降价提醒、本插件记录的历史最低价；/监控价格 与 /查询价格 支持多平台比价，查到的价格按天数写进记忆。",
       "category": "tool",
       "tags": [
         "价格",
         "监控",
-        "比价"
+        "比价",
+        "记忆"
       ],
       "author": "cdcp998",
       "license": "MIT",
@@ -848,13 +849,13 @@
       ],
       "replacesBuiltin": false,
       "homepage": "https://github.com/cdcp998/price-watch",
-      "tag": "price-watch-v1.0.1",
-      "file": "price-watch-v1.0.1.zip",
-      "path": "price-watch-v1.0.1/price-watch-v1.0.1.zip",
-      "size": 45328,
-      "sha256": "d82938e40da850f89198ee707b27f84c63c2fb90d68b770274ce536fa7731c86",
-      "commit": "8624c147f9ee9a06af6f44ce0198abbb61f86766",
-      "publishedAt": "2026-11-08T18:06:23.101Z"
+      "tag": "price-watch-v1.1.0",
+      "file": "price-watch-v1.1.0.zip",
+      "path": "price-watch-v1.1.0/price-watch-v1.1.0.zip",
+      "size": 73241,
+      "sha256": "31beb3928b06de05b5d3f629a52f029036b363c84f66be4a6d8f6400c94ed231",
+      "commit": "570e04ca8041eb8cb6e577ac159bf5da11816e65",
+      "publishedAt": "2026-11-12T15:27:03.216Z"
     },
     {
       "id": "qwen-tts",
@@ -1306,5 +1307,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-12T14:56:01.390Z"
+  "generatedAt": "2026-11-12T15:27:03.216Z"
 }
