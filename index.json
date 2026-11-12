@@ -166,6 +166,36 @@
       "publishedAt": "2026-11-12T06:53:24.988Z"
     },
     {
+      "id": "billiards",
+      "name": "台球",
+      "version": "1.0.0",
+      "description": "桌宠那台台球桌搬出来了：拖白球出杆打八球，整个桌面当球桌，球桌以外照常点东西。",
+      "category": "desktop",
+      "tags": [
+        "台球",
+        "八球",
+        "小游戏",
+        "桌面"
+      ],
+      "author": "asyncxt",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "process"
+      ],
+      "replacesBuiltin": false,
+      "tag": "billiards-v1.0.0",
+      "file": "billiards-v1.0.0.zip",
+      "path": "billiards-v1.0.0/billiards-v1.0.0.zip",
+      "size": 36403,
+      "sha256": "4a2251d70ff7a4cd2b7079abe8028205e7936c6255c62f1cbfa70ea854ee04c1",
+      "commit": "0b4a8fff74513177fa020b5833822e3998f50120",
+      "publishedAt": "2026-11-12T10:31:09.518Z"
+    },
+    {
       "id": "breeze",
       "name": "Breeze 语音",
       "version": "1.3.3",
@@ -1276,5 +1306,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-12T06:53:24.988Z"
+  "generatedAt": "2026-11-12T10:31:09.518Z"
 }
