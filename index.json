@@ -1368,8 +1368,43 @@
       "sha256": "54d432fcd172b4795faa1d8801969b32f06911c3c390457f08e62f80874bfe6b",
       "commit": "1592a45be37ae5ec3aa197533fb42d3800716e72",
       "publishedAt": "2026-11-11T10:10:02.938Z"
+    },
+    {
+      "id": "xiaoai-music",
+      "name": "xiaoai music · 小爱音响接入",
+      "version": "0.15.0",
+      "description": "小爱音箱接入、歌曲与歌单播放、提醒及 AI 称呼同音词补足。",
+      "category": "creative",
+      "tags": [
+        "家庭",
+        "小爱",
+        "歌曲",
+        "提醒"
+      ],
+      "author": "YiheDD",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.1",
+      "requires": [
+        "song"
+      ],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "process",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "xiaoai-music-v0.15.0",
+      "file": "xiaoai-music-v0.15.0.zip",
+      "path": "xiaoai-music-v0.15.0/xiaoai-music-v0.15.0.zip",
+      "size": 129007,
+      "sha256": "d530c2f646c2f84cc18fd551a39ed1b254e7cb261d688aea767768c1ffe7fff9",
+      "commit": "4f80321a297dc15bcfe5e14d1889dd581cc9868b",
+      "publishedAt": "2026-11-12T18:38:15.413Z"
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-12T18:37:42.614Z"
+  "generatedAt": "2026-11-12T18:38:15.413Z"
 }
