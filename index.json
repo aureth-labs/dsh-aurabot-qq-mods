@@ -134,6 +134,38 @@
       "publishedAt": "2026-11-08T18:06:00.062Z"
     },
     {
+      "id": "beliefs",
+      "name": "观点",
+      "version": "1.0.0",
+      "description": "给她自己的看法：核心三观和普通观点分开，按语义匹配（向量召回 + 模型重排），吵起来时不讲大道理",
+      "category": "social",
+      "tags": [
+        "观点",
+        "三观",
+        "人设",
+        "语义匹配"
+      ],
+      "author": "YanOnjun",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "beliefs-v1.0.0",
+      "file": "beliefs-v1.0.0.zip",
+      "path": "beliefs-v1.0.0/beliefs-v1.0.0.zip",
+      "size": 13224,
+      "sha256": "3b05e06fe64d0b22823e360cfbf9b0e363641e43ef14df69bedff5d6da89b6c5",
+      "commit": "e2c123b090a3f729699291c500cd27bd993ef521",
+      "publishedAt": "2026-11-12T06:53:24.988Z"
+    },
+    {
       "id": "breeze",
       "name": "Breeze 语音",
       "version": "1.3.3",
@@ -1145,6 +1177,41 @@
       "publishedAt": "2026-11-10T05:16:39.213Z"
     },
     {
+      "id": "wardrobe",
+      "name": "衣柜",
+      "version": "1.0.0",
+      "description": "她的衣服：每套带参考图和文字描述，挑一套当前穿搭，按固定姿势生成预览；不能带参考图的服务直接用描述",
+      "category": "creative",
+      "tags": [
+        "衣柜",
+        "穿搭",
+        "生图",
+        "人设"
+      ],
+      "author": "YanOnjun",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [
+        "imagegen"
+      ],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "process",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "wardrobe-v1.0.0",
+      "file": "wardrobe-v1.0.0.zip",
+      "path": "wardrobe-v1.0.0/wardrobe-v1.0.0.zip",
+      "size": 12040,
+      "sha256": "314a97463b45eb06f9e812b436a6758a4ce16dbc9a550b7a85bd4ceecce91288",
+      "commit": "e2c123b090a3f729699291c500cd27bd993ef521",
+      "publishedAt": "2026-11-12T06:53:24.988Z"
+    },
+    {
       "id": "windows-ops",
       "name": "逛电脑（Windows 自动化）",
       "version": "1.2.1",
@@ -1209,5 +1276,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-12T04:18:02.203Z"
+  "generatedAt": "2026-11-12T06:53:24.988Z"
 }
