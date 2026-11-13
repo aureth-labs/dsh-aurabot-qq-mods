@@ -636,6 +636,38 @@
       "publishedAt": "2026-11-11T08:34:44.509Z"
     },
     {
+      "id": "meme",
+      "name": "表情制作",
+      "version": "1.3.3",
+      "description": "用头像、图片或文字制作表情，支持预览和自定义触发词",
+      "category": "creative",
+      "tags": [
+        "表情",
+        "离线",
+        "GIF"
+      ],
+      "author": "b1ghawk119",
+      "license": "GPL-3.0-only",
+      "api": 1,
+      "minPluginVersion": "1.2.1",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "process",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "meme-v1.3.3",
+      "file": "meme-v1.3.3.zip",
+      "path": "meme-v1.3.3/meme-v1.3.3.zip",
+      "size": 1038234,
+      "sha256": "fded654c05f6fbdf03a2b363c0c0f939549220cf74a8b3a1dc6ed8f37498acca",
+      "commit": "8bac80b1e7ae176267c9759597638742dc96da7e",
+      "publishedAt": "2026-11-13T05:42:16.234Z"
+    },
+    {
       "id": "meme-wiki",
       "name": "梗百科",
       "version": "0.2.6",
@@ -1406,5 +1438,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-13T05:10:02.288Z"
+  "generatedAt": "2026-11-13T05:42:16.234Z"
 }
