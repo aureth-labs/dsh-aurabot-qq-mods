@@ -58,7 +58,7 @@
 
 点击“预览 / 用法”查看效果与指令：
 
-![面板中的预览与用法](docs/images/preview.png)
+![宁宁举牌：面板预览与用法](docs/images/nene-sign-preview.png)
 
 ## 指令
 
