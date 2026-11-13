@@ -11,7 +11,10 @@ return function MemePanel({ settings, save, toast }) {
       try {
         const result = await call('/extension');
         if (stopped) return;
-        if (result.extension.busy) timer = setTimeout(poll, 1000);
+        if (result.extension.busy) {
+          setData(old => ({ ...old, extension: result.extension }));
+          timer = setTimeout(poll, 1000);
+        }
         else {
           const next = await call('/library');
           if (!stopped) { setData(next); setPage(1); if (next.extension.error) toast(next.extension.error); }
