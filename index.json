@@ -105,8 +105,8 @@
     {
       "id": "bambu-print",
       "name": "拓竹",
-      "version": "1.0.1",
-      "description": "多用户、群聊可用的拓竹（Bambu Lab）3D 打印机控制：云端/本地接口可选，每个用户一条独立加密凭据，群聊默认脱敏，管理员（主人）默认也看不到别人的 token；一个面板管设置、用户总览、局域网绑定和审计。",
+      "version": "1.1.1",
+      "description": "看拓竹（Bambu Lab）3D 打印机的状态，远程暂停、继续、停止和拍照；每个 QQ 各管各的凭据，账号密码走一次性网页、不经过聊天，凭据加密存在本机，群聊默认脱敏：只报进度、层数和温度，不露文件名和项目名。",
       "category": "tool",
       "tags": [
         "拓竹",
@@ -126,13 +126,13 @@
         "plugin-internals"
       ],
       "replacesBuiltin": false,
-      "tag": "bambu-print-v1.0.1",
-      "file": "bambu-print-v1.0.1.zip",
-      "path": "bambu-print-v1.0.1/bambu-print-v1.0.1.zip",
-      "size": 354168,
-      "sha256": "e241a94e11cdf418e8abdf6fd2863878293b5dcf8658755716d49e3343cd8c5b",
-      "commit": "2f971902bd40215a317976f84b828ad8ec0037f8",
-      "publishedAt": "2026-11-13T10:22:04.820Z"
+      "tag": "bambu-print-v1.1.1",
+      "file": "bambu-print-v1.1.1.zip",
+      "path": "bambu-print-v1.1.1/bambu-print-v1.1.1.zip",
+      "size": 420484,
+      "sha256": "d2a85d0a17064c3ae9a3f01cf465f5bf72dbca1071f62b06ad281ff6a041b980",
+      "commit": "2b356b23adce2adc62198a3837fa26dbf0351900",
+      "publishedAt": "2026-11-13T20:20:58.205Z"
     },
     {
       "id": "beg-for-money",
@@ -1659,5 +1659,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-13T17:45:58.167Z"
+  "generatedAt": "2026-11-13T20:20:58.205Z"
 }
