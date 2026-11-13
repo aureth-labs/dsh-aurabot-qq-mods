@@ -697,7 +697,7 @@
     {
       "id": "mimo-modelscope",
       "name": "MiMo 语音与魔搭生图",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "description": "用小米 MiMo 合成 QQ 语音，用魔搭生成图片。支持独立配置、面板试听试画和可选的内置接口接管。",
       "category": "creative",
       "tags": [
@@ -720,13 +720,13 @@
       ],
       "replacesBuiltin": false,
       "homepage": "https://github.com/oligeeklaphake/aurabot-mimo-modelscope",
-      "tag": "mimo-modelscope-v1.0.1",
-      "file": "mimo-modelscope-v1.0.1.zip",
-      "path": "mimo-modelscope-v1.0.1/mimo-modelscope-v1.0.1.zip",
-      "size": 306175,
-      "sha256": "18d156bd7a6efd50afc9c102c1a022023c163600f29a6be4a8990051bbc74cbf",
-      "commit": "d6bc4227cedb2e62cf0528f9176a75a317b4c869",
-      "publishedAt": "2026-11-12T19:10:10.895Z"
+      "tag": "mimo-modelscope-v1.0.2",
+      "file": "mimo-modelscope-v1.0.2.zip",
+      "path": "mimo-modelscope-v1.0.2/mimo-modelscope-v1.0.2.zip",
+      "size": 308329,
+      "sha256": "b1f95a3307919f8ac97e6d3fcb483b1893b2b9d18dda27bd14686ea73e503160",
+      "commit": "d2fb87f165c8398832b99c15f05f5091320ef779",
+      "publishedAt": "2026-11-13T01:25:06.233Z"
     },
     {
       "id": "moodboard",
@@ -1406,5 +1406,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-13T01:24:15.022Z"
+  "generatedAt": "2026-11-13T01:25:06.233Z"
 }
