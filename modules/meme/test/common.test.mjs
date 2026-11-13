@@ -41,6 +41,15 @@ test('零图片模板不请求头像', async () => {
   const { api, msg, requested } = harness();
   assert.deepEqual(await collectImages(api, msg, text.params, new Map()), []); assert.deepEqual(requested, []);
 });
+test('真正的 @ 只提供头像；手打 @昵称保留为文案，不猜测 QQ 身份', async () => {
+  const { api, msg } = harness(['222222']);
+  msg.raw.message[0].data.text = '#测试 ';
+  msg.raw.message[1].data.name = '带空格的 长昵称';
+  assert.equal(rawText(msg), '#测试');
+  assert.equal(Buffer.from((await collectImages(api,msg,{minImages:1,maxImages:1},new Map()))[0].data,'base64').toString(), '222222');
+  msg.raw.message = [{type:'text',data:{text:'#测试 @带空格的 长昵称'}}];
+  assert.equal(rawText(msg), '#测试 @带空格的 长昵称');
+});
 test('禁止从入站消息读取本机文件', async () => {
   const { api, msg } = harness(); msg.images = [{ type: 'image', data: { url: 'file:///C:/secret' } }];
   await assert.rejects(collectImages(api, msg, rub.params, new Map()), /本机文件/);

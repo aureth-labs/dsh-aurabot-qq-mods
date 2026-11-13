@@ -6,9 +6,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import module from '../index.mjs';
 import { Engine } from '../lib/engine.mjs';
-import { UserError, publicErrorMessage } from '../lib/errors.mjs';
+import { UserError, publicErrorMessage, unwrapNativeResult } from '../lib/errors.mjs';
 import { prepareSkiaData, assertSkiaData } from '../scripts/python-data.mjs';
 const secret = 'SkIcuLoader C:\\Users\\PrivateName\\secret\\icudtl.dat\nTOKEN=private-token\n/root/private/file';
+test('引擎文字过长转换为固定提示，不输出原始文字；未知错误继续隐藏', () => {
+  assert.equal(unwrapNativeResult({type:'Ok',field0:'image'}), 'image');
+  assert.throws(() => unwrapNativeResult({type:'Err',field0:{type:'TextOverLength',field0:{text:secret}}}), e =>
+    e instanceof UserError && publicErrorMessage(e) === '文字太长，模板放不下，请缩短文字后重试。');
+  assert.throws(() => unwrapNativeResult({type:'Err',field0:{type:'Unknown',field0:{text:secret}}}), e =>
+    !(e instanceof UserError) && !publicErrorMessage(e).includes('PrivateName'));
+});
 test('未知异常默认隐藏；只有显式用户错误可以显示', () => {
   for (const error of [new Error(secret), { name: 'UserError', message: secret }, Object.assign(new Error(secret), {code:'ENOENT'})]) {
     assert.equal(publicErrorMessage(error), '暂时无法处理，请稍后重试；若仍失败，请联系主人。');

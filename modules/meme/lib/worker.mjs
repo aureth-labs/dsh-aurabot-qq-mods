@@ -1,6 +1,6 @@
 import { createCaptionTemplates } from './caption-templates.mjs';
 import { createSvgRenderer } from './svg-renderer.mjs';
-import { UserError } from './errors.mjs';
+import { UserError, unwrapNativeResult as unwrap } from './errors.mjs';
 // Dedicated process: native rendering never blocks the QQ/DSH event loop.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -41,10 +41,6 @@ async function renderIndex(disabled, columns) {
   return data;
 }
 
-function unwrap(result) {
-  if (result.type === 'Err') throw new Error(`${result.field0.type}: ${JSON.stringify(result.field0.field0)}`);
-  return result.field0;
-}
 process.on('message', async ({ id, op, key, texts = [], images = [], options = {}, disabled = [], columns = 5, enabled }) => {
   try {
     let data;

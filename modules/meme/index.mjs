@@ -19,7 +19,7 @@ const HELP = `表情制作
 主人：#表情禁用 模板 / #表情启用 模板
 #表情别名 新词=模板 · #表情开 / #表情关`;
 export default {
-  id: 'meme', name: '表情制作', version: '1.3.3', api: 1,
+  id: 'meme', name: '表情制作', version: '1.3.4', api: 1,
   description: '用头像、图片或文字制作表情，支持预览和自定义触发词',
   panel: 'panel.js',
   defaults: { enabled: true, direct: false, groups: '', private: true, cooldown: 3, indexColumns: 5, avatar: true, disabled: [], favorites: [], aliases: {} },
