@@ -292,6 +292,36 @@
       "publishedAt": "2026-11-11T10:10:02.938Z"
     },
     {
+      "id": "callme",
+      "name": "语音通话",
+      "version": "1.0.0",
+      "description": "在 Windows 上用自己的 QQ 账号拨 QQ 语音通话：私聊通话、群语音（把 @ 她的人一起拉进来）、随时挂断。",
+      "category": "social",
+      "tags": [
+        "语音通话",
+        "QQ",
+        "Windows"
+      ],
+      "author": "DFH-clouds",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "process",
+        "filesystem",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "callme-v1.0.0",
+      "file": "callme-v1.0.0.zip",
+      "path": "callme-v1.0.0/callme-v1.0.0.zip",
+      "size": 13977,
+      "sha256": "fa1c207fa66ae7987dd017f2bf10a0d33e98f8bfd9242c3666b3ac0917598b34",
+      "commit": "e3a5e951415823eac3e17afc0a753cec21edaa1c",
+      "publishedAt": "2026-11-13T13:00:10.141Z"
+    },
+    {
       "id": "daily-art",
       "name": "每日推图 · 逛图站",
       "version": "3.2.0",
@@ -1565,5 +1595,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-13T11:26:27.539Z"
+  "generatedAt": "2026-11-13T13:00:10.141Z"
 }
