@@ -1,7 +1,7 @@
 {
   "id": "mimo-modelscope",
   "name": "MiMo 语音与魔搭生图",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "用小米 MiMo 合成 QQ 语音，用魔搭生成图片。支持独立配置、面板试听试画和可选的内置接口接管。",
   "category": "creative",
   "tags": ["MiMo", "语音", "音色克隆", "魔搭", "生图"],

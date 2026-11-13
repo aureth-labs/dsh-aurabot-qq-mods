@@ -34,12 +34,13 @@ export function referenceStore(api) {
     const uploads = new Map()
     for (const entry of Array.isArray(settings.references) ? settings.references : []) {
       if (typeof entry?.id !== 'string' || !UPLOAD_ID.test(entry.id) || uploads.has(entry.id) || !available(entry.id)) continue
-      uploads.set(entry.id, { id: entry.id, name: filename(entry.name, '已上传的参考音频') })
+      const name = ['之前上传的参考音频', '已上传的参考音频'].includes(entry.name) ? '' : entry.name
+      uploads.set(entry.id, { id: entry.id, name: filename(name, '参考音频' + entry.id.slice(-4)) })
     }
     // 旧版本只保存了当前文件的内部名称。
     const legacy = settings.referenceFile
     if (typeof legacy === 'string' && UPLOAD_ID.test(legacy) && !uploads.has(legacy) && available(legacy)) {
-      uploads.set(legacy, { id: legacy, name: '之前上传的参考音频' })
+      uploads.set(legacy, { id: legacy, name: '参考音频' + legacy.slice(-4) })
     }
     const references = [...uploads.values()]
     if (available(BUNDLED.id)) references.unshift(BUNDLED)

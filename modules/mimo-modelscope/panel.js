@@ -1,5 +1,5 @@
 const { useEffect, useRef, useState } = React
-const { Card, Row, Btn } = ui
+const { Card, Row, Btn, Switch } = ui
 
 function asBase64(file) {
   return new Promise((resolve, reject) => {
@@ -10,7 +10,7 @@ function asBase64(file) {
   })
 }
 
-return function Panel({ settings, setSettings, toast, reload }) {
+return function Panel({ settings, draftSettings, setSettings, save, toast, reload }) {
   const [status, setStatus] = useState(null)
   const [busy, setBusy] = useState(false)
   const [voiceText, setVoiceText] = useState('')
@@ -72,14 +72,18 @@ return function Panel({ settings, setSettings, toast, reload }) {
     return run('/reference', body, () => setAudio(''))
   }
 
-  function binding(slot, title) {
+  function feature(slot, title, key) {
     const current = status?.local?.[slot]
+    const value = Boolean((draftSettings || settings)[key])
     const setupHint = slot === 'tts' ? '保存 MiMo API Key 并选好参考音频后自动接管。' : '保存魔搭 Token 并选好默认模型后自动接管。'
     return h(Row, {
       label: title,
       hint: current?.conflict ? '检测到已有的本地脚本，请先到「本地接口」页处理。' :
-        current?.enabled && !current.ready ? setupHint : undefined,
-    }, h(Btn, {
+        current?.enabled && !current.ready && value ? setupHint : undefined,
+    }, h(Switch, {
+      on: value, title, disabled: busy,
+      onChange: (on) => setSettings ? setSettings({ [key]: on }) : save({ [key]: on }),
+    }), h(Btn, {
       small: true, disabled: busy || !current || (current.conflict && !current.enabled),
       onClick: () => run('/local', { slot, enabled: !current.enabled }),
     }, current?.enabled ? '关闭接管' : '启用接管'))
@@ -90,7 +94,9 @@ return function Panel({ settings, setSettings, toast, reload }) {
   const currentReference = status?.currentReference
   return h(React.Fragment, null,
     h(Card, { title: 'MiMo 试听' },
-      h(Row, { label: '当前参考音频', hint: currentReference?.name || (status ? '请添加 WAV 或 MP3，最大 7 MB。' : '正在读取') },
+      feature('tts', '启用 MiMo 语音', 'voiceEnabled'),
+      h(Row, { label: '当前参考音频', hint: status && !currentReference ? 'WAV 或 MP3，最大 7 MB。' : undefined },
+        h('strong', { style: { overflowWrap: 'anywhere' } }, currentReference?.name || (status ? '未选择' : '正在读取')),
         h('input', { type: 'file', ref: picker, hidden: true, accept: '.wav,.mp3,audio/wav,audio/mpeg', onChange: upload }),
         h(Btn, { small: true, disabled: busy, onClick: () => picker.current?.click() }, '选择文件')),
       references.length > 0 && h('details', null,
@@ -106,9 +112,9 @@ return function Panel({ settings, setSettings, toast, reload }) {
       h(Row, { label: '朗读内容' },
         h('textarea', { className: 'ab-textarea', value: voiceText, maxLength: 300, 'aria-label': '朗读内容', onChange: (event) => setVoiceText(event.target.value) }),
         h(Btn, { disabled: busy || !voiceText.trim(), onClick: () => run('/preview-voice', { text: voiceText }, (result) => setAudio(result.url)) }, '生成试听')),
-      audio && h('audio', { controls: true, src: audio, 'aria-label': 'MiMo 试听音频' }),
-      binding('tts', '平时的语音回复使用 MiMo')),
+      audio && h('audio', { controls: true, src: audio, 'aria-label': 'MiMo 试听音频' })),
     h(Card, { title: '魔搭试画', desc: '保存魔搭设置后，可以在这里试用列表里的模型。' },
+      feature('image', '启用魔搭生图', 'imageEnabled'),
       h(Row, { label: '本次模型' },
         h('select', { className: 'ab-input', value: models.includes(model) ? model : '', 'aria-label': '试画模型', onChange: (event) => setModel(event.target.value) },
           h('option', { value: '' }, status?.defaultModel ? '默认 · ' + status.defaultModel : '默认模型'),
@@ -116,7 +122,6 @@ return function Panel({ settings, setSettings, toast, reload }) {
       h(Row, { label: '画面描述' },
         h('textarea', { className: 'ab-textarea', value: prompt, maxLength: 1999, 'aria-label': '画面描述', onChange: (event) => setPrompt(event.target.value) }),
         h(Btn, { disabled: busy || !prompt.trim(), onClick: () => run('/preview-image', { prompt, model: models.includes(model) ? model : '' }, (result) => setImage(result.url)) }, '试画')),
-      image && h('img', { src: image, alt: '魔搭试画结果', style: { display: 'block', maxWidth: '100%', maxHeight: 440, objectFit: 'contain' } }),
-      binding('image', '内置生图使用魔搭默认模型')),
+      image && h('img', { src: image, alt: '魔搭试画结果', style: { display: 'block', maxWidth: '100%', maxHeight: 440, objectFit: 'contain' } })),
   )
 }

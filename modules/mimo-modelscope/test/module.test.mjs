@@ -108,7 +108,7 @@ test('参考音频可多份保存和切换，旧文件继续可用，写入失�
   const select = (id) => call('/reference/select', { id })
 
   const initial = await call('/status')
-  assert.deepEqual(initial.currentReference, { id: legacy, name: '之前上传的参考音频' })
+  assert.deepEqual(initial.currentReference, { id: legacy, name: '参考音频.wav' })
   assert.equal((await select('bundled')).ok, true)
   assert.equal((await call('/status')).currentReference.name, '懒羊羊.wav')
   expected = readFileSync(join(api.dir, 'assets', '懒羊羊.wav'))
@@ -138,7 +138,7 @@ test('参考音频可多份保存和切换，旧文件继续可用，写入失�
   const status = await call('/status')
   assert.equal(status.voiceReady, true)
   assert.equal(status.currentReference.name, '第二次录音.wav')
-  assert.deepEqual(status.references.map(({ name }) => name), ['懒羊羊.wav', '之前上传的参考音频', '第一次录音.wav', '第二次录音.wav'])
+  assert.deepEqual(status.references.map(({ name }) => name), ['懒羊羊.wav', '参考音频.wav', '第一次录音.wav', '第二次录音.wav'])
   assert.equal((await select(before)).ok, true)
   assert.equal((await call('/status')).currentReference.name, '第一次录音.wav')
   expected = first
