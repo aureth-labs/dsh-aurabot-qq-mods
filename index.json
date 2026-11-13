@@ -1461,6 +1461,39 @@
       "publishedAt": "2026-11-10T05:16:39.213Z"
     },
     {
+      "id": "voicecall",
+      "name": "通话",
+      "version": "1.0.0",
+      "description": "免按住通话：VAD 自动断句，她用自己的声音边想边念；耳朵和嘴都能换成本地服务或任意线上平台。",
+      "category": "social",
+      "tags": [
+        "语音",
+        "通话",
+        "实时",
+        "ASR",
+        "TTS"
+      ],
+      "author": "Ariz0324",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "voicecall-v1.0.0",
+      "file": "voicecall-v1.0.0.zip",
+      "path": "voicecall-v1.0.0/voicecall-v1.0.0.zip",
+      "size": 45915,
+      "sha256": "c94e4ff04d449b9a86116d048f04279adb7a5d9185bca8163b24636e1f832a7d",
+      "commit": "f9e0a8b1035ba65ca9c04a7ecd69df5c72420ce8",
+      "publishedAt": "2026-11-13T16:03:45.991Z"
+    },
+    {
       "id": "wardrobe",
       "name": "衣柜",
       "version": "1.0.1",
@@ -1595,5 +1628,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-13T15:41:34.085Z"
+  "generatedAt": "2026-11-13T16:03:45.991Z"
 }
