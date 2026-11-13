@@ -56,6 +56,10 @@
 
 ![表情库面板](docs/images/library.png)
 
+点击“预览 / 用法”查看效果与指令：
+
+![面板中的预览与用法](docs/images/preview.png)
+
 ## 指令
 
 | 指令 | 用法 |
