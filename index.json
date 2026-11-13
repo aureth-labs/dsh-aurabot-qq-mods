@@ -1078,6 +1078,39 @@
       "publishedAt": "2026-11-11T08:34:44.509Z"
     },
     {
+      "id": "pocket",
+      "name": "口袋aurabot",
+      "version": "1.4.1",
+      "description": "把她的对话流接进口袋里的手机 app：自带局域网服务（界面+接口），app 消息走她原生对话流（记忆、心情、表情包、语音、模组全在），回复与主动搭话实时推回手机；记忆与 QQ 端共用同一套。",
+      "category": "platform",
+      "tags": [
+        "手机",
+        "同步",
+        "接口",
+        "API"
+      ],
+      "author": "Ariz0324",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "plugin-config",
+        "plugin-internals",
+        "network",
+        "process"
+      ],
+      "replacesBuiltin": false,
+      "tag": "pocket-v1.4.1",
+      "file": "pocket-v1.4.1.zip",
+      "path": "pocket-v1.4.1/pocket-v1.4.1.zip",
+      "size": 283707,
+      "sha256": "9d777d3b072a4ae9c2401c92681fe535b30605e493d8d510edfce41ecfcdb529",
+      "commit": "62ce2a710b8c9dba7a8d5ffbcd7790722a2e3523",
+      "publishedAt": "2026-11-13T21:55:16.376Z"
+    },
+    {
       "id": "price-watch",
       "name": "价格监控",
       "version": "1.1.0",
@@ -1659,5 +1692,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-13T20:20:58.205Z"
+  "generatedAt": "2026-11-13T21:55:16.376Z"
 }
