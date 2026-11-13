@@ -103,6 +103,38 @@
       "publishedAt": "2026-11-10T04:45:09.858Z"
     },
     {
+      "id": "bambu-print",
+      "name": "拓竹",
+      "version": "1.0.0",
+      "description": "多用户、群聊可用的拓竹（Bambu Lab）3D 打印机控制：云端/本地接口可选，每个用户一条独立加密凭据，群聊默认脱敏，管理员（主人）默认也看不到别人的 token；一个面板管设置、用户总览、局域网绑定和审计。",
+      "category": "tool",
+      "tags": [
+        "拓竹",
+        "3D打印",
+        "Bambu"
+      ],
+      "author": "cdcp998",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "process",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "bambu-print-v1.0.0",
+      "file": "bambu-print-v1.0.0.zip",
+      "path": "bambu-print-v1.0.0/bambu-print-v1.0.0.zip",
+      "size": 353758,
+      "sha256": "703d48f4c80338c08c825807369c61b64d71b0b15f27109102b0c54f80bd15a8",
+      "commit": "a90aa7a3f472408bced343db414335dfc068ab10",
+      "publishedAt": "2026-11-13T09:20:06.509Z"
+    },
+    {
       "id": "beg-for-money",
       "name": "讨饭",
       "version": "1.0.1",
@@ -1470,5 +1502,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-13T08:17:54.192Z"
+  "generatedAt": "2026-11-13T09:20:06.509Z"
 }
