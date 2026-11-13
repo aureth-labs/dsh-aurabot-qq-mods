@@ -1239,7 +1239,7 @@
     {
       "id": "smart-search",
       "name": "联网搜索",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "description": "需要时自己查资料、读网页，回答附上来源；默认沿用 DSH 搜索",
       "category": "tool",
       "tags": [
@@ -1259,13 +1259,13 @@
       ],
       "replacesBuiltin": false,
       "homepage": "https://github.com/b1ghawk119/dsh-aurabot-qq-smartsearch-plugin",
-      "tag": "smart-search-v1.0.1",
-      "file": "smart-search-v1.0.1.zip",
-      "path": "smart-search-v1.0.1/smart-search-v1.0.1.zip",
-      "size": 285473,
-      "sha256": "dc7013405eac23e12bd8803af58751d65971bb77cd712ac0965fd8832cdd9d6b",
-      "commit": "ef9a5effe3228277915d8629192df13912122f5f",
-      "publishedAt": "2026-11-13T10:23:35.819Z"
+      "tag": "smart-search-v1.0.2",
+      "file": "smart-search-v1.0.2.zip",
+      "path": "smart-search-v1.0.2/smart-search-v1.0.2.zip",
+      "size": 286568,
+      "sha256": "116eb6e623bed121745045c5339ab1ce1e117e1dec3b3797ec391fb8120616bb",
+      "commit": "84fd28dbbddfbd0637c072109f209d4eca6f3dde",
+      "publishedAt": "2026-11-13T15:41:34.085Z"
     },
     {
       "id": "stardew",
@@ -1595,5 +1595,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-13T13:00:10.141Z"
+  "generatedAt": "2026-11-13T15:41:34.085Z"
 }
