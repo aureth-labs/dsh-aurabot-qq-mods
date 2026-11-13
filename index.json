@@ -698,6 +698,37 @@
       "publishedAt": "2026-11-09T14:07:11.920Z"
     },
     {
+      "id": "little-notes",
+      "name": "小本本",
+      "version": "1.2.2",
+      "description": "她想到就记一笔的小本本：他说过的话、她答应的事、关于他的事，按人按事翻得出来；每晚还会自己整理当天聊天补漏，记了日子的事到点主动提。",
+      "category": "manage",
+      "tags": [
+        "记忆",
+        "笔记",
+        "记事"
+      ],
+      "author": "Ariz0324",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "little-notes-v1.2.2",
+      "file": "little-notes-v1.2.2.zip",
+      "path": "little-notes-v1.2.2/little-notes-v1.2.2.zip",
+      "size": 18378,
+      "sha256": "c18d8a02d7f370f23636f5c7bec75e03cee86f82fe20f480698f58e2b87dbfc0",
+      "commit": "6a20566df1cfae48ce1e99e206b495c8aa57dec1",
+      "publishedAt": "2026-11-13T17:45:58.167Z"
+    },
+    {
       "id": "love-mode",
       "name": "快来跟我恋爱吧",
       "version": "1.5.0",
@@ -1628,5 +1659,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-13T16:03:45.991Z"
+  "generatedAt": "2026-11-13T17:45:58.167Z"
 }
