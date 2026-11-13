@@ -1,0 +1,87 @@
+{
+  "uvVersion": "0.13.7",
+  "pythonVersion": "3.12.12",
+  "pythonBuild": "20260211",
+  "platforms": {
+    "win32-x64": {
+      "uv": {
+        "name": "uv-0.13.7-py3-none-win_amd64.whl",
+        "url": "https://files.pythonhosted.org/packages/8e/4f/041b59d2a38807a3e31ef41064cf3e45d2752fe0409d89040d52778049ae/uv-0.13.7-py3-none-win_amd64.whl",
+        "size": 15330939,
+        "sha256": "2835e2ab397d0db86323b9975dce75ecd76aa9cfa0d6a2aea84734aae7f8c9b3"
+      },
+      "python": {
+        "name": "cpython-3.12.12+20260211-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260211/cpython-3.12.12%2B20260211-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+        "apiUrl": "https://api.github.com/repos/astral-sh/python-build-standalone/releases/assets/354545699?download=1",
+        "size": 21839326,
+        "sha256": "93bf8e8c05ede0077b197a29c99ebdaf253497f27190097494265150b4e70ba8"
+      },
+      "executable": "python.exe"
+    },
+    "darwin-x64": {
+      "uv": {
+        "name": "uv-0.13.7-py3-none-macosx_10_12_x86_64.whl",
+        "url": "https://files.pythonhosted.org/packages/3d/5b/e0379e7b172659420b1ec99a8e8229830aa85ea59684847c80b1c959a056/uv-0.13.7-py3-none-macosx_10_12_x86_64.whl",
+        "size": 17194673,
+        "sha256": "fd04bf01ba5f2829f4f94ca8f0c24a743f21e73d75045613ed6fc2fd66fc7bda"
+      },
+      "python": {
+        "name": "cpython-3.12.12+20260211-x86_64-apple-darwin-install_only_stripped.tar.gz",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260211/cpython-3.12.12%2B20260211-x86_64-apple-darwin-install_only_stripped.tar.gz",
+        "apiUrl": "https://api.github.com/repos/astral-sh/python-build-standalone/releases/assets/354545689?download=1",
+        "size": 17563084,
+        "sha256": "a84ac7a36d465bc6eb68db84540fdb5da04333900e2c3cb34b5d454f2022048c"
+      },
+      "executable": "bin/python3.12"
+    },
+    "darwin-arm64": {
+      "uv": {
+        "name": "uv-0.13.7-py3-none-macosx_11_0_arm64.whl",
+        "url": "https://files.pythonhosted.org/packages/40/a5/8756c38ace102fa13fd4e653e8bc40e1f65924f1c0a0d23350339dac97e5/uv-0.13.7-py3-none-macosx_11_0_arm64.whl",
+        "size": 14454941,
+        "sha256": "f91a229093163eefca89ea1b220a221d64c3beade05d03519a6584d1797a5a5f"
+      },
+      "python": {
+        "name": "cpython-3.12.12+20260211-aarch64-apple-darwin-install_only_stripped.tar.gz",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260211/cpython-3.12.12%2B20260211-aarch64-apple-darwin-install_only_stripped.tar.gz",
+        "apiUrl": "https://api.github.com/repos/astral-sh/python-build-standalone/releases/assets/354545602?download=1",
+        "size": 17667661,
+        "sha256": "22625deaf5757e7c266cf1a096c9151a06b598b1e14632a2ec9993d58ec5fe84"
+      },
+      "executable": "bin/python3.12"
+    },
+    "linux-x64": {
+      "uv": {
+        "name": "uv-0.13.7-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "url": "https://files.pythonhosted.org/packages/b9/93/0e053a2ca4523ee9825ccbedeb7121470d0a188933f11688b6d90d7f5c08/uv-0.13.7-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "size": 17202345,
+        "sha256": "2c9bdc4a872b60a93c5f26c0791089ea11585a4f9d3b3c017d78eb8487505e25"
+      },
+      "python": {
+        "name": "cpython-3.12.12+20260211-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260211/cpython-3.12.12%2B20260211-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "apiUrl": "https://api.github.com/repos/astral-sh/python-build-standalone/releases/assets/354545704?download=1",
+        "size": 33887801,
+        "sha256": "1dbaa624a09e15afe7efbdac08d42993135a68db8d34f986ef6977a6d77bdc3c"
+      },
+      "executable": "bin/python3.12"
+    },
+    "linux-arm64": {
+      "uv": {
+        "name": "uv-0.13.7-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl",
+        "url": "https://files.pythonhosted.org/packages/96/72/da1119f94034d7173e6c8e2cd77a6299744458f0af3cb8e3a04d5cd419d1/uv-0.13.7-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl",
+        "size": 17656749,
+        "sha256": "a90f5d95716ab83091f0f73a8e7ec64e557abf2a28537fcd719b2ac88e6f725a"
+      },
+      "python": {
+        "name": "cpython-3.12.12+20260211-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260211/cpython-3.12.12%2B20260211-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "apiUrl": "https://api.github.com/repos/astral-sh/python-build-standalone/releases/assets/354545613?download=1",
+        "size": 29408570,
+        "sha256": "85fdc64fe672de7337198a63d89918037bf93bdb03480404d90f8f601abef1dd"
+      },
+      "executable": "bin/python3.12"
+    }
+  }
+}

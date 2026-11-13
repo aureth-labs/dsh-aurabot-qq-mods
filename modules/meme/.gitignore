@@ -1,0 +1,14 @@
+node_modules/
+.aurabot-cache/
+artifacts/
+*.tar.gz
+
+/native-work/
+.env
+.env.*
+__pycache__/
+*.pyc
+
+!test/fixtures/*.tar.gz
+
+.build/
