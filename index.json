@@ -538,6 +538,38 @@
       "publishedAt": "2026-11-06T17:20:05.895Z"
     },
     {
+      "id": "hongguo",
+      "name": "刷红果短剧",
+      "version": "0.1.0",
+      "description": "用专用浏览器刷红果短剧：看推荐、记下看过的，刷到好看的用 QQ 私聊告诉主人。看完会把标题、简介、播放时抓的画面帧和真实热评一起交给模型判断好不好看，只有真的觉得值得才分享。",
+      "category": "platform",
+      "tags": [
+        "红果短剧",
+        "短剧"
+      ],
+      "author": "fengzhi-97",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "process",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "homepage": "https://github.com/aureth-labs/dsh-aurabot-qq",
+      "tag": "hongguo-v0.1.0",
+      "file": "hongguo-v0.1.0.zip",
+      "path": "hongguo-v0.1.0/hongguo-v0.1.0.zip",
+      "size": 39467,
+      "sha256": "8dcca984e5ec07f97aa3c308692fca5cf05eeae0dc37041c0002740c263f7f05",
+      "commit": "e5e3a627b1278d64bd6556976a9e57f4cf102ecf",
+      "publishedAt": "2026-11-13T08:17:54.192Z"
+    },
+    {
       "id": "impression-card",
       "name": "印象卡片",
       "version": "1.0.6",
@@ -1438,5 +1470,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-13T07:46:56.760Z"
+  "generatedAt": "2026-11-13T08:17:54.192Z"
 }
