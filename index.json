@@ -1401,7 +1401,7 @@
     {
       "id": "wardrobe",
       "name": "衣柜",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "她的衣服：每套带参考图和文字描述，挑一套当前穿搭，按固定姿势生成预览；不能带参考图的服务直接用描述",
       "category": "creative",
       "tags": [
@@ -1425,13 +1425,13 @@
         "plugin-internals"
       ],
       "replacesBuiltin": false,
-      "tag": "wardrobe-v1.0.0",
-      "file": "wardrobe-v1.0.0.zip",
-      "path": "wardrobe-v1.0.0/wardrobe-v1.0.0.zip",
-      "size": 12040,
-      "sha256": "314a97463b45eb06f9e812b436a6758a4ce16dbc9a550b7a85bd4ceecce91288",
-      "commit": "e2c123b090a3f729699291c500cd27bd993ef521",
-      "publishedAt": "2026-11-12T06:53:24.988Z"
+      "tag": "wardrobe-v1.0.1",
+      "file": "wardrobe-v1.0.1.zip",
+      "path": "wardrobe-v1.0.1/wardrobe-v1.0.1.zip",
+      "size": 15696,
+      "sha256": "009fc5afb757cb2edceaafd69a645b3a6c0b57149b006c2fb575e54cd4b4e901",
+      "commit": "9967e9c15a9f69731476492397e45c531851414c",
+      "publishedAt": "2026-11-13T11:25:59.755Z"
     },
     {
       "id": "windows-ops",
@@ -1533,5 +1533,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-13T10:23:35.819Z"
+  "generatedAt": "2026-11-13T11:25:59.755Z"
 }
