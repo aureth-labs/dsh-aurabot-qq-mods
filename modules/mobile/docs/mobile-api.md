@@ -75,6 +75,22 @@ kind 使用小写 text / sticker / system 等，App 转大写匹配枚举。mine
 
 切 Bot、切后台、pagehide 取消录音 / 扫码并释放轨道，权限弹窗期间松手不会启动迟到录音；退出配对还断 WS、停止播放、释放媒体和通知、清理 token / 草稿 / 未读 / 事件水位，保留本来源上传目录偏好。
 
+### 在「Aurabot 手机端」安卓 App 里
+
+App 是这个网页的壳，不另有一套协议。局域网 http 地址由 App 在手机本机 `127.0.0.1:38417` 开 TCP 原样转发到电脑，WebView 打开本机地址：本机地址算安全上下文，录音直接可用；Host 与 Origin 都是 `127.0.0.1:38417`，服务端的同源检查照常成立。https 地址直接打开。
+
+App 向页面注入 `window.AuraNative`，页面检测到它时改走原生：
+
+| 方法 | 作用 |
+| --- | --- |
+| `serverOrigin()` | 真实电脑地址，用于显示和比较（页面自身来源固定是本机） |
+| `changeServer(href)` | 换电脑：App 先清空本机所有网页存储（含 token、草稿），再打开新地址，旧 token 不会发往新电脑 |
+| `scan()` | 原生扫码，结果按同一二维码格式处理 |
+| `notify(title, body, botId, id)` | 系统通知，点击回到对应 Bot |
+| `notificationStatus()` / `requestNotifications()` | 通知状态文字、申请或跳转系统设置 |
+
+App 只在自己的电脑地址内导航，其他链接交给系统浏览器，原生接口不会暴露给别的页面。没有 `AuraNative` 的普通浏览器行为不变。
+
 ## 电脑管理与数据
 
 五条管理路由只在宿主面板端口：

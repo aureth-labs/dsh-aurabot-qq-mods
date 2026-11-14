@@ -1,6 +1,10 @@
 'use strict'
 // Shared with the classic script in index.html. No credentials enter URLs or the worker.
 let activeView = 'pairView'
+// 在「手机端」安卓 App 里打开时，App 注入 AuraNative：页面经手机本机 127.0.0.1 转发到电脑（算安全环境，
+// 可直接录音），扫码、系统通知、换电脑由 App 原生处理。普通浏览器里没有它，行为不变。
+const app = window.AuraNative || null
+const serverShown = () => (app ? app.serverOrigin() : location.origin)
 const HTTPS_HELP = '请主人在电脑面板「手机端 → 连接地址与远程访问」填写 TLS 证书与私钥路径，应用后通过可信 HTTPS 地址重新打开。推荐 Tailscale 证书，面板中有步骤。'
 const eventIds = new Set(readStored('aurabot.eventIds', []))
 let lastEventAt = Number(store.get('aurabot.lastEventAt')) || Date.now()
@@ -22,14 +26,14 @@ function capabilityText() {
 }
 $('recordInfo').textContent = window.isSecureContext ? '' : '录音和通知需要 HTTPS。请主人到电脑面板「手机端」配置证书后重新打开。'
 $('capabilityInfo').textContent = capabilityText()
-$('pairServer').value = $('serverAddress').value = location.origin
+$('pairServer').value = $('serverAddress').value = serverShown()
 $('uploadDir').value = store.get('aurabot.uploadDir') || ''
 
 for (const b of document.querySelectorAll('#tabs button')) b.onclick = () => {
   current = null; show(b.dataset.view)
   if (b.dataset.view === 'dshView') loadSessions()
   if (b.dataset.view === 'listView') loadBots()
-  if (b.dataset.view === 'settingsView') { $('serverAddress').value = location.origin; loadServerInfo(); updateNotificationInfo() }
+  if (b.dataset.view === 'settingsView') { $('serverAddress').value = serverShown(); loadServerInfo(); updateNotificationInfo() }
 }
 $('refreshBots').onclick = loadBots
 $('refreshDsh').onclick = loadSessions
@@ -97,11 +101,13 @@ function serverOrigin(raw) {
 }
 // Changing server means navigating to its own origin; never send an old token across origins.
 function goToServer(raw, code = '') {
-  const origin = serverOrigin(raw || location.origin)
-  if (origin === location.origin) return false
+  const origin = serverOrigin(raw || serverShown())
+  if (origin === serverShown()) return false
   const target = new URL('/', origin)
   if (code) target.searchParams.set('code', code)
-  location.assign(target.href)
+  // App 里页面的来源固定是 127.0.0.1，换电脑由 App 清掉旧电脑的本地数据（含 token）后再打开。
+  if (app) app.changeServer(target.href)
+  else location.assign(target.href)
   return true
 }
 const originalPairSubmit = $('pairForm').onsubmit
@@ -139,7 +145,7 @@ async function loadServerInfo() {
 }
 $('testConnection').onclick = () => {
   try {
-    if (serverOrigin($('serverAddress').value) !== location.origin) { $('settingsStatus').textContent = '地址已修改，请先保存，网页会打开对应电脑后测试连接。'; return }
+    if (serverOrigin($('serverAddress').value) !== serverShown()) { $('settingsStatus').textContent = '地址已修改，请先保存，网页会打开对应电脑后测试连接。'; return }
     loadServerInfo()
   } catch (e) { $('settingsStatus').textContent = e.message }
 }
@@ -158,6 +164,7 @@ function closeScanner() {
   if ($('scanDialog').open) $('scanDialog').close()
 }
 function showScanner() {
+  if (app) { app.scan(); return }
   $('scanInfo').textContent = !window.isSecureContext ? '相机扫码需要 HTTPS。' + HTTPS_HELP + ' 也可用手机系统相机扫描电脑上的二维码直接打开，或粘贴二维码文字。' : '扫描电脑面板中的二维码。若浏览器不支持相机识码，可用手机系统相机扫码打开，或粘贴二维码文字。'
   $('scanText').value = ''; $('scanDialog').showModal()
 }
@@ -168,7 +175,7 @@ $('scanDialog').addEventListener('close', () => { if (scanStream) closeScanner()
 function parsePairing(raw) {
   const value = raw.trim(); let url, code
   if (value.startsWith('{')) {
-    const json = JSON.parse(value); url = serverOrigin(json.url || location.origin); code = json.code
+    const json = JSON.parse(value); url = serverOrigin(json.url || serverShown()); code = json.code
   } else {
     const parsed = new URL(value)
     if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error('二维码地址需要 http(s)')
@@ -209,11 +216,14 @@ $('scanCamera').onclick = async () => {
 }
 
 let workerRegistration = null
-const workerReady = window.isSecureContext && 'serviceWorker' in navigator ? navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' }).then(async () => { workerRegistration = await navigator.serviceWorker.ready; return workerRegistration }).catch(() => null) : Promise.resolve(null)
+// App 里通知走原生，不注册 worker：页面来源固定是本机端口，换电脑后旧 worker 不该留着。
+const workerReady = !app && window.isSecureContext && 'serviceWorker' in navigator ? navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' }).then(async () => { workerRegistration = await navigator.serviceWorker.ready; return workerRegistration }).catch(() => null) : Promise.resolve(null)
 function updateNotificationInfo(extra = '') {
+  if (app) { $('notificationInfo').textContent = extra || app.notificationStatus(); return }
   $('notificationInfo').textContent = extra || (!window.isSecureContext ? '系统通知需要 HTTPS。' + HTTPS_HELP : !('Notification' in window) ? '此浏览器没有开放系统通知。iPhone / iPad 请添加到主屏幕后打开。' : ({ granted: '系统通知已允许，网页在后台收到她的新消息时提醒。', denied: '系统通知已被阻止，请在浏览器的网站设置中允许后重试。', default: '尚未授权，点上方按钮允许新消息通知。' }[Notification.permission]))
 }
 $('enableNotifications').onclick = async () => {
+  if (app) { app.requestNotifications(); return }
   if (!window.isSecureContext || !('Notification' in window)) { updateNotificationInfo(); return }
   try { await Notification.requestPermission(); updateNotificationInfo(); await workerReady }
   catch (e) { updateNotificationInfo('无法请求通知权限：' + e.message) }
@@ -225,6 +235,7 @@ async function openNotificationChat(id) {
   else toast('对应会话已不存在，请刷新列表')
 }
 async function notifyMessage(m, bot) {
+  if (app) { if (token) app.notify(bot?.name || 'Aurabot', previewText(m).slice(0, 80), m.botId, String(m.id)); return }
   if (!window.isSecureContext || !('Notification' in window) || Notification.permission !== 'granted') return
   const epoch = sessionEpoch
   const options = { body: previewText(m).slice(0, 80), tag: 'aurabot-' + m.id, icon: '/icon.svg', data: { botId: m.botId } }
