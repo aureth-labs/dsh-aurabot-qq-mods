@@ -71,15 +71,26 @@ async function execute(req, progress) {
   }
   await win.loadURL(url);
   if (kind === 'account') {
+    // 与 lib/tieba.mjs 的 loginState() 同一套判定：/f/user/json_userinfo 在桌面版已下线，
+    // 只认它会把手动登录过的会话也判成未登录。先问 newmoindex，再退 tbs，最后才试旧的 userinfo。
     return win.webContents.executeJavaScript(`(async () => {
-      try {
-        const response = await fetch('/f/user/json_userinfo', { credentials: 'include' });
-        if (!response.ok) return { ok: false, loggedIn: null, message: '登录检查被拦截，请打开扩展登录窗口完成验证。' };
-        const j = await response.json(); const user = j?.data?.user || j?.data || j?.user || j;
-        const name = user?.user_name || user?.name_show || user?.user_name_show;
-        return name ? { ok: true, loggedIn: true, name: String(name).slice(0,100), message: '已登录：' + String(name).slice(0,100) }
-          : { ok: true, loggedIn: false, message: '未确认登录，请打开扩展登录窗口。' };
-      } catch { return { ok: false, loggedIn: null, message: '未能检查登录，请打开扩展登录窗口完成验证。' }; }
+      const probe = async (path, init) => {
+        try { const r = await fetch(path, Object.assign({ credentials: 'include', cache: 'no-store' }, init || {})); return r.ok ? await r.json() : null; } catch { return null; }
+      };
+      const j1 = await probe('/mo/q/newmoindex?need_user=1');
+      const d = (j1 && j1.data) || {};
+      if (j1 && Number(j1.no) === 0 && d.is_login === true) {
+        const name = String(d.name_show || d.name || d.temp_name || '').slice(0, 100);
+        return name ? { ok: true, loggedIn: true, name, message: '已登录：' + name }
+          : { ok: true, loggedIn: true, name: '', message: '已登录（这个账号没有设置昵称）。' };
+      }
+      const j2 = await probe('/dc/common/tbs', { method: 'POST' });
+      if (j2 && Number(j2.is_login) === 1) return { ok: true, loggedIn: true, name: '', message: '已登录（接口没带昵称）。' };
+      const j3 = await probe('/f/user/json_userinfo');
+      const u = (j3 && (j3.data?.user || j3.data || j3.user || j3)) || {};
+      const name3 = u.user_name || u.name_show || u.user_name_show;
+      if (name3) return { ok: true, loggedIn: true, name: String(name3).slice(0, 100), message: '已登录：' + String(name3).slice(0, 100) };
+      return { ok: true, loggedIn: false, message: '未确认登录：请打开扩展登录窗口重新登录贴吧（Cookie 可能已失效）。' };
     })()`);
   }
   const deadline = Date.now() + 20000;

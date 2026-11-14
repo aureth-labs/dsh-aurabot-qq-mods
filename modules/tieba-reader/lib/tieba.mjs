@@ -108,14 +108,18 @@ export function parsePost(html, url) {
 }
 export function createTieba({ getCookie, searchWeb, fetchImpl = fetch, renderPage, browserAvailable = () => true, signal }) {
   const assertActive = () => signal?.throwIfAborted();
-  async function request(path) {
+  // redirect: 'null' 时不把跳转当错误，直接返回 null —— 登录检查要靠它区分「未登录」和「读失败」。
+  async function request(path, { method = 'GET', redirect = 'throw' } = {}) {
     assertActive();
     const url = new URL(path, 'https://tieba.baidu.com');
     if (url.origin !== 'https://tieba.baidu.com') throw new Error('只允许访问百度贴吧。');
-    const res = await fetchImpl(url, { method: 'GET', redirect: 'manual',
+    const res = await fetchImpl(url, { method, redirect: 'manual',
       headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36',
         referer: 'https://tieba.baidu.com/', cookie: cookieHeader(getCookie()) }, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000) });
-    if (res.status >= 300 && res.status < 400) throw new Error('贴吧要求跳转或登录，请先在浏览器打开贴吧并完成登录/验证。');
+    if (res.status >= 300 && res.status < 400) {
+      if (redirect === 'null') return null;
+      throw new Error('贴吧要求跳转或登录，请先在浏览器打开贴吧并完成登录/验证。');
+    }
     if (!res.ok) throw new Error(`贴吧返回 HTTP ${res.status}`);
     const chunks = []; let size = 0;
     for await (const c of res.body) { size += c.length; if (size > 2500000) throw new Error('贴吧页面过大，已停止读取。'); chunks.push(c); }
@@ -133,6 +137,46 @@ export function createTieba({ getCookie, searchWeb, fetchImpl = fetch, renderPag
     }
     return { ok: true, mode: 'indexed', warning: `${reason}；以下为搜索收录，可能不是最新帖子，也不保证严格属于目标贴吧。`, items: items.slice(0, 6) };
   }
+  /**
+   * 判断现在是不是登录状态。
+   *
+   * 以前只认 /f/user/json_userinfo：那个接口在桌面版已下线（现在无论 Cookie 有没有效都 302 跳 passport），
+   * 于是 Cookie 明明有效也会被报成「登录状态检查失败」。改为按可靠性依次尝试：
+   *   1. /mo/q/newmoindex?need_user=1 —— 登录时返回 name；未登录返回 { no: 1, error: 'not logined!' }，
+   *      语义干净，顺带拿到昵称；
+   *   2. /dc/common/tbs —— 只回 is_login，用来交叉确认；
+   *   3. 旧的 json_userinfo —— 留给还有效的旧网关，302 或 null 直接跳过。
+   * 三个都说不通才判「未登录」，并把每一步的原因带回去，方便主人判断是 Cookie 过期还是接口又改了。
+   */
+  async function loginState() {
+    const notes = [];
+    try {
+      const raw = await request('/mo/q/newmoindex?need_user=1');
+      const j = raw ? JSON.parse(raw) : null;
+      const d = j?.data || {};
+      if (j && Number(j.no) === 0 && d.is_login === true) {
+        const name = clean(d.name_show || d.name || d.temp_name || '');
+        return name
+          ? { ok: true, loggedIn: true, name, message: `已登录：${name}` }
+          : { ok: true, loggedIn: true, name: '', message: '已登录（这个账号没有设置昵称）。' };
+      }
+      notes.push('newmoindex 表示未登录');
+    } catch (error) { notes.push('newmoindex 读取失败：' + error.message); }
+    try {
+      const raw = await request('/dc/common/tbs', { method: 'POST' });
+      const j = raw ? JSON.parse(raw) : null;
+      if (j && Number(j.is_login) === 1) return { ok: true, loggedIn: true, name: '', message: '已登录（接口没带昵称）。' };
+    } catch (error) { notes.push('tbs 读取失败：' + error.message); }
+    try {
+      const raw = await request('/f/user/json_userinfo', { redirect: 'null' });
+      const j = raw ? JSON.parse(raw) : null;
+      const user = j?.data?.user || j?.data || j?.user || j;
+      const name = user?.user_name || user?.name_show || user?.user_name_show;
+      if (name) return { ok: true, loggedIn: true, name: clean(name), message: `已登录：${clean(name)}` };
+    } catch (error) { notes.push('json_userinfo 读取失败：' + error.message); }
+    return { ok: false, loggedIn: false, message: 'Cookie 里的 BDUSS 已失效或不被贴吧认可：请在浏览器重新登录贴吧后更新 Cookie（诊断：' + notes.join('；') + '）。' };
+  }
+
   return {
     async home() {
       try {
@@ -155,14 +199,7 @@ export function createTieba({ getCookie, searchWeb, fetchImpl = fetch, renderPag
         catch { assertActive(); return { ok: false, loggedIn: null, message: '扩展浏览器登录检查失败，请检查组件、网络或打开扩展登录窗口完成验证。' }; }
       }
       if (!cookieHeader(getCookie()).includes('BDUSS=')) return { ok: true, loggedIn: false, message: '未配置 BDUSS 登录 Cookie，可匿名尝试读取。' };
-      try {
-        const raw = await request('/f/user/json_userinfo');
-        const j = JSON.parse(raw);
-        const user = j?.data?.user || j?.data || j?.user || j;
-        const name = user?.user_name || user?.name_show || user?.user_name_show;
-        return name ? { ok: true, loggedIn: true, name: clean(name), message: `已登录：${clean(name)}` }
-          : { ok: false, loggedIn: null, message: 'Cookie 已保存，但未能确认登录有效，请在浏览器登录后更新 Cookie。' };
-      } catch { return { ok: false, loggedIn: null, message: '登录状态检查失败，可能被验证拦截或 Cookie 失效。' }; }
+      return loginState();
     },
     async search(query, bar = '') {
       const q = clean(query); if (!q || q.length > 160) throw new Error('搜索词应为 1～160 字符。');

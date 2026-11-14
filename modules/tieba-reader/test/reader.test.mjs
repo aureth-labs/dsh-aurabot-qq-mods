@@ -72,8 +72,14 @@ test('navigation restricts login hosts and refuses local/unrelated destinations'
 });
 test('without browser component imported cookies are checked through HTTP and reading can fall back to direct HTML',async()=>{
   const calls=[];
+  // 登录判定现在先问 newmoindex（json_userinfo 在新版贴吧已下线，302 跳 passport），
+  // 这里让 newmoindex 回未登录、json_userinfo 继续给出昵称，验证第三条回落路径仍然可用。
   const client=createTieba({getCookie:()=> 'BDUSS=manual-cookie',browserAvailable:()=>false,renderPage:async()=>{throw Error('must not run a browser');},searchWeb:async()=>({sources:[]}),
-    fetchImpl:async(url,options)=>{calls.push(options.headers.cookie);return new Response(String(url).includes('json_userinfo')?JSON.stringify({data:{user_name:'test-user'}}):fixture('forum-legacy.html'));}});
+    fetchImpl:async(url,options)=>{const text=String(url);calls.push(options.headers.cookie);
+      if(text.includes('newmoindex'))return new Response(JSON.stringify({no:1,error:'not logined!',data:{is_login:false}}));
+      if(text.includes('dc/common/tbs'))return new Response(JSON.stringify({tbs:'x',is_login:0}));
+      return new Response(text.includes('json_userinfo')?JSON.stringify({data:{user_name:'test-user'}}):fixture('forum-legacy.html'));}});
   assert.equal((await client.account()).loggedIn,true);assert.equal((await client.browse('测试')).mode,'direct');
-  assert.deepEqual(calls,['BDUSS=manual-cookie','BDUSS=manual-cookie']);
+  // newmoindex + tbs + json_userinfo 三次判定，之后一次浏览请求
+  assert.deepEqual(calls,['BDUSS=manual-cookie','BDUSS=manual-cookie','BDUSS=manual-cookie','BDUSS=manual-cookie']);
 });

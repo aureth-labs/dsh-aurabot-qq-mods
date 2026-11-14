@@ -4,7 +4,7 @@ import { createTieba, barNames, clean, cleanTitle } from './tieba.mjs';
 import { createBrowserReader } from './browser-client.mjs';
 
 export default {
-  id: 'tieba-reader', name: '逛贴吧（只读）', version: '1.5.2', api: 1,
+  id: 'tieba-reader', name: '逛贴吧（只读）', version: '1.5.3', api: 1,
   description: '支持登录 Cookie、搜帖看帖、配置贴吧定时浏览，有兴趣时给主人分享；不发帖、不回帖。',
   panel: 'panel.js',
   defaults: { enabled: true, cookie: '', bars: '', interests: '', autoBrowse: false, intervalMinutes: 30, maxSharesPerDay: 3, startHour: 9, endHour: 23 },
