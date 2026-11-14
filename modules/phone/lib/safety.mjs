@@ -27,6 +27,63 @@ const WRITE_KEYWORDS = [
   'subscribe', 'renew', 'uninstall', 'install', 'login', 'signin', 'sign up', 'authorize',
 ]
 
+/**
+ * 整包黑名单：优先级高于白名单，无论白名单怎么配都拦得住。
+ *
+ * 白名单为空 = 不限制应用，此时只剩这里点名的几个真正不能碰的：
+ *   小红书  —— 风控会直接封号下线，登录都不给，一次都别开。
+ *   系统设置 —— 网络/账户/应用权限/恢复出厂全在里面，误点代价太大。
+ *
+ * 想再禁别的应用，写进设置里的「应用黑名单」，不要往这里加死名单：
+ * 每个用户的取舍不一样，模块只保留跨用户都成立的两项。
+ */
+const DENY_PKGS = ['com.xingin.xhs', 'com.android.settings', 'com.hihonor.settings']
+
+/**
+ * 按包名的硬禁令：命中即 REJECT，不弹确认、批准无效（与 confirmWrites 无关）。
+ *
+ * 这类规则拦的是「不可逆且有实际代价」的动作，跨用户都成立，所以放在代码里：
+ *   actions —— 该包内这些动作一律拒绝
+ *   text    —— 被点中节点（text 或 content-desc）含这些词就拒绝
+ *
+ * 只判真正点到的那个节点：滚动、返回、点商品卡片、在搜索框输关键词都不受影响。
+ * 下面这组是电商类的通用红线——发消息给卖家、加购、下单、支付、退款。
+ */
+const BLOCK_RULES = {
+  'com.taobao.taobao': {
+    actions: [],
+    text: [
+      '客服', '联系卖家', '旺旺', '咨询', '发消息', '私信', '聊天', 'message', 'chat',
+      '立即购买', '马上抢', '加入购物车', '购物车', '结算', '去结算', '提交订单',
+      '确认订单', '去支付', '付款', '支付', '下单', '确认收货', '申请退款',
+      'buy now', 'add to cart', 'checkout', 'place order', 'pay now',
+    ],
+  },
+}
+
+/**
+ * 广告 / 站外跳转按钮：不管在哪个 App，点到这些字基本就是被带去下载页或另一个应用。
+ * 只在点类动作上判，滚动查看不受影响。
+ * 注意：「跳过」「关闭」「×」不在这张表里——那些是用来关广告的，必须让模型点得动。
+ */
+const AD_WORDS = [
+  '广告', '推广位', 'Sponsored', '赞助',
+  '立即下载', '下载应用', '下载APP', '安装应用', '安装到手机', '一键安装',
+  '打开APP', '打开应用', '立即打开', '去看看', '了解更多优惠', '领取优惠',
+]
+
+/** 命中包级禁令时返回命中原因（给日志和模型看），没命中返回空串。 */
+function blockHit(pkg, kind, text) {
+  const rule = BLOCK_RULES[String(pkg || '')]
+  if (!rule) return ''
+  const k = String(kind || '').toLowerCase()
+  if ((rule.actions || []).includes(k)) return `该应用禁止 ${k} 动作`
+  const s = String(text || '').toLowerCase()
+  if (!s) return ''
+  const hit = (rule.text || []).find((w) => s.includes(w.toLowerCase()))
+  return hit ? `命中禁令词「${hit}」` : ''
+}
+
 /** 本地日期（按本机时区）YYYY-MM-DD，用于日志按天分文件。 */
 function localDate(d = new Date()) {
   const p = (n) => String(n).padStart(2, '0')
@@ -75,12 +132,17 @@ export function createSafety({ dataDir, getSettings, windowMs = 60000 } = {}) {
   }
 
   const safety = {
-    /** 包名白名单校验：白名单空 = 不限制；不在名单 → 拒绝。 */
+    /** 最近一次 gate 拒绝的原因（REJECT 时给调用方写进 step note，让模型知道为什么）。 */
+    lastReject: '',
+    /** 包名白名单校验：先过黑名单；白名单空 = 不限制；不在名单 → 拒绝。 */
     checkPackage(pkg) {
+      const p = String(pkg || '').trim()
+      // 整包黑名单优先：白名单留空也拦得住
+      if (p && DENY_PKGS.includes(p)) return { ok: false, reason: `这个应用被禁用：${p}` }
       const s = getSettings() || {}
       const wl = (s.whitelist || []).map((x) => String(x).trim()).filter(Boolean)
       if (wl.length === 0) return { ok: true }
-      if (!pkg || !wl.includes(pkg)) return { ok: false, reason: `包名不在白名单: ${pkg || '(未知)'}` }
+      if (!p || !wl.includes(p)) return { ok: false, reason: `包名不在白名单: ${p || '(未知)'}` }
       return { ok: true }
     },
 
@@ -139,14 +201,31 @@ export function createSafety({ dataDir, getSettings, windowMs = 60000 } = {}) {
      * 顺序：白名单拒绝 → 试运行 → 写操作需确认（且尚未批准过）→ 放行。
      * blind=true 表示「坐标点击、没有节点文字」：无法判断是不是写操作，按需确认处理（一审 #19-4）。
      */
-    async gate({ pkg, nodeText, blind = false } = {}) {
+    async gate({ pkg, nodeText, kind = '', blind = false } = {}) {
       // 1) 白名单
       const cp = safety.checkPackage(pkg)
-      if (!cp.ok) return 'REJECT'
+      if (!cp.ok) { safety.lastReject = cp.reason || '包名不在白名单'; return 'REJECT' }
+      // 1.5) 包级硬禁令（用户授权红线，不走确认、批准无效）
+      const banned = blockHit(pkg, kind, nodeText)
+      if (banned) {
+        safety.lastReject = banned
+        safety.log('BLOCKED', `${pkg}\t${kind}\t${banned}`).catch(() => {})
+        return 'REJECT'
+      }
+      // 1.6) 广告 / 站外跳转按钮：点类动作命中这些字就直接拒，不去下载页也不跳出 App
+      if (['tap', 'double_tap', 'long_press'].includes(String(kind || '').toLowerCase())) {
+        const ad = AD_WORDS.find((w) => String(nodeText || '').includes(w))
+        if (ad) {
+          safety.lastReject = `这是广告/跳转按钮（「${ad}」），点了会被带去别处`
+          safety.log('BLOCKED', `${pkg}\t${kind}\t广告词「${ad}」`).catch(() => {})
+          return 'REJECT'
+        }
+      }
+      safety.lastReject = ''
       // 2) 试运行：只出计划不真点击（先于确认，避免 dryRun 期间堆积确认项）
       const s = getSettings() || {}
       if (s.dryRun) return 'DRY_RUN'
-      // 3) 写操作需主人确认；已批准过的 同包名+同节点文本 直接放行（但只放行一次，见下）。
+      // 3) 写操作需用户确认；已批准过的 同包名+同节点文本 直接放行（但只放行一次，见下）。
       //    blind 一律按写操作处理（复审残留 P0-2）：盲点就是无法判断，不能因为模型顺手填了
       //    「刷新」之类的文字就 ALLOW——宁可多弹一次确认。
       if (s.confirmWrites && (safety.isWriteAction(nodeText) || blind)) {

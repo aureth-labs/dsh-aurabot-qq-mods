@@ -461,10 +461,109 @@ test('素材包：没配下载地址 → 明确报错不炸；包已就位 → �
   assert.match(r.json.message, /下载地址/, '提示去面板配置地址，而不是抛错')
 
   writePack(process.env.AURABOT_DATA_DIR, 'default', { 'anim-001.webm': WEBM }, { pools: {} })
+  mkdirSync(join(process.env.AURABOT_DATA_DIR, 'modules-data', 'pet', 'house'), { recursive: true })
+  const houseOk = join(process.env.AURABOT_DATA_DIR, 'modules-data', 'pet', 'house')
+  writeFileSync(join(houseOk, 'manifest.json'), '{}')
+  writeFileSync(join(houseOk, 'day.jpg'), 'fake-jpeg') // manifest + 至少一张图 = 完整（manifest-only 现在算缺）
   const skip = await env.exports.ensureDefaultPack(false)
   assert.equal(skip.ok, true)
   assert.equal(skip.skipped, true, '包已就位时非 force 调用跳过')
   assert.ok(!existsSync(env.api.dataDir('packs-staging')), '不留下暂存目录')
+})
+
+// ---------- 小屋素材自动落位（原素材源 404 后，素材收进素材仓 pet-home/，随素材包 zip 搭车落位） ----------
+
+test('素材包自动下载：zip 带 pet-home/ → 小屋素材（manifest.json+图片）一并落位 house/；README 不带', async () => {
+  const fakeZip = tinyZip([
+    ['dsh-aurabot-qq-mods-main/', Buffer.alloc(0)],
+    ['dsh-aurabot-qq-mods-main/pet-pack/', Buffer.alloc(0)],
+    ['dsh-aurabot-qq-mods-main/pet-pack/default-config.json', Buffer.from('{}')],
+    ['dsh-aurabot-qq-mods-main/pet-pack/default-animation/anim-001.webm', WEBM],
+    ['dsh-aurabot-qq-mods-main/pet-home/', Buffer.alloc(0)],
+    ['dsh-aurabot-qq-mods-main/pet-home/manifest.json', Buffer.from('{"world":{"w":1672,"h":941}}')],
+    ['dsh-aurabot-qq-mods-main/pet-home/day.jpg', Buffer.from('fake-jpeg')],
+    ['dsh-aurabot-qq-mods-main/pet-home/desk-a.png', Buffer.from('fake-png')],
+    ['dsh-aurabot-qq-mods-main/pet-home/README.md', Buffer.from('# pet-home')],
+  ])
+  const env = startModule({
+    settings: { petPackUrl: 'https://example.com/mods.zip' },
+    hooks: { fetchZip: async () => ({ ok: true, arrayBuffer: async () => fakeZip.buffer.slice(fakeZip.byteOffset, fakeZip.byteOffset + fakeZip.byteLength) }) },
+  })
+  const r = await env.call('/packs/fetch-default', { method: 'POST', json: {} })
+  assert.equal(r.json.ok, true, r.json.message)
+  assert.equal(r.json.houseCount, 3, 'manifest + 2 张图落位 3 个文件')
+  const house = join(process.env.AURABOT_DATA_DIR, 'modules-data', 'pet', 'house')
+  assert.ok(existsSync(join(house, 'manifest.json')), 'manifest.json 落位')
+  assert.ok(existsSync(join(house, 'day.jpg')), '底图落位')
+  assert.ok(existsSync(join(house, 'desk-a.png')), '姿势帧落位')
+  assert.ok(!existsSync(join(house, 'README.md')), 'README 不落位（只收清单与图片）')
+})
+
+test('素材包：形象包已就位但小屋素材缺失 → 非 force 也要下载（只缺小屋也触发落位）', async () => {
+  const fakeZip = tinyZip([
+    ['mods-main/pet-home/', Buffer.alloc(0)],
+    ['mods-main/pet-home/manifest.json', Buffer.from('{}')],
+    ['mods-main/pet-home/night.jpg', Buffer.from('fake-jpeg')],
+  ])
+  const env = startModule({
+    settings: { petPackUrl: 'https://example.com/mods.zip' },
+    hooks: { fetchZip: async () => ({ ok: true, arrayBuffer: async () => fakeZip.buffer.slice(fakeZip.byteOffset, fakeZip.byteOffset + fakeZip.byteLength) }) },
+  })
+  writePack(process.env.AURABOT_DATA_DIR, 'default', { 'anim-001.webm': WEBM }, { pools: {} }) // 形象包已就位
+  const r = await env.exports.ensureDefaultPack(false)
+  assert.equal(r.ok, true, r.message)
+  assert.equal(r.skipped, undefined, '只缺小屋时不跳过')
+  assert.equal(r.houseCount, 2, '小屋素材落位 2 个文件')
+  assert.ok(existsSync(join(env.api.dataDir('house'), 'night.jpg')))
+})
+
+test('小屋素材：manifest 在但一张图都没有（上次下载中断）→ 算缺，非 force 也要补齐落位', async () => {
+  const fakeZip = tinyZip([
+    ['mods-main/pet-home/', Buffer.alloc(0)],
+    ['mods-main/pet-home/manifest.json', Buffer.from(JSON.stringify({ poses: { desk: { frames: [{ src: 'desk-a.png' }] } } }))],
+    ['mods-main/pet-home/day.jpg', Buffer.from('fake-day')],
+    ['mods-main/pet-home/desk-a.png', Buffer.from('fake-desk')],
+  ])
+  const env = startModule({
+    settings: { petPackUrl: 'https://example.com/mods.zip' },
+    hooks: { fetchZip: async () => ({ ok: true, arrayBuffer: async () => fakeZip.buffer.slice(fakeZip.byteOffset, fakeZip.byteOffset + fakeZip.byteLength) }) },
+  })
+  // 上次中断的现场：manifest 落到了、图片一张都没落
+  const house = env.api.dataDir('house')
+  mkdirSync(house, { recursive: true })
+  writeFileSync(join(house, 'manifest.json'), '{"poses":{"desk":{"frames":[{"src":"desk-a.png"}]}}}')
+  writePack(process.env.AURABOT_DATA_DIR, 'default', { 'anim-001.webm': WEBM }, { pools: {} }) // 形象包已就位
+  const r = await env.exports.ensureDefaultPack(false)
+  assert.equal(r.ok, true, r.message)
+  assert.equal(r.skipped, undefined, '半截包要触发补全，不能跳过')
+  assert.equal(r.houseCount, 2, '已有 manifest 不重拷，补齐 2 张图')
+  assert.ok(existsSync(join(house, 'day.jpg')), '底图补上了')
+  assert.ok(existsSync(join(house, 'desk-a.png')), 'manifest 引用的姿势帧补上了')
+})
+
+test('小屋素材：补齐时不覆盖已有文件（手改的 manifest/图片保持原样，只补缺的）', async () => {
+  const fakeZip = tinyZip([
+    ['mods-main/pet-home/', Buffer.alloc(0)],
+    ['mods-main/pet-home/manifest.json', Buffer.from(JSON.stringify({ poses: { desk: { frames: [{ src: 'desk-a.png' }] } } }))],
+    ['mods-main/pet-home/day.jpg', Buffer.from('zip-version-day')],
+    ['mods-main/pet-home/desk-a.png', Buffer.from('zip-desk')],
+  ])
+  const env = startModule({
+    settings: { petPackUrl: 'https://example.com/mods.zip' },
+    hooks: { fetchZip: async () => ({ ok: true, arrayBuffer: async () => fakeZip.buffer.slice(fakeZip.byteOffset, fakeZip.byteOffset + fakeZip.byteLength) }) },
+  })
+  // 上次中断：manifest（主人改过内容）与底图已落，姿势帧缺
+  const house = env.api.dataDir('house')
+  mkdirSync(house, { recursive: true })
+  writeFileSync(join(house, 'manifest.json'), '{"poses":{"desk":{"frames":[{"src":"desk-a.png"}]}}, "_myCustom": true}')
+  writeFileSync(join(house, 'day.jpg'), 'my-custom-day')
+  writePack(process.env.AURABOT_DATA_DIR, 'default', { 'anim-001.webm': WEBM }, { pools: {} })
+  const r = await env.exports.ensureDefaultPack(false)
+  assert.equal(r.ok, true, r.message)
+  assert.equal(r.houseCount, 1, '只补缺的 1 个文件，已有的两个不动')
+  assert.equal(readFileSync(join(house, 'manifest.json'), 'utf8'), '{"poses":{"desk":{"frames":[{"src":"desk-a.png"}]}}, "_myCustom": true}', '手改过的 manifest 不被覆盖')
+  assert.equal(readFileSync(join(house, 'day.jpg'), 'utf8'), 'my-custom-day', '已有底图不被 zip 版覆盖')
+  assert.ok(existsSync(join(house, 'desk-a.png')), '缺的姿势帧补上了')
 })
 
 test('素材包：status().packInfo 给面板用（地址 / 是否就位 / 动画数 / 包列表）', async () => {
@@ -566,6 +665,50 @@ test('clientStatus：手改 app/main.js → changed 点名，但不谎报「跑�
   const st = env.exports.clientStatus()
   assert.deepEqual(st.changed, ['main.js'])
   assert.equal(st.healthy, true) // 内容不同 ≠ 缺文件：只是提醒「重新生成会覆盖」
+})
+
+// ---------- 升级自动重装（治「市场升级后点小屋还是白屏」：app/ 副本不随模块升级更新） ----------
+
+/** 与模块 clientTemplate/installedSig 同算法：算 app/ 现状的模板签名（模拟「旧版模板生成时的凭据」）。 */
+function appSig(app) {
+  const names = ['main.js', 'preload.js', 'index.html', 'physics.js', 'packmeta.js', 'behavior.js', 'chat.html', 'house.html', 'house.js']
+  const files = names.map((f) => {
+    try { return { name: f, hash: createHash('sha1').update(readFileSync(join(app, f))).digest('hex').slice(0, 12) } } catch { return null }
+  }).filter(Boolean)
+  if (!files.length) return ''
+  return createHash('sha1').update(files.map((f) => `${f.name}:${f.hash}`).join('|')).digest('hex').slice(0, 12)
+}
+
+test('autoRegenClient：升级后 app/ 未被手改 → 模块重启时自动重新生成，凭据跟上新模板', async () => {
+  const env = startModule()
+  await env.call('/client/install', { method: 'POST', json: {} })
+  const app = env.api.dataDir('app')
+  // 伪装「旧版模板生成的壳」：main.js 是旧内容，凭据 sig 与这份旧内容一致（= 没被手改过）
+  writeFileSync(join(app, 'main.js'), '// 旧版 main.js：没有小屋白屏兜底\n')
+  writeFileSync(join(app, 'client-stamp.json'), JSON.stringify({ sig: appSig(app), at: 1 }))
+  const st = env.exports.clientStatus()
+  assert.equal(st.outdated, true, '升级后模板与凭据签名不一致 = outdated')
+  assert.equal(st.healthy, false)
+  // 模拟插件重启：同一数据目录重新 setup（启动段会调 autoRegenClient）
+  startModule()
+  assert.equal(readFileSync(join(app, 'main.js'), 'utf8').includes('旧版 main.js'), false, '旧 main.js 已被新模板覆盖')
+  const st2 = env.exports.clientStatus()
+  assert.equal(st2.healthy, true, st2.message)
+  assert.equal(st2.generatedSig, st2.sig, '生成凭据已跟上新模板')
+})
+
+test('autoRegenClient：手改过的过期 app/ → 绝不自动覆盖，维持面板提示', async () => {
+  const env = startModule()
+  await env.call('/client/install', { method: 'POST', json: {} })
+  const app = env.api.dataDir('app')
+  const p = join(app, 'main.js')
+  writeFileSync(p, readFileSync(p, 'utf8') + '\n// 用户手改：别动我的\n')
+  writeFileSync(join(app, 'client-stamp.json'), JSON.stringify({ sig: 'oldoldold123', at: 1 }))
+  startModule() // 模拟重启：签名对不上凭据 = 手改过，不许覆盖
+  assert.ok(readFileSync(p, 'utf8').includes('用户手改'), '手改内容原样保留')
+  const st = env.exports.clientStatus()
+  assert.deepEqual(st.changed, ['main.js']) // 面板点名手改文件，提示重新生成会覆盖
+  assert.match(st.message, /更新|重新生成/)
 })
 
 test('/status：带 client 对账字段（面板「桌宠」卡据此提示）', async () => {
@@ -2009,9 +2152,10 @@ test('1.0.14：defaults 与 /config 下发甩抛物理与互动开关；坏值�
   assert.equal(mod.defaults.petShowBalance, true)
   assert.equal(mod.defaults.petClickChase, false)
   assert.equal(mod.defaults.petTeaseChase, false)
-  // 版本三处同步：module.json 与 index.mjs 一起升
-  assert.equal(mod.version, '1.0.14')
-  assert.equal(JSON.parse(readFileSync(join(MODULE_DIR, 'module.json'), 'utf8')).version, '1.0.14')
+  // 版本三处同步：module.json 与 index.mjs 一起升（以 module.json 为准比对，免得每次升版本都改测试）
+  const modVersion = JSON.parse(readFileSync(join(MODULE_DIR, 'module.json'), 'utf8')).version
+  assert.equal(mod.version, modVersion)
+  assert.match(modVersion, /^\d+\.\d+\.\d+$/)
 
   const cfg = await env.call('/config')
   assert.equal(cfg.status, 200)
@@ -2093,6 +2237,20 @@ test('1.0.14：/balance 默认诚实降级（ok:false）；注入 petHooks.fetch
   // 鉴权：坏令牌 401，与其它路由同口径
   const bad = await env.call('/balance', { token: 'deadbeef'.repeat(6) })
   assert.equal(bad.status, 401)
+})
+
+// ---------- 渲染页静态自检：index.html 不许有重复声明（1.0.15 真实翻车回归） ----------
+
+test('index.html：animRate / __setAnimRate 各只声明一次（重复声明=SyntaxError 整页挂=桌宠全透明）', () => {
+  // 1.0.15 真实事故：`let animRate` 在文件开头与 L285 各写了一遍，渲染页一启动就
+  // 抛 "Identifier 'animRate' has already been declared"，整段 <script> 不执行，
+  // 窗口/进程/心跳全活着但画面全透明——用户看到的就是「更新后桌宠不显示」。
+  // 这里做静态断言把这类「同一标识符声明两遍」挡在打包前。
+  const html = readFileSync(join(MODULE_DIR, 'pet-client', 'index.html'), 'utf8')
+  const letAnimRate = [...html.matchAll(/^\s*let animRate\b/gm)].length
+  assert.equal(letAnimRate, 1, `let animRate 只能声明一次，现在 ${letAnimRate} 次`)
+  const setAnimRate = [...html.matchAll(/window\.__setAnimRate\s*=/g)].length
+  assert.equal(setAnimRate, 1, `window.__setAnimRate 只能定义一次，现在 ${setAnimRate} 次`)
 })
 
 

@@ -32,6 +32,7 @@ modules/<id>/
   "description": "一句话说明",
   "category": "tool",
   "tags": ["天气"],
+  "platforms": ["qq"],
   "author": "作者",
   "license": "MIT",
   "api": 1,
@@ -49,6 +50,7 @@ modules/<id>/
 | `name`、`description`、`author`、`license` | 是 | 显示在模块市场 |
 | `category` | 是 | 分类，见下表 |
 | `tags` | 否 | 搜索用的关键词，最多 5 个 |
+| `platforms` | 否 | 支持的平台：不写 = 只支持 `qq`；`["*"]` = 全平台；也可以写 `["qq", "feishu"]`。只影响市场和加载提示，不是安全边界 |
 | `version` | 是 | `主.次.修`，和入口文件里的 `version` 一样 |
 | `api` | 是 | 按哪一版扩展接口写的，和入口文件里的 `api` 一样 |
 | `minPluginVersion` | 是 | 最低插件版本 |
@@ -121,6 +123,7 @@ CI 会扫描源码，用到却没声明就不通过。**能力声明不是沙箱
       "minPluginVersion": "1.1.24",
       "requires": [],
       "capabilities": ["network"],
+      "platforms": ["qq"],
       "replacesBuiltin": false,
       "tag": "weather-v1.0.0",
       "file": "weather-v1.0.0.zip",

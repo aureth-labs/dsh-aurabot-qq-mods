@@ -1,0 +1,14 @@
+{
+  "name": "aurabot-news-module",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Aurabot 每日新闻一图流模块",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  }
+}

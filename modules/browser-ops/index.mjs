@@ -20,7 +20,7 @@ import { createGuides } from './lib/guides.mjs'
 export default {
   id: 'browser-ops',
   name: '逛网页（浏览器自动化）',
-  version: '1.1.1',
+  version: '1.2.5',
   api: 1,
   description: '封装 CDP 专用浏览器（独立登录资料）：提供打开网页、点击、输入、滚动、截屏、页面快照等原子操作，供其他模块经 api.use(\'browser-ops\') 复用。',
   panel: 'panel.js',
@@ -69,6 +69,8 @@ export default {
           profileDir,
           browserPath: () => getSettings().browserPath,
           log: api.log,
+          // 全局开关：连 DSH 侧边浏览器（共享 ego 实例），关着走原来的专用浏览器
+          useEgo: () => api.config().browser?.useDshSidebar === true,
         })
       }
       return browser

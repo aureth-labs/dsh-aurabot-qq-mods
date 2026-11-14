@@ -1,0 +1,24 @@
+{
+  "id": "hongguo",
+  "name": "刷红果短剧",
+  "version": "0.1.0",
+  "description": "用专用浏览器刷红果短剧：看推荐、记下看过的，刷到好看的用 QQ 私聊告诉主人。看完会把标题、简介、播放时抓的画面帧和真实热评一起交给模型判断好不好看，只有真的觉得值得才分享。",
+  "category": "platform",
+  "tags": [
+    "红果短剧",
+    "短剧"
+  ],
+  "author": "fengzhi-97",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "network",
+    "filesystem",
+    "process",
+    "plugin-config",
+    "plugin-internals"
+  ],
+  "homepage": "https://github.com/aureth-labs/dsh-aurabot-qq"
+}

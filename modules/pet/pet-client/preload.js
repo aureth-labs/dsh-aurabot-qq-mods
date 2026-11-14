@@ -3,7 +3,17 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('petBridge', {
-  /** 把窗口挪到绝对位置（拖拽时按指针位移换算出的左上角）。 */
+  /** 主进程权威拖拽·开始（2026-11-07 新增）：渲染页 pointerdown 只发信号不传坐标——
+   *  主进程自己读 screen.getCursorScreenPoint() 记 grabOffset 并起 60fps 挪窗循环。
+   *  旧渲染页自算坐标（screenInfo + e.screenX）在穿透窗 + setZoomFactor 下会错位（拖拽偏移根因）。 */
+  dragStart: () => ipcRenderer.send('pet:drag-start'),
+  /** 拖拽·心跳（新增）：pointermove 按 rAF 节流发一次，不带坐标，只证明「指针还按着」。
+   *  真实挪窗与轨迹采样全在主进程循环里，渲染页不再参与几何计算。 */
+  dragMove: () => ipcRenderer.send('pet:drag-move'),
+  /** 拖拽·结束（新增）：isClick=true 表示原地轻点（位移 <6px），主进程原地掉落（受 releaseLand 门控）；
+   *  false 则由主进程用 DIP 轨迹估初速决定甩抛或温柔放下。 */
+  dragEnd: (isClick) => ipcRenderer.send('pet:drag-end', Boolean(isClick)),
+  /** 把窗口挪到绝对位置（拖拽时按指针位移换算出的左上角）。旧通道保留：兼容老渲染页/调试脚本。 */
   moveTo: (x, y) => ipcRenderer.send('pet:move', { x, y }),
   /** 甩抛：主进程接管物理循环，落定后回调 __onThrowEnd。 */
   throwWith: (vx, vy) => ipcRenderer.send('pet:throw', { vx, vy }),

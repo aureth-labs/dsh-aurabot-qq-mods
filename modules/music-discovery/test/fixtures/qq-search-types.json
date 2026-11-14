@@ -1,0 +1,63 @@
+{
+  "_comment": "按 materials/QQ官方-20261113/discover.md 的字段构造的脱敏 fixture；不是真实账号数据，也不是真实回包",
+  "ret": 0,
+  "sub_ret": 0,
+  "hasMore": true,
+  "albums": [
+    {
+      "albumMid": "0025NhlN2yWrP4",
+      "albumName": "叶惠美",
+      "singerName": "周杰伦",
+      "publicTime": "2003-07-31",
+      "listenNum": 12345678,
+      "category": "华语流行",
+      "albumDesc": "周杰伦第四张录音室专辑"
+    },
+    {
+      "albumMid": "000MkMni1yWrP4",
+      "albumName": "范特西",
+      "singerName": "周杰伦",
+      "publicTime": "2001-09-14",
+      "listenNum": 22345678,
+      "category": "华语流行",
+      "albumDesc": "周杰伦第二张录音室专辑"
+    }
+  ],
+  "playlists": [
+    {
+      "dissId": 9011001,
+      "dissName": "夜跑电子节拍",
+      "dissDesc": "适合夜跑的低频电子",
+      "creatorName": "音乐小助手"
+    },
+    {
+      "dissId": 9011002,
+      "dissName": "通勤路上的轻音乐",
+      "dissDesc": "地铁里也能安静听",
+      "creatorName": "清晨电台"
+    }
+  ],
+  "mvs": [
+    {
+      "mvVid": "0139MnYb0qxYhV",
+      "mvName": "晴天",
+      "singerName": "周杰伦",
+      "playCount": 9876543,
+      "publicTime": "2003-07-31",
+      "mvUrl": "https://y.qq.com/n/ryqq/mv/0139MnYb0qxYhV"
+    }
+  ],
+  "radios": [
+    {
+      "albumMid": "0039MnYb0qxYhV",
+      "albumName": "深夜电台",
+      "singerName": "夜听主播",
+      "listenNum": 456789,
+      "albumDesc": "睡前故事与轻音乐"
+    }
+  ],
+  "singers": [
+    { "singerMid": "0025NhlN2yWrP4", "singerName": "周杰伦", "songNum": 428, "albumNum": 15 },
+    { "singerMid": "001BLpXF2DyJe2", "singerName": "林俊杰", "songNum": 312, "albumNum": 14 }
+  ]
+}

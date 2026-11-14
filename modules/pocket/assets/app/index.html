@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#eaf5ff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>口袋aurabot</title>
+<link rel="icon" href="icons/avatar.png">
+<link rel="apple-touch-icon" href="icons/avatar.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="sea">
+  <div class="sea-bubble b1"></div><div class="sea-bubble b2"></div><div class="sea-bubble b3"></div>
+  <div class="sea-bubble b4"></div><div class="sea-bubble b5"></div><div class="sea-bubble b6"></div>
+</div>
+
+<div id="app">
+
+  <!-- 配对页（没地址/密钥时） -->
+  <section id="view-pair" class="view" hidden>
+    <div class="pair-card glass">
+      <img class="pair-avatar" src="icons/avatar.png" alt="">
+      <h1>口袋aurabot</h1>
+      <p class="pair-sub">把她装进口袋里。<br>先和电脑上的「口袋aurabot」模块配对。</p>
+      <label>电脑地址
+        <input id="pair-host" type="text" inputmode="url" placeholder="192.168.1.5:7788" autocomplete="off">
+      </label>
+      <label>配对密钥
+        <input id="pair-token" type="text" placeholder="pk_xxx（面板里复制）" autocomplete="off">
+      </label>
+      <button id="pair-go" class="btn-primary">连上她</button>
+      <p class="pair-hint">密钥在 DSH 面板「口袋aurabot」模块页。<br>在家填局域网地址；出门也能用就把外网地址也填上，逗号隔开，App 会自动挑能通的。</p>
+      <p id="pair-err" class="pair-err" hidden></p>
+      <div id="pair-codes" class="pair-codes"></div>
+    </div>
+  </section>
+
+  <!-- 聊天 -->
+  <section id="view-chat" class="view" hidden>
+    <header class="topbar glass">
+      <img class="top-avatar" id="chat-avatar" src="icons/avatar.png" alt="">
+      <div class="top-meta">
+        <b id="chat-name">…</b>
+        <small id="chat-status">连接中…</small>
+      </div>
+      <button class="icon-btn" id="btn-scroll-down" title="回到底部">↓</button>
+    </header>
+    <div id="chat-list" class="chat-list">
+      <div id="chat-day" class="day-divider" hidden></div>
+    </div>
+    <div id="typing" class="typing glass" hidden><span></span><span></span><span></span></div>
+    <div id="img-preview" class="img-preview glass" hidden>
+      <img id="img-preview-img" alt="">
+      <div class="pv-meta"><b>图片准备好了</b><small id="img-preview-size">点发送一起发出去</small></div>
+      <button id="img-preview-del" class="chip-btn" aria-label="取消图片">✕</button>
+    </div>
+    <div id="rec-indicator" class="rec-indicator glass" hidden>
+      <span class="rec-dot"></span>录音中… 松开发送
+    </div>
+    <div id="emoji-panel" class="emoji-panel glass" hidden></div>
+    <footer class="inputbar glass">
+      <button id="chat-emoji" class="icon-btn" aria-label="表情" title="表情">😊</button>
+      <button id="chat-img" class="icon-btn" aria-label="发图" title="发图">📷</button>
+      <button id="chat-mic" class="icon-btn" aria-label="按住说话" title="按住说话">🎤</button>
+      <textarea id="chat-input" rows="1" placeholder="说点什么…" maxlength="4000"></textarea>
+      <button id="chat-send" class="btn-primary send-btn" aria-label="发送">➤</button>
+      <input type="file" id="chat-file" accept="image/*" hidden>
+      <input type="file" id="avatar-file" accept="image/*" hidden>
+    </footer>
+  </section>
+
+  <!-- 空间 -->
+  <section id="view-moments" class="view" hidden>
+    <header class="topbar glass">
+      <img class="top-avatar" id="mo-avatar" src="icons/avatar.png" alt="">
+      <div class="top-meta"><b id="mo-name">她的空间</b><small id="mo-mood"></small></div>
+    </header>
+    <div class="moments-scroll">
+      <div class="mood-card glass">
+        <div class="mood-head"><span>心情曲线</span><b id="mood-value">–</b></div>
+        <svg id="mood-chart" viewBox="0 0 320 80" preserveAspectRatio="none"></svg>
+      </div>
+      <div id="moments-list"></div>
+    </div>
+  </section>
+
+  <!-- 宠物 -->
+  <section id="view-pet" class="view" hidden>
+    <header class="topbar glass">
+      <div class="top-meta center"><b>小窝</b><small id="pet-sub">她在里面游来游去</small></div>
+    </header>
+    <div class="pet-stage">
+      <div class="pet-halo"></div>
+      <div id="pet-mascot" class="pet-mascot">
+        <img id="pet-img" src="icons/avatar.png" alt="">
+      </div>
+      <button id="pet-avatar-btn" class="pet-avatar-btn glass" aria-label="换形象" title="换形象">📷</button>
+      <div id="pet-bubble" class="pet-bubble glass" hidden></div>
+      <div id="pet-fx" class="pet-fx"></div>
+    </div>
+    <div class="pet-stats glass">
+      <div class="stat"><span>🍚 饱食度</span><div class="bar"><i id="bar-satiety"></i></div><b id="val-satiety">–</b></div>
+      <div class="stat"><span>💗 心情</span><div class="bar"><i id="bar-mood"></i></div><b id="val-mood">–</b></div>
+      <div class="stat"><span>🫧 亲密度</span><div class="bar"><i id="bar-intimacy"></i></div><b id="val-intimacy">–</b></div>
+    </div>
+    <div class="pet-actions glass">
+      <div class="food-grid" id="food-grid"></div>
+      <div class="pet-btns">
+        <button class="btn-soft" data-action="pet">🤚 摸摸头</button>
+        <button class="btn-soft" data-action="play">🎣 陪她玩</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 设置 -->
+  <section id="view-settings" class="view" hidden>
+    <header class="topbar glass">
+      <div class="top-meta center"><b>设置</b></div>
+    </header>
+    <div class="settings-scroll">
+      <div class="glass card">
+        <h3>🖼️ 她的形象</h3>
+        <p class="card-sub">从相册挑一张换成她的头像，小窝、聊天顶栏、空间一起换（只改你这台看到的）</p>
+        <div class="avatar-row">
+          <img class="avatar-preview" id="set-avatar-img" src="icons/avatar.png" alt="">
+          <div class="avatar-btns">
+            <button class="btn-soft" id="btn-avatar-pick">从相册选</button>
+            <button class="btn-soft" id="btn-avatar-reset">恢复默认</button>
+          </div>
+        </div>
+      </div>
+      <div class="glass card">
+        <h3>🎨 界面配色</h3>
+        <p class="card-sub">八套基础色调，只换界面颜色，图标不动</p>
+        <div id="tone-grid" class="tone-grid"></div>
+        <label class="chk"><input type="checkbox" id="tone-local"> 只改这台手机的（不写回电脑）</label>
+      </div>
+      <div class="glass card">
+        <h3>🔗 连接</h3>
+        <div class="kv"><span>电脑</span><b id="set-host">–</b></div>
+        <div class="kv"><span>密钥</span><b id="set-token">–</b></div>
+        <div class="kv"><span>QQ</span><b id="set-qq">–</b></div>
+        <div class="kv"><span>记忆</span><b id="set-mem">–</b></div>
+        <div class="kv"><span>版本</span><b id="set-ver">–</b></div>
+        <button class="btn-soft" id="btn-repair">重新配对</button>
+      </div>
+      <div class="glass card">
+        <h3>ℹ️ 关于</h3>
+        <p class="card-sub">口袋aurabot · 她的口袋版。<br>消息走她电脑上的原生对话流：记忆、心情、表情包、语音、模组全都在，和 QQ 端共用同一份记忆。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 底部导航 -->
+  <nav id="tabbar" class="glass" hidden>
+    <button data-tab="chat" class="on"><span class="tab-ico">💬</span><span>聊天</span></button>
+    <button data-tab="moments"><span class="tab-ico">🌊</span><span>空间</span></button>
+    <button data-tab="pet"><span class="tab-ico">🐋</span><span>小窝</span></button>
+    <button data-tab="settings"><span class="tab-ico">⚙️</span><span>设置</span></button>
+  </nav>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

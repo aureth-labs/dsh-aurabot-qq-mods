@@ -1,0 +1,25 @@
+{
+  "id": "autonomy",
+  "name": "自主生活",
+  "version": "0.6.1",
+  "description": "让她自己决定这一刻做什么、下次什么时候醒。运行时不预设任何权限：调模型、操作手机都要主人在面板里逐项授权后才生效。",
+  "category": "desktop",
+  "tags": [
+    "自主",
+    "生活",
+    "手机"
+  ],
+  "author": "asyncxt",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "filesystem",
+    "process",
+    "network",
+    "plugin-config",
+    "plugin-internals"
+  ],
+  "homepage": "https://github.com/asyncxt/aurabot-mod-autonomy"
+}

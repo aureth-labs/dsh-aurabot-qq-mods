@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小本本</title>
+<!-- 手写字体：霞鹜文楷（OFL 开源），加载失败时回退到本机楷体 -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-webfont@1.7.0/style.css">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: linear-gradient(160deg, #4a4036 0%, #5c5147 55%, #463d33 100%);
+    font-family: 'LXGW WenKai', 'Kaiti SC', KaiTi, 楷体, STKaiti, cursive;
+    display: flex; flex-direction: column; align-items: center;
+    min-height: 100vh; padding: 18px 10px 12px; overflow-x: hidden;
+  }
+  #title {
+    color: #e8ddc8; font-size: 22px; letter-spacing: 6px; margin-bottom: 4px;
+    text-shadow: 0 2px 6px rgba(0,0,0,.45);
+  }
+  #search {
+    width: min(70vw, 320px); margin: 6px 0 14px; padding: 5px 14px;
+    border: 1px solid rgba(232,221,200,.35); border-radius: 16px;
+    background: rgba(0,0,0,.18); color: #e8ddc8; outline: none;
+    font-family: inherit; font-size: 14px;
+  }
+  #search::placeholder { color: rgba(232,221,200,.5); }
+
+  #book {
+    position: relative; width: min(94vw, 880px); height: min(64vh, 560px); min-height: 400px;
+    perspective: 1400px;
+  }
+  #spread {
+    position: absolute; inset: 0; display: flex;
+    transform-style: preserve-3d; transition: none;
+  }
+  #spread.out-next { animation: outNext 230ms ease-in forwards; }
+  #spread.out-prev { animation: outPrev 230ms ease-in forwards; }
+  #spread.in-next  { animation: inNext 260ms ease-out; }
+  #spread.in-prev  { animation: inPrev 260ms ease-out; }
+  @keyframes outNext { from { transform: rotateY(0); opacity: 1; } to { transform: rotateY(-75deg); opacity: .25; } }
+  @keyframes outPrev { from { transform: rotateY(0); opacity: 1; } to { transform: rotateY(75deg); opacity: .25; } }
+  @keyframes inNext  { from { transform: rotateY(55deg); opacity: .2; } to { transform: rotateY(0); opacity: 1; } }
+  @keyframes inPrev  { from { transform: rotateY(-55deg); opacity: .2; } to { transform: rotateY(0); opacity: 1; } }
+
+  .page {
+    flex: 1; position: relative; overflow: hidden;
+    background:
+      repeating-linear-gradient(transparent 0 27px, rgba(70,110,160,.16) 27px 28px),
+      linear-gradient(#fdf8ee, #f7efdd);
+    box-shadow: inset 0 0 42px rgba(120,90,50,.14);
+    padding: 30px 18px 34px 56px;
+  }
+  .page.left {
+    border-radius: 10px 2px 2px 10px;
+    background:
+      repeating-linear-gradient(transparent 0 27px, rgba(70,110,160,.16) 27px 28px),
+      linear-gradient(105deg, #f2e9d6 0%, #fdf8ee 12%, #f7efdd 100%);
+    border-right: 1px solid rgba(0,0,0,.05);
+  }
+  .page.right {
+    border-radius: 2px 10px 10px 2px;
+    padding-left: 30px;
+  }
+  /* 红色边线 */
+  .page::before {
+    content: ''; position: absolute; top: 0; bottom: 0; left: 44px; width: 1.5px;
+    background: rgba(200,80,70,.5);
+  }
+  /* 中缝阴影 */
+  #spine {
+    position: absolute; top: 0; bottom: 0; left: 50%; width: 26px; transform: translateX(-50%);
+    background: linear-gradient(90deg, rgba(60,40,20,.22), rgba(60,40,20,.05) 45%, rgba(60,40,20,.05) 55%, rgba(60,40,20,.22));
+    pointer-events: none; z-index: 5;
+  }
+  /* 装订孔 */
+  .hole {
+    position: absolute; left: 14px; width: 13px; height: 13px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #5c5147, #2e2822 70%);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,.6), 1px 1px 0 rgba(255,255,255,.35);
+  }
+  .page.right .hole { left: auto; right: 14px; }
+
+  .entry {
+    position: relative; margin: 14px 0 0 0; padding: 4px 6px 8px 2px;
+    line-height: 30px; font-size: 17px; color: #2b3a67;
+    cursor: pointer; word-break: break-word;
+    border-bottom: 1px dashed rgba(0,0,0,.06);
+  }
+  .entry .when {
+    font-size: 12px; color: rgba(43,58,103,.55); margin-left: 8px; letter-spacing: 1px;
+  }
+  .entry .stamp {
+    display: inline-block; font-size: 11px; padding: 0 7px; margin-right: 7px;
+    border: 1.6px solid currentColor; border-radius: 3px 9px 4px 8px;
+    transform: rotate(-3deg) translateY(-2px); opacity: .75; letter-spacing: 2px;
+  }
+  .entry .about { color: rgba(43,58,103,.65); font-size: 13px; }
+  .entry .tags { color: rgba(120,90,40,.7); font-size: 13px; }
+  .entry .due {
+    color: #b03028; font-size: 13px; border: 1.5px solid rgba(176,48,40,.6);
+    border-radius: 50% 40% 55% 45%; padding: 0 6px; margin-left: 6px; white-space: nowrap;
+  }
+  .entry .star {
+    color: #c0392b; font-size: 19px; margin-left: 6px; display: inline-block;
+    transform: rotate(12deg); text-shadow: 0 0 2px rgba(192,57,43,.4);
+  }
+  .entry .lockmark {
+    font-size: 12px; margin-left: 5px; opacity: .8; transform: rotate(-8deg); display: inline-block;
+  }
+  .entry.gone { opacity: .42; filter: grayscale(.35); }
+  .entry.gone .txt { color: #555; position: relative; }
+  /* 划掉的粗粝红线 */
+  .entry.gone .strike {
+    position: absolute; left: -4px; right: -4px; top: 52%; height: 10px; pointer-events: none;
+  }
+  .entry.gone .strike path {
+    stroke: #c0392b; stroke-width: 2.6; fill: none; opacity: .8;
+    stroke-linecap: round;
+  }
+  .entry.gone::after {
+    content: '划掉了'; position: absolute; right: 8px; top: -6px;
+    font-size: 11px; color: rgba(192,57,43,.75); transform: rotate(-4deg);
+    border: 1px dashed rgba(192,57,43,.5); border-radius: 4px; padding: 0 5px;
+    background: rgba(253,248,238,.85);
+  }
+
+  .empty {
+    height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    color: rgba(43,58,103,.5); font-size: 18px; letter-spacing: 2px; gap: 10px;
+  }
+  .empty .pen { font-size: 34px; transform: rotate(-15deg); }
+
+  .pagenum {
+    position: absolute; bottom: 8px; font-size: 13px; color: rgba(43,58,103,.45);
+    letter-spacing: 2px;
+  }
+  .page.left .pagenum { left: 40%; }
+  .page.right .pagenum { right: 12%; }
+
+  /* 翻页角：右下往前翻，左下往后翻 */
+  .corner {
+    position: absolute; width: 64px; height: 64px; cursor: pointer; z-index: 8;
+    transition: opacity .2s; opacity: .55;
+  }
+  .corner:hover { opacity: 1; }
+  .corner.next {
+    right: 0; bottom: 0;
+    background: linear-gradient(315deg, rgba(90,70,45,.35) 0%, rgba(90,70,45,.08) 40%, transparent 50%);
+    border-radius: 0 0 10px 0;
+  }
+  .corner.prev {
+    left: 0; bottom: 0;
+    background: linear-gradient(45deg, rgba(90,70,45,.35) 0%, rgba(90,70,45,.08) 40%, transparent 50%);
+    border-radius: 0 0 0 10px;
+  }
+  .corner.hidden { display: none; }
+
+  #bar {
+    margin-top: 12px; display: flex; align-items: center; gap: 14px; color: #e8ddc8;
+    font-size: 14px; letter-spacing: 1px;
+  }
+  #bar button {
+    font-family: inherit; font-size: 14px; padding: 5px 18px; cursor: pointer;
+    border: 1px solid rgba(232,221,200,.4); border-radius: 16px;
+    background: rgba(0,0,0,.18); color: #e8ddc8; letter-spacing: 2px;
+  }
+  #bar button:disabled { opacity: .35; cursor: default; }
+
+  /* 条目操作小菜单 */
+  #menu {
+    position: fixed; z-index: 50; display: flex; gap: 6px; padding: 6px 8px;
+    background: #fffdf6; border: 1px solid rgba(0,0,0,.18); border-radius: 10px;
+    box-shadow: 0 6px 18px rgba(0,0,0,.28); font-size: 13px;
+  }
+  #menu button {
+    font-family: inherit; border: none; background: transparent; cursor: pointer;
+    padding: 3px 8px; border-radius: 6px; color: #2b3a67;
+  }
+  #menu button:hover { background: rgba(43,58,103,.1); }
+  #menu button.red { color: #c0392b; }
+</style>
+</head>
+<body>
+  <div id="title">小 本 本</div>
+  <input id="search" placeholder="翻翻看：写个关键词…" oninput="onSearch()">
+  <div id="book">
+    <div id="spread"></div>
+    <div class="spine-hole-layer" id="holes"></div>
+    <div id="spine"></div>
+    <div class="corner prev" id="cPrev" onclick="go(-1)"></div>
+    <div class="corner next" id="cNext" onclick="go(1)"></div>
+  </div>
+  <div id="bar">
+    <button id="bPrev" onclick="go(-1)">◀ 上一页</button>
+    <span id="pos">—</span>
+    <button id="bNext" onclick="go(1)">下一页 ▶</button>
+  </div>
+  <div id="menu" hidden></div>
+
+<script>
+  const PER_PAGE = 4   // 一面写 4 条，一摊 8 条
+  let all = []          // 全部条目（含划掉的），按时间正序
+  let shown = []        // 过滤后的
+  let page = 0
+  let animating = false
+  let kw = ''
+
+  const KIND = { said: '他说过', promise: '答应过', fact: '他的事', note: '随手记' }
+  const KIND_COLOR = { said: '#2b5aa6', promise: '#b0501c', fact: '#2f7a3d', note: '#7a6a55' }
+  const INKS = ['#2b3a67', '#31456b', '#3d2c4f', '#274690', '#4a3226']
+
+  function hash(s) {
+    let x = 0
+    for (let i = 0; i < String(s).length; i++) x = (x * 31 + String(s).charCodeAt(i)) >>> 8
+    return x
+  }
+  function dayText(t) {
+    const d = new Date(t)
+    const p = (n) => String(n).padStart(2, '0')
+    return `${d.getMonth() + 1}月${d.getDate()}日`
+  }
+  function timeText(t) {
+    const d = new Date(t)
+    const p = (n) => String(n).padStart(2, '0')
+    return `${p(d.getHours())}:${p(d.getMinutes())}`
+  }
+  function esc(s) {
+    return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  }
+
+  // 划掉的粗粝红线：两笔歪歪扭扭的波浪
+  function strikeSvg(w) {
+    const mid = 5 + (hash(w) % 3)
+    return `<svg class="strike" viewBox="0 0 200 10" preserveAspectRatio="none">
+      <path d="M2,${mid} q12,-5 25,0 t25,0 t25,0 t25,0 t25,0 t25,0 t25,0" vector-effect="non-scaling-stroke"/>
+      <path d="M10,${mid + 2} q15,4 30,0 t30,0 t30,0 t30,0" vector-effect="non-scaling-stroke" opacity=".55"/>
+    </svg>`
+  }
+
+  function entryHtml(e) {
+    const h = hash(e.id)
+    const ink = INKS[h % INKS.length]
+    const rot = (((h % 9) + 9) % 9 - 4) * 0.5
+    const gone = e.deletedAt ? ' gone' : ''
+    const tags = (e.tags || []).length ? `<span class="tags">#${e.tags.map(esc).join(' #')}</span>` : ''
+    const due = e.due ? `<span class="due">${esc(e.due)}</span>` : ''
+    const star = e.important ? '<span class="star">★</span>' : ''
+    const lock = e.locked ? '<span class="lockmark" title="已锁定，不会被淘汰">🔒</span>' : ''
+    const stamp = `<span class="stamp" style="color:${KIND_COLOR[e.kind] || KIND_COLOR.note}">${KIND[e.kind] || '随手记'}</span>`
+    const about = e.about ? `<span class="about">关于${esc(e.about)}</span>` : ''
+    const when = `<span class="when">${dayText(e.at)} ${timeText(e.at)}</span>`
+    return `<div class="entry${gone}" data-id="${esc(e.id)}" data-chat="${esc(e.chatId || '')}"
+      style="color:${ink}; transform: rotate(${rot}deg)"
+      onclick="openMenu(event, this)">
+      <div class="txt">${stamp}${about}${esc(e.text)}${tags}${due}${star}${lock}${when}
+        ${e.deletedAt ? strikeSvg(e.id) : ''}
+      </div>
+    </div>`
+  }
+
+  function render() {
+    const spread = document.getElementById('spread')
+    const total = Math.max(1, Math.ceil(shown.length / (PER_PAGE * 2)))
+    if (page >= total) page = total - 1
+    const left = shown.slice(page * PER_PAGE * 2, page * PER_PAGE * 2 + PER_PAGE)
+    const right = shown.slice(page * PER_PAGE * 2 + PER_PAGE, page * PER_PAGE * 2 + PER_PAGE * 2)
+    const holes = Array.from({ length: 6 }, (_, i) =>
+      `<div class="hole" style="top:${8 + i * 15}%"></div>`).join('')
+    const emptyHtml = `<div class="empty"><div class="pen">✎</div>
+      <div>${kw ? '没翻到对得上的' : '这本还空白的'}</div>
+      <div style="font-size:13px; opacity:.7">${kw ? '换个词试试' : '她想到值得记的，就会写在这里'}</div></div>`
+    spread.innerHTML = `
+      <div class="page left">${holes}${left.length ? left.map(entryHtml).join('') : (shown.length ? '<div class="empty" style="width:100%">这一面空的</div>' : emptyHtml)}
+        <div class="pagenum">${page * 2 + 1}</div></div>
+      <div class="page right">${right.length ? right.map(entryHtml).join('') : (page === total - 1 && !shown.length ? '' : '<div class="empty" style="width:100%">这一面空的</div>')}
+        <div class="pagenum">${page * 2 + 2}</div></div>`
+    const goneCount = all.filter((e) => e.deletedAt).length
+    document.getElementById('pos').textContent = shown.length
+      ? `第 ${page * 2 + 1}–${page * 2 + 2} 页 · 本上 ${all.length - goneCount} 条${goneCount ? ` · 划掉 ${goneCount} 条` : ''}`
+      : '还没记'
+    const prevOk = page > 0, nextOk = page < total - 1
+    document.getElementById('bPrev').disabled = !prevOk
+    document.getElementById('bNext').disabled = !nextOk
+    document.getElementById('cPrev').classList.toggle('hidden', !prevOk)
+    document.getElementById('cNext').classList.toggle('hidden', !nextOk)
+  }
+
+  function onSearch() {
+    kw = document.getElementById('search').value.trim().toLowerCase()
+    shown = kw
+      ? all.filter((e) => `${e.text || ''} ${(e.tags || []).join(' ')} ${e.about || ''}`.toLowerCase().includes(kw))
+      : all.slice()
+    page = 0
+    render()
+  }
+
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+
+  async function go(dir) {
+    if (animating) return
+    const total = Math.max(1, Math.ceil(shown.length / (PER_PAGE * 2)))
+    const next = page + dir
+    if (next < 0 || next >= total) return
+    animating = true
+    const el = document.getElementById('spread')
+    el.style.transformOrigin = dir > 0 ? 'left center' : 'right center'
+    el.classList.add(dir > 0 ? 'out-next' : 'out-prev')
+    await wait(230)
+    page = next
+    render()
+    el.classList.remove('out-next', 'out-prev')
+    el.classList.add(dir > 0 ? 'in-next' : 'in-prev')
+    await wait(270)
+    el.classList.remove('in-next', 'in-prev')
+    el.style.transformOrigin = ''
+    animating = false
+  }
+
+  // ---------- 条目菜单：划掉 / 标星 ----------
+  let menuFor = null
+  function openMenu(ev, el) {
+    const menu = document.getElementById('menu')
+    const e = all.find((x) => x.id === el.dataset.id)
+    if (!e) return
+    menuFor = e
+    const gone = !!e.deletedAt
+    menu.innerHTML = `
+      <button class="red" onclick="toggleDel()">${gone ? '↩ 不划了' : '✕ 划掉这条'}</button>
+      <button onclick="togglePin()">${e.important ? '☆ 去掉星' : '★ 标个星'}</button>
+      <button onclick="toggleLock()">${e.locked ? '🔓 解开锁' : '🔒 锁死这条'}</button>
+      <button onclick="closeMenu()">算了</button>`
+    menu.hidden = false
+    const r = menu.getBoundingClientRect()
+    let x = ev.clientX - r.width / 2, y = ev.clientY + 10
+    x = Math.max(6, Math.min(x, innerWidth - r.width - 6))
+    y = Math.min(y, innerHeight - r.height - 6)
+    menu.style.left = x + 'px'
+    menu.style.top = y + 'px'
+    ev.stopPropagation()
+  }
+  function closeMenu() { document.getElementById('menu').hidden = true; menuFor = null }
+  document.addEventListener('click', (ev) => {
+    if (!document.getElementById('menu').hidden && !document.getElementById('menu').contains(ev.target)) closeMenu()
+  })
+
+  async function post(path, body) {
+    const r = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    return r.json()
+  }
+
+  async function toggleDel() {
+    if (!menuFor) return
+    const e = menuFor
+    if (e.deletedAt) {
+      // 恢复：走 /undel
+      await post('undel', { chatId: e.chatId, id: e.id })
+    } else {
+      await post('del', { chatId: e.chatId, id: e.id })
+    }
+    closeMenu()
+    load()
+  }
+  async function togglePin() {
+    if (!menuFor) return
+    await post('pin', { chatId: menuFor.chatId, id: menuFor.id })
+    closeMenu()
+    load()
+  }
+  async function toggleLock() {
+    if (!menuFor) return
+    const r = await post('lock', { chatId: menuFor.chatId, id: menuFor.id }).catch(() => null)
+    if (r?.ok) toastLock(r.locked)
+    closeMenu()
+    load()
+  }
+  function toastLock(locked) {
+    const t = document.createElement('div')
+    t.textContent = locked ? '🔒 锁住了：这条永远不会被淘汰' : '🔓 已解锁'
+    t.style.cssText = 'position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:#2b3a67;color:#fdf8ee;padding:8px 18px;border-radius:18px;font-size:14px;letter-spacing:1px;box-shadow:0 6px 16px rgba(0,0,0,.3);z-index:60;font-family:inherit'
+    document.body.appendChild(t)
+    setTimeout(() => t.remove(), 2200)
+  }
+
+  async function load() {
+    try {
+      const r = await fetch('notes').then((x) => x.json())
+      all = (r.notes || []).slice().sort((a, b) => a.at - b.at)
+    } catch { all = [] }
+    onSearch()
+  }
+  load()
+</script>
+</body>
+</html>

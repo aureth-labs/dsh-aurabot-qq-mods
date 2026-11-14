@@ -1,0 +1,27 @@
+{
+  "id": "xiaoai-music",
+  "name": "xiaoai music · 小爱音响接入",
+  "version": "0.15.2",
+  "description": "小爱音箱接入、歌曲与歌单播放、提醒及 AI 称呼同音词补足。",
+  "category": "creative",
+  "tags": [
+    "家庭",
+    "小爱",
+    "歌曲",
+    "提醒"
+  ],
+  "author": "YiheDD",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.1",
+  "requires": [
+    "song"
+  ],
+  "capabilities": [
+    "network",
+    "filesystem",
+    "process",
+    "plugin-config",
+    "plugin-internals"
+  ]
+}

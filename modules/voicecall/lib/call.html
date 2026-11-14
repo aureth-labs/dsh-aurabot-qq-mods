@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>通话 · 鲸汐汐</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+    background: radial-gradient(120% 80% at 50% 0%, #1b2a3d 0%, #0d1420 55%, #070b12 100%);
+    color: #e8f1ff; font-family: system-ui, -apple-system, "Microsoft YaHei", sans-serif;
+    padding: env(safe-area-inset-top) 14px env(safe-area-inset-bottom);
+  }
+  header { display: flex; align-items: center; gap: 10px; padding: 14px 2px 8px; }
+  .avatar {
+    width: 40px; height: 40px; border-radius: 50%; flex: none;
+    background: linear-gradient(160deg, #5ec8ff, #2f6bff); display: grid; place-items: center;
+    font-size: 20px; box-shadow: 0 0 18px #3aa7ff55;
+  }
+  .who { flex: 1; min-width: 0; }
+  .who b { font-size: 15px; font-weight: 600; }
+  .who span { display: block; font-size: 11.5px; color: #8fa6c4; margin-top: 2px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: #45607f; display: inline-block; margin-right: 5px; vertical-align: middle; }
+  .dot.on { background: #43d98b; box-shadow: 0 0 8px #43d98b; }
+  .dot.warn { background: #f0b34b; }
+  .dot.talk { background: #5ec8ff; box-shadow: 0 0 10px #5ec8ff; animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .35; } }
+
+  #log { flex: 1; overflow-y: auto; padding: 6px 2px 12px; display: flex; flex-direction: column; gap: 9px; -webkit-overflow-scrolling: touch; }
+  .row { display: flex; }
+  .row.me { justify-content: flex-end; }
+  .bubble {
+    max-width: 80%; padding: 9px 12px; font-size: 14.5px; line-height: 1.55; border-radius: 14px;
+    word-break: break-word; animation: pop .18s ease-out;
+  }
+  @keyframes pop { from { opacity: 0; transform: translateY(4px) scale(.98); } }
+  .row.her .bubble { background: #1c2b3f; border: 1px solid #2b3f5c; border-bottom-left-radius: 5px; }
+  .row.me .bubble { background: linear-gradient(160deg, #2f6bff, #1f4fd0); border-bottom-right-radius: 5px; }
+  .bubble small { display: block; margin-top: 4px; font-size: 10.5px; color: #7f96b3; }
+  .row.me .bubble small { color: #c9d9ff; }
+  .sys { align-self: center; font-size: 11.5px; color: #7f96b3; background: #121c2a; border-radius: 20px; padding: 3px 10px; }
+  .sys.err { color: #ffb4b4; background: #2a1414; }
+
+  footer { padding: 6px 0 14px; }
+  #hint { text-align: center; font-size: 11.5px; color: #7f96b3; height: 18px; margin-bottom: 8px; }
+  #callBtn {
+    width: 100%; height: 62px; border: 0; border-radius: 18px; font-size: 17px; font-weight: 600;
+    color: #04101f; background: linear-gradient(160deg, #7fe0ff, #3aa7ff); cursor: pointer;
+    box-shadow: 0 8px 24px #2f8bff44; transition: transform .06s, filter .2s; touch-action: manipulation;
+    display: grid; place-items: center; user-select: none;
+  }
+  #callBtn:active { transform: scale(.985); filter: brightness(1.08); }
+  #callBtn.live { background: linear-gradient(160deg, #ffd27f, #ff8f5e); box-shadow: 0 8px 24px #ff8f5e44; }
+  #callBtn.thinking { filter: saturate(.6) brightness(1.05); }
+  #callBtn:disabled { opacity: .5; filter: grayscale(.4); }
+  .tools { display: flex; gap: 8px; margin-top: 9px; }
+  .tools button {
+    flex: 1; height: 34px; border-radius: 11px; border: 1px solid #2b3f5c; background: #141f2e;
+    color: #cfe0f5; font-size: 12.5px; cursor: pointer;
+  }
+  .tools button:active { background: #1c2b3f; }
+  @media (min-width: 640px) {
+    body { max-width: 620px; margin: 0 auto; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="avatar">🐳</div>
+  <div class="who">
+    <b>鲸汐汐</b>
+    <span><i id="dot" class="dot"></i><span id="status">正在连接…</span></span>
+  </div>
+</header>
+
+<div id="log"></div>
+
+<footer>
+  <div id="hint">点开始，直接说话，不用按</div>
+  <button id="callBtn">开始通话</button>
+  <div class="tools">
+    <button id="stopBtn">打断她</button>
+    <button id="clearBtn">清屏</button>
+  </div>
+</footer>
+
+<script>
+const API = (p) => '/aurabot/api/ext/voicecall' + p;
+const $ = (id) => document.getElementById(id);
+const logEl = $('log'), callBtn = $('callBtn'), hint = $('hint'), statusEl = $('status'), dot = $('dot');
+const RATE = 16000;
+
+/* ---------- 界面 ---------- */
+function addRow(who, text, note) {
+  const row = document.createElement('div');
+  row.className = 'row ' + who;
+  const b = document.createElement('div');
+  b.className = 'bubble';
+  b.textContent = text;
+  if (note) { const s = document.createElement('small'); s.textContent = note; b.appendChild(s); }
+  row.appendChild(b);
+  logEl.appendChild(row);
+  logEl.scrollTop = logEl.scrollHeight;
+  return b;
+}
+function addSys(text, isErr) {
+  const d = document.createElement('div');
+  d.className = 'sys' + (isErr ? ' err' : '');
+  d.textContent = text;
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function note(bubble, text) {
+  if (!bubble) return;
+  const old = bubble.querySelector('small');
+  if (old) old.remove();
+  const s = document.createElement('small');
+  s.textContent = text;
+  bubble.appendChild(s);
+}
+function setStatus(text, kind) {
+  statusEl.textContent = text;
+  dot.className = 'dot' + (kind === 'ok' ? ' on' : kind === 'warn' ? ' warn' : kind === 'talk' ? ' talk' : '');
+}
+
+/* ---------- 音频输入 ---------- */
+let ac = null, stream = null, srcNode = null, procNode = null, sink = null;
+let inCall = false;
+
+async function ensureAudio() {
+  if (!stream) {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error('这个浏览器不给麦克风权限（需要 https 或 localhost）');
+    }
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,      // 关键：把她自己的声音从麦克风里减掉，才能插话
+        noiseSuppression: false,     // 手机的强降噪会吃掉 s/sh/z/c 这些辅音，识别就靠它们
+        autoGainControl: true,       // 手机麦克风普遍偏小，这个留着
+        channelCount: 1,
+      },
+    });
+  }
+  if (!ac) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    try { ac = new AC({ sampleRate: RATE }); } catch (e) { ac = new AC(); }
+  }
+  if (ac.state === 'suspended') await ac.resume();
+  tuneVadForRate();
+}
+
+function resample(input, inRate, outRate) {
+  if (inRate === outRate) return input;
+  const ratio = inRate / outRate;
+  const len = Math.floor(input.length / ratio);
+  const out = new Float32Array(len);
+  for (let i = 0; i < len; i++) {
+    const pos = i * ratio, i0 = Math.floor(pos), i1 = Math.min(i0 + 1, input.length - 1);
+    out[i] = input[i0] + (input[i1] - input[i0]) * (pos - i0);
+  }
+  return out;
+}
+
+function toPcm16Buf(pcm) {
+  const buf = new ArrayBuffer(pcm.length * 2);
+  const view = new DataView(buf);
+  for (let i = 0; i < pcm.length; i++) {
+    const s = Math.max(-1, Math.min(1, pcm[i]));
+    view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return buf;
+}
+
+// 重采样交给浏览器原生做（带抗混叠滤波）。
+// 原先的线性插值在 48k→16k 时会把高频折叠进语音频段，人耳听不出，whisper 就会听错字。
+async function toPcm16(f32) {
+  const inRate = (ac && ac.sampleRate) || RATE;
+  if (inRate === RATE) return toPcm16Buf(f32);
+  const OutAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  if (!OutAC) return toPcm16Buf(resample(f32, inRate, RATE));
+  try {
+    const outLen = Math.max(1, Math.ceil((f32.length * RATE) / inRate));
+    const off = new OutAC(1, outLen, RATE);
+    const buf = off.createBuffer(1, f32.length, inRate);
+    buf.copyToChannel(f32, 0);
+    const src = off.createBufferSource();
+    src.buffer = buf;
+    src.connect(off.destination);
+    src.start();
+    const rendered = await off.startRendering();
+    return toPcm16Buf(rendered.getChannelData(0));
+  } catch (e) {
+    return toPcm16Buf(resample(f32, inRate, RATE));
+  }
+}
+
+/* ---------- VAD：自动断句 ---------- */
+const vad = {
+  floor: 0.008,      // 环境噪声基线（自己会校准）
+  loud: 0,           // 连续有声帧
+  quiet: 0,          // 连续静音帧
+  speaking: false,
+  frames: [],        // 正在录的这一句
+  pre: [],           // 开口前的几帧，别把字头切掉
+  beganAt: 0,
+};
+const MAX_SEG_MS = 30000; // 单句上限，防止一直说下去
+// 下面三个按「真实采样率」折算成毫秒。手机 Chrome 经常给 48k，
+// 那时一帧只有 43ms，写死帧数会把字头切掉 —— 这是手机上「识别不准」的主因。
+let LOUD_NEED = 2;        // 连续有声多久算开口
+let QUIET_NEED = 6;       // 连续静音多久算说完
+let PRE_KEEP = 3;         // 开口前保留几帧
+function tuneVadForRate() {
+  const frameMs = (2048 / ((ac && ac.sampleRate) || RATE)) * 1000;
+  PRE_KEEP = Math.max(3, Math.round(420 / frameMs));    // 开口前留 ~420ms
+  LOUD_NEED = Math.max(2, Math.round(190 / frameMs));   // ~190ms 有声算开口
+  QUIET_NEED = Math.max(4, Math.round(720 / frameMs));  // ~720ms 静音算说完
+}
+
+function rmsOf(f32) {
+  let sum = 0;
+  for (let i = 0; i < f32.length; i++) sum += f32[i] * f32[i];
+  return Math.sqrt(sum / f32.length);
+}
+
+function onFrame(f32) {
+  if (!inCall) return;
+  const rms = rmsOf(f32);
+  // 她在说话时把门槛抬高，避免扬声器的回声把自己触发
+  const busyPlaying = Boolean(curAudio) || audioQueue.length > 0;
+  const base = Math.max(0.007, Math.min(0.05, vad.floor * 2.2));
+  const thr = busyPlaying ? base * 2.2 : base;
+
+  if (!vad.speaking) {
+    vad.pre.push(f32);
+    if (vad.pre.length > PRE_KEEP) vad.pre.shift();
+    if (rms < thr) vad.floor = vad.floor * 0.97 + rms * 0.03; // 只在安静时校准
+  }
+
+  if (rms > thr) {
+    vad.loud++;
+    vad.quiet = 0;
+  } else {
+    vad.quiet++;
+    vad.loud = 0;
+  }
+
+  if (!vad.speaking && vad.loud >= LOUD_NEED) {
+    // 开口了：先掐掉她的声音，这就是插话
+    if (busyPlaying) bargeIn();
+    vad.speaking = true;
+    vad.frames = vad.pre.slice();
+    vad.pre = [];
+    vad.beganAt = performance.now();
+    vad.quiet = 0;
+    setStatus('在听你说', 'talk');
+    hint.textContent = '说完停一下，她就会接话';
+    return;
+  }
+
+  if (vad.speaking) {
+    vad.frames.push(f32);
+    const dur = performance.now() - vad.beganAt;
+    if (vad.quiet >= QUIET_NEED || dur > MAX_SEG_MS) finishSegment();
+  }
+}
+
+async function finishSegment() {
+  vad.speaking = false;
+  vad.loud = 0;
+  vad.quiet = 0;
+  const seg = vad.frames;
+  vad.frames = [];
+  let n = 0;
+  for (const f of seg) n += f.length;
+  if (n < RATE * 0.35) return;             // 太短，当作咳嗽/杂音
+  const all = new Float32Array(n);
+  let off = 0;
+  for (const f of seg) { all.set(f, off); off += f.length; }
+  const pcm = await toPcm16(all);
+  sendTurn(pcm);
+}
+
+/* ---------- 播放 ---------- */
+let curAudio = null;
+let audioQueue = [];
+let filling = false;
+let fillerList = [];
+let fillerEl = null;
+
+function stopFiller() {
+  if (fillerEl) { try { fillerEl.pause(); } catch (e) {} fillerEl = null; }
+}
+let fillerTries = 0;
+function playFiller() {
+  if (!fillerList.length || fillerTries >= 4) return;
+  fillerTries++;
+  stopFiller();
+  const url = fillerList[Math.floor(Math.random() * fillerList.length)];
+  fillerEl = new Audio(url);
+  fillerEl.onended = () => {
+    fillerEl = null;
+    // 还在等她开口，就再垫一句（最多 4 句），把空白填成对话的呼吸
+    if (pending && !curAudio && audioQueue.length === 0) playFiller();
+  };
+  fillerEl.play().catch(() => { fillerEl = null; });
+}
+function stopPlayback() {
+  for (const it of audioQueue) {
+    if (it.el) { try { it.el.pause(); it.el.src = ''; } catch (e) {} }
+  }
+  audioQueue = [];
+  if (curAudio) { try { curAudio.pause(); curAudio.src = ''; } catch (e) {} curAudio = null; }
+  stopFiller();
+  if (window.speechSynthesis) { try { speechSynthesis.cancel(); } catch (e) {} }
+}
+function playEl(el, text) {
+  return new Promise((resolve) => {
+    if (!el) { if (text) speakFallback(text); return resolve(); }
+    curAudio = el;
+    let settled = false;
+    const done = (fallback) => {
+      if (settled) return;
+      settled = true;
+      if (curAudio === el) curAudio = null;
+      if (fallback && text) speakFallback(text);
+      resolve();
+    };
+    el.onended = () => done(false);
+    el.onerror = () => done(true);
+    el.play().catch(() => done(true));
+  });
+}
+function speakFallback(text) {
+  if (!window.speechSynthesis || !text) return;
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'zh-CN';
+  u.rate = 1.05;
+  const zh = (speechSynthesis.getVoices() || []).find((v) => /zh|Chinese/i.test(v.lang + v.name));
+  if (zh) u.voice = zh;
+  speechSynthesis.speak(u);
+}
+async function drainQueue() {
+  if (filling) return;
+  filling = true;
+  while (audioQueue.length) {
+    const item = audioQueue.shift();
+    stopFiller();
+    setStatus('她在说话', 'ok');
+    hint.textContent = '你开口就能打断她';
+    await playEl(item.el, item.text);
+  }
+  filling = false;
+  if (inCall) {
+    setStatus('在听你说', 'ok');
+    hint.textContent = '直接说，说完停一下';
+  }
+}
+function bargeIn() {
+  stopPlayback();
+  turnSeq++;                       // 让还在飞的分片作废
+  if (abortCtl) { try { abortCtl.abort(); } catch (e) {} abortCtl = null; }
+  fetch(API('/interrupt'), { method: 'POST' }).catch(() => {});
+  setStatus('你打断了她', 'talk');
+}
+
+/* ---------- 一轮对话（SSE 流式） ---------- */
+let turnSeq = 0, abortCtl = null, pending = false;
+let meBubble = null, herBubble = null;
+
+function onEvent(block, seq) {
+  if (seq !== turnSeq) return;
+  let ev = '', data = '';
+  for (const line of block.split('\n')) {
+    if (line.indexOf('event: ') === 0) ev = line.slice(7).trim();
+    else if (line.indexOf('data: ') === 0) data += line.slice(6);
+  }
+  let j = {};
+  try { j = JSON.parse(data || '{}'); } catch (e) {}
+  if (ev === 'asr') {
+    if (meBubble) meBubble.textContent = j.text || '（没听清）';
+    if (herBubble) herBubble.textContent = '她在想…';
+    setStatus('她在想…', 'warn');
+    hint.textContent = '她在组织语言';
+  } else if (ev === 'reply') {
+    if (herBubble) herBubble.textContent = j.text;
+    herBubble = herBubble || addRow('her', j.text);
+  } else if (ev === 'audio') {
+    // 先建好元素让它自己开始缓冲：轮到她念的时候第一句已经拉了一部分
+    let el = null;
+    if (j.url) { el = new Audio(j.url); el.preload = 'auto'; }
+    audioQueue.push({ el, text: j.text });
+    drainQueue();
+  } else if (ev === 'done') {
+    const m = j.ms || {};
+    if (herBubble && m.total) {
+      note(herBubble, '识别 ' + ((m.asr || 0) / 1000).toFixed(1) + 's · 想 ' + ((m.think || 0) / 1000).toFixed(1) + 's · 共 ' + (m.total / 1000).toFixed(1) + 's');
+    }
+  } else if (ev === 'error') {
+    if (j.err) addSys(j.err, true);
+    if (herBubble && herBubble.textContent === '她在想…') herBubble.textContent = '';
+    stopFiller();
+    if (inCall) setStatus('在听你说', 'ok');
+  }
+}
+
+async function sendTurn(pcmBuffer) {
+  const seq = ++turnSeq;
+  pending = true;
+  meBubble = addRow('me', '…');
+  herBubble = addRow('her', '她在听…');
+  fillerTries = 0;
+  playFiller();                     // 先垫一句，别让耳朵对着空气
+  setStatus('她在听…', 'warn');
+  hint.textContent = '识别中…';
+  abortCtl = new AbortController();
+  try {
+    const r = await fetch(API('/turn/stream'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: pcmBuffer,
+      signal: abortCtl.signal,
+    });
+    if (!r.ok || !r.body) throw new Error('服务端 ' + r.status);
+    // 忙的时候服务端回的是 JSON 而不是流，别当 SSE 解
+    const ct = r.headers.get('content-type') || '';
+    if (ct.indexOf('text/event-stream') < 0) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.err || j.message || '服务端返回看不懂');
+    }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done || seq !== turnSeq) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const block = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        onEvent(block, seq);
+      }
+    }
+  } catch (error) {
+    if (seq === turnSeq && error.name !== 'AbortError') addSys('这句断了：' + error.message, true);
+  } finally {
+    if (seq === turnSeq) {
+      pending = false;
+      abortCtl = null;
+      if (!audioQueue.length && !curAudio) stopFiller();
+    }
+  }
+}
+
+/* ---------- 开始 / 挂断 ---------- */
+async function startCall() {
+  try {
+    await ensureAudio();
+  } catch (error) {
+    addSys(error.message || String(error), true);
+    setStatus('麦克风不可用', 'warn');
+    hint.textContent = error.message || '打不开麦克风';
+    return;
+  }
+  inCall = true;
+  vad.floor = 0.008; vad.speaking = false; vad.frames = []; vad.pre = [];
+  srcNode = ac.createMediaStreamSource(stream);
+  procNode = ac.createScriptProcessor(2048, 1, 1);
+  sink = ac.createGain();
+  sink.gain.value = 0;   // 只为让处理节点一直跑，麦克风不直接放出来（否则会啸叫）
+  procNode.onaudioprocess = (e) => {
+    if (!inCall) return;
+    onFrame(new Float32Array(e.inputBuffer.getChannelData(0)));
+  };
+  srcNode.connect(procNode);
+  procNode.connect(sink);
+  sink.connect(ac.destination);
+  callBtn.classList.add('live');
+  callBtn.textContent = '挂断';
+  setStatus('在听你说', 'ok');
+  hint.textContent = '直接说，说完停一下；她说话时你开口就能打断';
+  addSys('通话接通了，直接说话就行');
+  loadFillers();
+}
+
+function stopCall() {
+  inCall = false;
+  try { srcNode && srcNode.disconnect(); } catch (e) {}
+  try { procNode && procNode.disconnect(); } catch (e) {}
+  try { sink && sink.disconnect(); } catch (e) {}
+  srcNode = procNode = sink = null;
+  stopPlayback();
+  turnSeq++;
+  if (abortCtl) { try { abortCtl.abort(); } catch (e) {} abortCtl = null; }
+  // 挂断顺手把这一通写进她的记忆（没点挂断直接关页面的，服务端 10 分钟空闲也会收尾）
+  fetch(API('/hangup'), { method: 'POST' })
+    .then((r) => r.json())
+    .then((j) => {
+      if (!j || !j.wrote) return
+      addSys(j.summarized && j.text ? j.text : '这一通她记住了')
+    })
+    .catch(() => {});
+  callBtn.classList.remove('live');
+  callBtn.textContent = '开始通话';
+  setStatus('已挂断', '');
+  hint.textContent = '点开始，直接说话，不用按';
+  addSys('通话结束');
+}
+
+async function loadFillers() {
+  try {
+    const r = await fetch(API('/fillers'));
+    const j = await r.json();
+    fillerList = Array.isArray(j.list) ? j.list : [];
+  } catch (e) { fillerList = []; }
+}
+
+callBtn.onclick = () => {
+  if (inCall) stopCall();
+  else startCall();
+};
+$('stopBtn').onclick = () => {
+  if (!inCall) { stopPlayback(); return; }
+  bargeIn();
+};
+$('clearBtn').onclick = () => { logEl.innerHTML = ''; };
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Escape' && inCall) stopCall();
+});
+document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+/* ---------- 启动自检 ---------- */
+(async () => {
+  try {
+    const r = await fetch(API('/state'));
+    const j = await r.json();
+    if (!j.asr?.ready) {
+      addSys('耳朵还没就绪：' + (j.asr?.why || '未知原因'), true);
+      setStatus('识别未就绪', 'warn');
+      return;
+    }
+    const engine = j.engine === 'gptsovits' ? '本地 GPT-SoVITS（她的声音）' : (j.engine || 'edge-tts');
+    addSys('通了：耳朵 ' + (j.asr.provider || '本地识别') + ' · 嘴 ' + engine + ' · 垫话 ' + (j.fillers || 0) + '/4');
+    setStatus('等你点开始', 'ok');
+    loadFillers();
+  } catch (error) {
+    addSys('连不上服务：' + error.message, true);
+    setStatus('服务没起', 'warn');
+  }
+})();
+</script>
+</body>
+</html>

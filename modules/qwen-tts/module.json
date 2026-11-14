@@ -1,0 +1,24 @@
+{
+  "id": "qwen-tts",
+  "name": "千问百炼语音",
+  "version": "1.0.0",
+  "description": "通过阿里云百炼合成语音，提供音色、语气及试听设置",
+  "category": "creative",
+  "tags": [
+    "语音",
+    "千问",
+    "百炼"
+  ],
+  "author": "mrnobodynan",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "network",
+    "filesystem",
+    "process",
+    "plugin-config",
+    "plugin-internals"
+  ]
+}

@@ -23,7 +23,7 @@ const execFileP = promisify(execFile)
 export default {
   id: 'phone',
   name: '手机逛逛',
-  version: '0.3.1',
+  version: '0.4.1',
   api: 1,
   description: '通过 ADB 逛 Android 手机：按主人教好的流程自动签到/浏览/点赞，或自由推理完成一句话任务。',
   panel: 'panel.js',
@@ -74,6 +74,7 @@ export default {
         confirmWrites: s.confirmWrites !== false,
         dryRun: !!s.dryRun,
         closeAppsAfter: s.closeAppsAfter !== false, // 逛完关闭应用进程释放内存：默认开
+        lockPassword: String(s.lockPassword || ''), // 锁屏密码：每轮开跑前先叫醒并解锁
         sessionTimeoutMs: Number(s.sessionTimeoutMs) || 900000,
         writeEventMemory: s.writeEventMemory !== false,
         decisionModel: String(s.decisionModel || ''), // 'provider::model'，空 = 跟随全局模型
@@ -198,14 +199,48 @@ export default {
      *  mode：'self' = 定时自发（共享决策会话窗）；
      *        'delegate' = 被调用（默认）——独立决策会话窗（task-*），动作仍由模块执行、每一动过 safety.gate。
      *  方案 A（复审后定）：不再 spawn 子智能体；白名单/限速/写操作确认始终是程序约束，不靠任务书文字。 */
-    async function startRun({ flowKey, prompt, packages, report, guide, mode = 'self', maxSteps = 0 }) {
+    /**
+     * 开跑前先把手机弄醒并解锁：否则整轮都卡在密码输入界面白跑（实测 12 步全废）。
+     * 叫醒 → 上滑 → 锁着就输密码 → 回桌面（白名单只认内容应用，停在系统页会被拦）。
+     */
+    async function unlockIfLocked(adb, pw) {
+      const wait = (ms) => new Promise((z) => setTimeout(z, ms))
+      try {
+        const st = await adb.adb(['shell', 'dumpsys', 'power'])
+        if (!/mWakefulness=Awake/.test(String(st || ''))) {
+          await adb.adb(['shell', 'input', 'keyevent', '224'])
+          await wait(900)
+          await adb.adb(['shell', 'input', 'swipe', '612', '2200', '612', '700', '250'])
+          await wait(900)
+        }
+        const sk = await adb.adb(['shell', 'dumpsys', 'deviceidle'])
+        if (/mScreenLocked=true/i.test(String(sk || ''))) {
+          if (!pw) {
+            api.log.warn('[phone] 手机锁着，但没配锁屏密码（设置里填「锁屏密码」）')
+            return
+          }
+          await adb.adb(['shell', 'input', 'text', pw])
+          await wait(400)
+          await adb.adb(['shell', 'input', 'keyevent', '66'])
+          await wait(1500)
+        }
+        await adb.adb(['shell', 'input', 'keyevent', '3'])
+        await wait(600)
+      } catch (e) {
+        api.log.warn(`[phone] 解锁失败：${e.message}`)
+      }
+    }
+
+    async function startRun({ flowKey, prompt, packages, report, guide, guideFor = null, mode = 'self', maxSteps = 0 }) {
       const s = getSettings()
       const adb = await getAdb()
+      // 锁屏就先解开，不然一整轮都卡在密码界面
+      await unlockIfLocked(adb, String(s.lockPassword || ''))
       // 模块内循环：每一动都过 safety.gate（程序约束）；会话超时被强制释放时 abort 掉本轮（一审 #19-6）
       const ac = new AbortController()
       aborts.set(flowKey, ac)
       const ctx = { ...makeCtx(report, makeWin(mode, flowKey, prompt)), adb, signal: ac.signal }
-      return runWorkspace({ flowKey, prompt, packages, maxSteps: Number(maxSteps) || s.maxSteps, guide, ctx })
+      return runWorkspace({ flowKey, prompt, packages, maxSteps: Number(maxSteps) || s.maxSteps, guide, guideFor, ctx })
         .then(async (r) => {
           // 收尾：逛完关掉本轮到过的应用进程，释放手机内存（面板「逛完关闭应用」开关，默认开）。
           // 只关确实到过的前台包，跳过桌面（launcher）；单个关失败只记日志，不影响任务结果汇报。
@@ -230,7 +265,7 @@ export default {
       const s = getSettings()
       const guideKey = guides.resolve({ packages: flow.packages, goal: flow.prompt, flowGuide: flow.guide })
       // 委派来源由宿主判断（#177 复审），模块不再传 source；单流程的步数上限可覆盖全局设置
-      const r = await startRun({ flowKey: flow.id, prompt: flow.prompt, packages: flow.packages, guide: guides.get(guideKey), mode, maxSteps: flow.maxSteps })
+      const r = await startRun({ flowKey: flow.id, prompt: flow.prompt, packages: flow.packages, guide: guides.get(guideKey), guideFor: manualForPkg, mode, maxSteps: flow.maxSteps })
       const text = `${flow.name} ${r.message}`
       const to = flow.reportTo || 'origin'
       if (to === 'owner') {
@@ -250,11 +285,26 @@ export default {
       return { ...r, message: text }
     }
 
-    /** adhoc 自由推理：按 goal 关键词挑指引，跑完同样走记忆（不主动汇报主人） */
+    /**
+     * 按前台包名挑一本单应用手册（给工作区的 guideFor 用）。
+     * 挑不出专属的就返回空串——别拿通用手册去冲淡已经注入的专属内容。
+     */
+    function manualForPkg(pkg) {
+      const p = String(pkg || '')
+      if (!p) return ''
+      const k = guides.resolve({ packages: [p] })
+      if (!k || k === 'generic' || k === 'main') return ''
+      return guides.get(k) || ''
+    }
+
+    /** adhoc 自由推理：先按 goal 关键词挑指引，之后每步再按当前前台应用换手册 */
     function runGoal(goal, mode = 'self') {
       const key = adhocKey(goal)
       const guide = guides.get(guides.resolve({ goal }))
-      return startRun({ flowKey: key, prompt: String(goal), packages: [], guide, mode })
+      // 以前整轮只有一份按 goal 挑出来的手册：goal 没点名 App 就只剩通用手册，
+      // 中途打开笔记/相册这类系统应用等于没有指南（「不会用 app」多半是这个原因）。
+      // 现在每步按当前前台包再补一份，换了应用就换手册。
+      return startRun({ flowKey: key, prompt: String(goal), packages: [], guide, guideFor: manualForPkg, mode })
     }
 
     // ================= 主动逛一轮（照刷B站：AI 按总纲自己挑应用，开一个工作区回合自主逛） =================

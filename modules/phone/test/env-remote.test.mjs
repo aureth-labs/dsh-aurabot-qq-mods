@@ -3,6 +3,12 @@
 // 全程 fake 注入（hooks / __phoneTestHooks），不打真网络、不真 spawn adb、不碰真手机。
 // 运行：mods-fork 仓库根 `node --test modules/phone/test/env-remote.test.mjs`
 
+// PATH 隔离：ensureAdb 的 PATH 探测走真实系统（lib/env.mjs 未开注入口），
+// 运行机 PATH 里有 adb（如预装 Android SDK 的 GitHub runner / 本机装过 platform-tools）
+// 会抢在「自动下载」断言前命中真 adb（source='path'），测试翻车。
+// 本文件全程 fake，不需要任何真实可执行文件；node --test 每个测试文件独立进程，互不影响。
+process.env.PATH = ''
+
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, statSync, rmSync } from 'node:fs'

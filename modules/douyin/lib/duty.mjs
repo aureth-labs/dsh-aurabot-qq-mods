@@ -41,7 +41,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
   const cfg = () => getConfig().douyin
   const sleep = wait || ((ms) => new Promise((r) => setTimeout(r, ms)))
   const source = new AsyncLocalStorage()
-  const browser = injectedBrowser || (injected ? null : createBrowser({ profileDir: dataDir('douyin', 'edge-profile'), browserPath: () => cfg().browserPath, log, now }))
+  const browser = injectedBrowser || (injected ? null : createBrowser({ profileDir: dataDir('douyin', 'edge-profile'), browserPath: () => cfg().browserPath, log, now, useEgo: () => getConfig().browser?.useDshSidebar === true }))
   // 登录可以在开关关闭时进行；其他来源仍在真正启动前检查开关。
   const site = injected || createSite({ browser: { ...browser, open: () => {
     const from = source.getStore() || '主人要求'

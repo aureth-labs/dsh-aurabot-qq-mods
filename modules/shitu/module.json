@@ -1,0 +1,14 @@
+{
+  "id": "shitu",
+  "name": "识图",
+  "version": "1.0.0",
+  "description": "给看不了图的模型配一双只认字的眼睛：自动装好本地 OCR，把图片和表情包里的字读出来交给她；图里没字时再借一个能看图的模型说一句画面里是什么",
+  "category": "tool",
+  "tags": ["识图", "OCR", "表情包", "本地"],
+  "author": "h752603-source",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.3.0",
+  "requires": [],
+  "capabilities": ["network", "filesystem", "process", "plugin-config", "plugin-internals"]
+}

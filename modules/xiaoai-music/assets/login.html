@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>小爱音箱登录更新</title>
+<style>
+body{font:17px/1.7 system-ui,sans-serif;background:#f5f6f7;color:#222;margin:0;padding:40px 20px}
+main{max-width:520px;margin:auto;background:white;padding:30px;border-radius:16px}
+button{font:inherit;padding:10px 20px;border:0;border-radius:8px;background:#315bce;color:white;cursor:pointer}
+button:disabled{opacity:.5;cursor:default}img{width:300px;max-width:100%;display:block;margin:24px auto}
+small{color:#666}#status{min-height:52px}
+</style>
+<main>
+<h1>更新小爱音箱登录</h1>
+<p>用音箱同一账号的米家 App 扫描二维码，在手机上确认登录。</p>
+<p id="status" role="status">正在读取状态…</p>
+<img id="qr" alt="小米音箱登录二维码" hidden>
+<button id="start">生成登录二维码</button>
+<p><small>确认后先验证账号和音箱连接，验证通过才更新原来的本机 Windows 凭据。此页面不显示账号、令牌或对话记录。</small></p>
+</main>
+<script>
+const base='/aurabot/api/ext/xiaoai-music';
+const status=document.getElementById('status');
+const image=document.getElementById('qr');
+const button=document.getElementById('start');
+let imageShown=false;
+async function refresh(){
+  try{
+    const result=await(await fetch(base+'/status',{cache:'no-store'})).json();
+    const login=result.login;
+    status.textContent=login.message;
+    const waiting=login.phase==='waiting';
+    if(waiting&&!imageShown){image.src=base+'/speaker/login/qr?v='+Date.now();imageShown=true}
+    image.hidden=!waiting;
+    if(!waiting)imageShown=false;
+    button.disabled=['preparing','waiting','verifying','saved'].includes(login.phase);
+    button.textContent=login.phase==='saved'?'已更新':'生成登录二维码';
+  }catch{status.textContent='暂时无法访问家庭模块，请返回聊天。'}
+}
+button.onclick=async()=>{
+  button.disabled=true;
+  status.textContent='正在生成二维码…';
+  try{await fetch(base+'/speaker/login/start',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})}
+  catch{status.textContent='未能开始登录，请返回聊天。'}
+  await refresh();
+};
+refresh();
+setInterval(refresh,1500);
+</script>
+</html>

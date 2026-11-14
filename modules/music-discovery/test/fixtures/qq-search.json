@@ -1,0 +1,31 @@
+{
+  "_comment": "固定脱敏 fixture：QQ 音乐 /discover/search 回包形态（照官方 discover.md 字段），不含任何 Key、Authorization 或账号信息。解析通过 ≠ 真实鉴权通过。",
+  "traceId": "fixture-0001",
+  "ts": 1762000000000,
+  "songs": [
+    {
+      "songMid": "0039MnYb0qxYhV",
+      "songName": "晴天",
+      "singerName": "周杰伦",
+      "songH5Url": "https://y.qq.com/n/ryqq/songDetail/0039MnYb0qxYhV"
+    },
+    {
+      "songMid": "004Z8Ihr0JIu5s",
+      "songName": "晴天",
+      "singerName": "周杰伦/袁咏琳",
+      "songH5Url": ""
+    },
+    {
+      "songMid": "003OUlho2HcRHC",
+      "songName": "晴天 (Live)",
+      "singerName": "周杰伦",
+      "songH5Url": "https://y.qq.com/n/ryqq/songDetail/003OUlho2HcRHC"
+    }
+  ],
+  "albums": null,
+  "playlists": null,
+  "mvs": null,
+  "radios": null,
+  "singers": null,
+  "hasMore": false
+}

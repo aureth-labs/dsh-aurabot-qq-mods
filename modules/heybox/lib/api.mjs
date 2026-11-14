@@ -17,7 +17,12 @@ const ALPHABET = 'AB45STUVWZEFGJ6CH01D237IXYPQRKLMN89'
 const HMAC_SALT = 'Z7mFG4tQp9Ws2LxB8H'
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
 
-// web 端通用参数（与真实请求一致）
+// 每台机器一个随机的设备指纹（32 位十六进制，格式与网页端一致）。
+// 千万别把某一台机器的指纹写成常量共用：小黑盒按 device_id 归并设备，
+// 所有人共用一个值 = 所有账号被风控当成同一台设备，一出事就是一群人一起限流。
+export const newDeviceId = () => crypto.randomBytes(16).toString('hex')
+
+// web 端通用参数（与真实请求一致）。device_id 由客户端实例各自带上，见 HeyboxClient。
 export const BASE_PARAMS = {
   os_type: 'web',
   app: 'heybox',
@@ -28,7 +33,6 @@ export const BASE_PARAMS = {
   x_app: 'heybox_website',
   x_os_type: 'Windows',
   device_info: 'Chrome',
-  device_id: '2c2fef8385ccef915e3b3caf94e3aa06',
 }
 
 // 真实存在的分区（网上抄来的 58144 之类并不存在，会一直报「错误的帖子类型」）
@@ -153,12 +157,14 @@ function riskOf(data, raw = '') {
  * 小黑盒 HTTP 客户端。串行限速 + 熔断，写请求永不自动重试。
  * @param {object} opts
  * @param {string} opts.cookie 整串 Cookie（pkey + x_xhh_tokenid）
+ * @param {string} [opts.deviceId] 设备指纹；不传则本次进程内随机生成一个
  * @param {number} [opts.interval] 请求最小间隔（毫秒）
  * @param {number} [opts.timeout] 单请求超时（毫秒）
  */
 export class HeyboxClient {
-  constructor({ cookie = '', interval = 900, timeout = 25000, risk = null, onRisk = null, now = () => Date.now(), random = Math.random, delay = (ms, signal) => sleep(ms, undefined, { signal }), fetchImpl = (...args) => fetch(...args) } = {}) {
+  constructor({ cookie = '', deviceId = '', interval = 900, timeout = 25000, risk = null, onRisk = null, now = () => Date.now(), random = Math.random, delay = (ms, signal) => sleep(ms, undefined, { signal }), fetchImpl = (...args) => fetch(...args) } = {}) {
     this.cookie = cookie
+    this.deviceId = String(deviceId || '') || newDeviceId()
     this.interval = interval
     this.timeout = timeout
     this.lastAt = null
@@ -244,6 +250,7 @@ export class HeyboxClient {
       await this.#throttle(path, method, allowCooldownRisk)
 
       const query = { ...BASE_PARAMS }
+      query.device_id = this.deviceId
       // 网页端每个请求都带 heybox_id，缺了会被当成未登录
       const heyboxId = String(cookie || '').match(/(?:^|;\s*)(?:user_)?heybox_id=(\d+)/)?.[1]
       if (heyboxId) query.heybox_id = heyboxId

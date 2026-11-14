@@ -1,0 +1,63 @@
+{
+  "_comment": "固定脱敏 fixture：网易云 cloudsearch 回包形态（歌名/歌手/ID 为公开曲目信息，不含账号、Cookie 或凭据）",
+  "code": 200,
+  "result": {
+    "songCount": 6,
+    "songs": [
+      {
+        "id": 186016,
+        "name": "晴天",
+        "ar": [{ "id": 6452, "name": "周杰伦" }],
+        "al": { "id": 18915, "name": "叶惠美" },
+        "dt": 269000,
+        "alia": [],
+        "originCoverType": 1
+      },
+      {
+        "id": 2668397359,
+        "name": "晴天 (原唱 周杰伦)",
+        "ar": [{ "id": 0, "name": "RyaVocal" }],
+        "al": { "id": 260499608, "name": "晴天" },
+        "dt": 270738,
+        "alia": [],
+        "originCoverType": 2
+      },
+      {
+        "id": 1397000001,
+        "name": "晴天 (Live)",
+        "ar": [{ "id": 6452, "name": "周杰伦" }],
+        "al": { "id": 18916, "name": "演唱会现场" },
+        "dt": 280000,
+        "alia": ["晴天 现场版"],
+        "originCoverType": 1
+      },
+      {
+        "id": 2653714443,
+        "name": "晴天 (女声版)",
+        "ar": [{ "id": 50759987, "name": "GYBeat" }],
+        "al": { "id": 256036533, "name": "晴天 (女声版)" },
+        "dt": 268750,
+        "alia": [],
+        "originCoverType": 2
+      },
+      {
+        "id": 1397000002,
+        "name": "晴天",
+        "ar": [{ "id": 900001, "name": "陈默" }],
+        "al": { "id": 900002, "name": "同名不同人" },
+        "dt": 240000,
+        "alia": [],
+        "originCoverType": 1
+      },
+      {
+        "id": 1397000003,
+        "name": "晴天（史詩版）",
+        "ar": [{ "id": 900003, "name": "EPX Music 4 Life" }],
+        "al": { "id": 900004, "name": "晴天" },
+        "dt": 300000,
+        "alia": [],
+        "originCoverType": 0
+      }
+    ]
+  }
+}

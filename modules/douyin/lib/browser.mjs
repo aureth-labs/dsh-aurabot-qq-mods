@@ -7,6 +7,7 @@ import { execFile, spawn } from 'node:child_process'
 import { existsSync, lstatSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { createEgoBackend, acquireEgoTarget } from './ego.mjs'
 
 const CANDIDATES = [
   process.env.EDGE_PATH,
@@ -137,7 +138,7 @@ function windowsKillTree(pid) {
  * 专用浏览器。open() 才会真的启动 / 连接；只读状态的地方不要调它（打开面板不该弹窗口）。
  * 只接回本实例启动的进程：旧端口文件和 SingletonLock 都不能证明其他进程是我们的。
  */
-export function createBrowser({ profileDir, browserPath = () => '', log, now = Date.now, spawnProcess = spawn, getPort = freePort, getBrowserJson = getJson, connect = connectCdp, wait = sleep, platform = process.platform, killGroup = (pid, signal) => process.kill(-pid, signal), killTree = windowsKillTree, stopWaitMs = 3000, stderrWaitMs = 250 } = {}) {
+export function createBrowser({ profileDir, browserPath = () => '', log, now = Date.now, spawnProcess = spawn, getPort = freePort, getBrowserJson = getJson, connect = connectCdp, wait = sleep, platform = process.platform, killGroup = (pid, signal) => process.kill(-pid, signal), killTree = windowsKillTree, stopWaitMs = 3000, stderrWaitMs = 250, useEgo = () => false } = {}) {
   let cdp = null
   let attaching = null
   let opening = null
@@ -149,7 +150,47 @@ export function createBrowser({ profileDir, browserPath = () => '', log, now = D
   let retryAt = 0
   let lastError = ''
 
-  const connected = () => Boolean(owned && !owned.exited && !owned.needsStop && cdp && !cdp.closed)
+  const connected = () => (egoTarget ? Boolean(cdp && !cdp.closed) : Boolean(owned && !owned.exited && !owned.needsStop && cdp && !cdp.closed))
+
+    // —— DSH 侧边浏览器（ego）模式：连 DSH 共享实例、认领自己的标签页；
+    // 绝不 spawn、绝不杀进程（共享实例归 DSH 管）。
+    let egoTarget = null, egoPort = 0
+    let egoBackend = null
+    const useEgoNow = () => { try { return useEgo() === true } catch (error) { return false } }
+    async function egoConnect(check, extra) {
+      if (egoTarget && cdp && !cdp.closed) return
+      if (egoTarget) { // 上一条连接断了：把自己那个标签页关掉再认领新的，别在共享实例里堆僵尸页
+        const stale = egoTarget, stalePort = egoPort
+        egoTarget = null; egoPort = 0
+        fetch(`http://127.0.0.1:${stalePort}/json/close/${stale.id}`).catch(() => {})
+      }
+      if (!egoBackend) egoBackend = createEgoBackend({ getJson, log })
+      const { port } = await egoBackend.ensure(check)
+      const target = await acquireEgoTarget(port, getBrowserJson, connect)
+      check()
+      const c = connect(target.webSocketDebuggerUrl)
+      try {
+        await c.ready
+        check()
+        await c.send('Page.enable')
+        await c.send('Runtime.enable')
+        if (extra) await extra(c)
+        cdp = c
+        egoTarget = target
+        egoPort = port
+      } catch (error) {
+        c.close()
+        fetch(`http://127.0.0.1:${port}/json/close/${target.id}`).catch(() => {})
+        throw error
+      }
+    }
+    async function egoDisconnect() {
+      const t = egoTarget, port = egoPort
+      egoTarget = null; egoPort = 0
+      cdp?.close(); cdp = null
+      if (t && port) fetch(`http://127.0.0.1:${port}/json/close/${t.id}`).catch(() => {})
+    }
+
   const cancelled = () => Object.assign(new Error('抖音已关闭，请先打开抖音开关'), { code: 'cancelled' })
   const lockError = () => new Error('抖音浏览器资料目录被占用（SingletonLock / profile appears to be in use），请先关闭占用该目录的浏览器')
 
@@ -269,6 +310,13 @@ export function createBrowser({ profileDir, browserPath = () => '', log, now = D
   }
 
   async function launch(source, check) {
+    if (useEgoNow()) {
+      await egoConnect(check, async (c) => {
+        await c.send('Network.enable', { maxResourceBufferSize: 20e6, maxTotalBufferSize: 100e6 })
+        await c.send('Page.setMuted', { muted: true }).catch(() => {})
+      })
+      return
+    }
     let p = owned
     try {
       check()
@@ -508,6 +556,22 @@ export function createBrowser({ profileDir, browserPath = () => '', log, now = D
 
   /** 窗口挪到屏幕里给人看 / 挪回屏幕外。 */
   async function show(visible) {
+    if (egoTarget) {
+      // 共享窗口归 DSH 管，但「显示浏览器窗口」不能是空操作 —— 主人扫码、做
+      // 安全验证时点它，要把窗口从屏幕外 (-2400,-2400) 挪回屏幕内、带到前台、
+      // 切到本模块的标签页。收起（visible=false）挪回屏幕外并取消置顶焦点。
+      try {
+        const { windowId } = await cdp.send('Browser.getWindowForTarget')
+        if (visible) {
+          await cdp.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } }).catch(() => {})
+          await cdp.send('Browser.setWindowBounds', { windowId, bounds: { left: 80, top: 60, width: 1280, height: 860 } }).catch(() => {})
+        } else {
+          await cdp.send('Browser.setWindowBounds', { windowId, bounds: { left: -2400, top: -2400 } }).catch(() => {})
+        }
+      } catch { /* 挪窗失败不拦着 bringToFront：能带到前台也算数 */ }
+      if (visible) await cdp?.send('Page.bringToFront').catch(() => {})
+      return
+    }
     const c = need()
     const { windowId } = await c.send('Browser.getWindowForTarget')
     await c.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } }).catch(() => {})
@@ -521,6 +585,8 @@ export function createBrowser({ profileDir, browserPath = () => '', log, now = D
     generation++
     const pending = opening
     closing = Promise.resolve().then(async () => {
+      if (pending) await pending
+      if (egoTarget) { await egoDisconnect(); return } // 共享实例：只断连接，不关浏览器
       attaching?.close()
       if (owned && !owned.exited && cdp && !cdp.closed) owned.terminate ||= cdp
       else cdp?.close()

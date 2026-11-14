@@ -1,0 +1,8 @@
+{
+  "_comment": "固定 fixture：网易云分类歌单列表回包（/api/playlist/list）",
+  "playlists": [
+    { "id": 111, "name": "自习室的安静钢琴", "trackCount": 58, "playCount": 120000 },
+    { "id": 222, "name": "写代码不被打断", "trackCount": 40, "playCount": 90000 },
+    { "id": 333, "name": "第三条不该被用到", "trackCount": 12, "playCount": 1 }
+  ]
+}

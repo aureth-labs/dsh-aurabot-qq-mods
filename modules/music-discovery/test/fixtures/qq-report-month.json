@@ -1,0 +1,55 @@
+{
+  "_comment": "按 me.md 月报字段构造的脱敏 fixture，不是真实账号数据；部分版块故意留空以测跳过",
+  "ret": 0,
+  "sub_ret": 0,
+  "monthData": {
+    "topSinger": [
+      { "sum": 36000, "singerMid": "0025NhlN2yWrP4", "singerName": "周杰伦" },
+      { "sum": 18000, "singerMid": "001BLpXF2DyJe2", "singerName": "林俊杰" }
+    ],
+    "topSong": [
+      { "sum": 40, "songMid": "0039MnYb0qxYhV", "songName": "晴天", "singerName": "周杰伦" }
+    ],
+    "preferHour": { "preferHour": 21, "preferInfo": [], "songListen": [] },
+    "consDays": {
+      "conDays": 5,
+      "conInfoList": [],
+      "topListen": 12,
+      "singerDay": { "sum": 5, "singerMid": "0025NhlN2yWrP4", "singerName": "周杰伦" },
+      "songListen": []
+    },
+    "topGenre": {
+      "genreId": 3,
+      "genre2Count": [
+        { "name": "华语流行", "sum": 120 },
+        { "name": "摇滚", "sum": 30 }
+      ],
+      "genreSong": [
+        { "sum": 40, "songMid": "0039MnYb0qxYhV", "songName": "晴天", "singerName": "周杰伦" }
+      ]
+    },
+    "nicheSongs": { "nichePercent": 30, "list": [], "hotPercent": 70 },
+    "newSongs": { "newSongCount": 8, "floatNumber": -0.2, "lastNewSongCount": 10, "list": [] },
+    "listenCityInfo": [
+      { "cityId": 1, "cityName": "新乡", "provinceId": 1, "provinceName": "河南", "countryId": 1, "countryName": "中国", "unlockTime": 1700000000, "cityRank": 1 },
+      { "cityId": 2, "cityName": "郑州", "provinceId": 1, "provinceName": "河南", "countryId": 1, "countryName": "中国", "unlockTime": 1700000001, "cityRank": 2 }
+    ],
+    "topDataList": [
+      {
+        "selectType": 1,
+        "month": "2026-10",
+        "topSinger": [{ "sum": 36000, "singerMid": "0025NhlN2yWrP4", "singerName": "周杰伦" }],
+        "topSong": [{ "sum": 40, "songMid": "0039MnYb0qxYhV", "songName": "晴天", "singerName": "周杰伦" }],
+        "favSongMid": "0039MnYb0qxYhV",
+        "favSongName": "晴天",
+        "favSingerMid": "0025NhlN2yWrP4",
+        "favSingerName": "周杰伦",
+        "repeatSong": { "listenDate": "2026-10-01", "songMid": "0039MnYb0qxYhV", "songName": "晴天", "singerMid": "0025NhlN2yWrP4", "singerName": "周杰伦", "count": 12 },
+        "midnightSong": { "month": 10, "hour": 2, "songMid": "000MkMni1yWrP4", "songName": "稻香", "singerMid": "0025NhlN2yWrP4", "singerName": "周杰伦" }
+      }
+    ],
+    "monthDetailList": [
+      { "listenCount": 320, "dataTime": "2026-10", "exportTime": "2026-11-01", "songs": [] }
+    ]
+  }
+}

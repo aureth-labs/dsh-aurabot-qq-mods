@@ -9,10 +9,12 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { HeyboxClient, HeyboxError, cosSign, WEB_BASE, TOPICS } from './api.mjs'
+import { HeyboxClient, HeyboxError, cosSign, newDeviceId, WEB_BASE, TOPICS } from './api.mjs'
 import { POST_STYLES, DEFAULT_POST_STYLE, styleOf, stylePrompt } from './styles.mjs'
-import { startQrLogin, pollQrLogin, verifyCookie } from './qr.mjs'
+import { startQrLogin, pollQrLogin, verifyCookie, fetchWebToken } from './qr.mjs'
 import { createVerifier } from './verify.mjs'
+import { createBrowser } from './browser.mjs'
+import { postViaWeb, shouldFallbackToWeb } from './webpost.mjs'
 
 const { dataDir } = globalThis.aurabot.lib('core/store.js')
 
@@ -21,6 +23,8 @@ const CRED_DIR = path.join(HOME, '.heybox-ai')
 const CRED_FILE = path.join(CRED_DIR, 'credentials.json')
 
 const DEFAULT_STATE = {
+  // 本机固定的设备指纹：首次运行时随机生成并落盘，不跟别人共用
+  deviceId: '',
   account: { checkedAt: 0, nickname: '', heyboxId: '', loggedIn: false, message: '' },
   quota: { date: '', like: 0, comment: 0, post: 0, browse: 0, share: 0 },
   history: [],
@@ -30,12 +34,32 @@ const DEFAULT_STATE = {
   risk: { level: 0, until: 0, reason: '', at: 0 },
   failures: 0,
   retryAt: 0,
+  // 自动发帖的独立退避（真失败时记这里，不影响「逛」的 retryAt）
+  postFailures: 0,
+  postRetryAt: 0,
   // 分区缓存：每天拉一次真实分区表（含热门游戏分区）
   topics: { fetchedAt: 0, date: '', list: [] },
   // 话题缓存：每天扫一次信息流，收集创作活动 + 普通话题（都带热度）
   acts: { fetchedAt: 0, date: '', list: [], plain: [] },
 }
 const RETRY_BACKOFF_MS = [2, 5, 15, 30, 60, 120].map((n) => n * 60_000)
+// 一帖挂几个话题：主人定的规则 —— 活动和普通**不互斥**，但**共享总共 3 个名额**，
+// 活动仍最多 1 个。（小黑盒网页编辑器自己的计数上限是 5，这里按主人的口径收紧到 3。）
+const HASHTAG_TOTAL_CAP = 3
+// 自动发帖那一轮要模型写一整篇（还要按字数补细节），4 分钟在实测里经常不够：
+// 一超时宿主就把这个后台会话标记成卡住、取消归档再重建，于是后台会话列表里
+// 每隔十几分钟就多出一条 system:heybox。放宽到 10 分钟，并在真失败时退避。
+const POST_TURN_TIMEOUT_MS = 600_000
+// 分块写长帖：自定义字数下限到这个数以上就别指望一稿写完。
+// 线上三天实测（DeepSeek-V4.1-Flash、日记体、下限 1500）：659 / 1077 / 1219 /
+// 1084 / 963 / 880 / 1301 —— 单轮全文补写也只能从 880 顶到 1301，到不了下限。
+// 但「每段写三四百字」是这个模型的舒适区，所以高下限改走「先大纲、再逐段生成」。
+const CHUNK_TARGET_MIN = 1000
+// 每段只写几百字，用不着整篇那一档 10 分钟超时
+const SECTION_TURN_TIMEOUT_MS = 300_000
+const MAX_SECTIONS = 5
+// too_short 的补写轮数：旧版只补一轮，880→1301 那口气刚提上来就放弃了
+const EXPAND_ROUNDS = 2
 
 export const today = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
@@ -139,7 +163,7 @@ export function linkIdOf(input) {
   return digits.length >= 6 ? digits : ''
 }
 
-export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive, stateFile = path.join(HOME, '.dsh', 'heybox-state.json'), credFile = CRED_FILE, now = () => Date.now(), clientFactory = (options) => new HeyboxClient(options), verifier: injectedVerifier, imagegen = null, memeRoot = null, imageDir = null } = {}) {
+export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive, stateFile = path.join(HOME, '.dsh', 'heybox-state.json'), credFile = CRED_FILE, now = () => Date.now(), clientFactory = (options) => new HeyboxClient(options), verifier: injectedVerifier, imagegen = null, memeRoot = null, imageDir = null, tokenBrowser: injectedTokenBrowser = null } = {}) {
   let client = null
   let verifier = injectedVerifier || null
   let verifySession = null
@@ -148,7 +172,24 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
   let running = false
   let qrStarting = false
   let disposed = false
-  const getVerifier = () => verifier ||= createVerifier({ profileDir: dataDir('heybox', 'edge-profile'), browserPath: () => getConfig().heybox?.browserPath || '', log })
+  const getVerifier = () => verifier ||= createVerifier({ profileDir: dataDir('heybox', 'edge-profile'), browserPath: () => getConfig().heybox?.browserPath || '', log, useEgo: () => getConfig().browser?.useDshSidebar === true })
+
+  // 网页兜底发帖用的浏览器：跟扫码验证共用同一个 profile，登录态能复用；
+  // 慢慢起、起不来就如实回报（别让发帖链路因为这个炸掉）。
+  let webBrowser = injectedTokenBrowser || null
+  // 测试可注入一个假浏览器：扫码补取 token 那一步不该在单测里真启动 Edge
+  async function getWebBrowser() {
+    if (injectedTokenBrowser) return { ok: true, browser: injectedTokenBrowser }
+    if (disposed) return { ok: false, message: '模块已关闭' }
+    try {
+      webBrowser ||= createBrowser({ profileDir: dataDir('heybox', 'edge-profile'), browserPath: () => getConfig().heybox?.browserPath || '', log, useEgo: () => false })
+      const r = await webBrowser.open()
+      if (!r.ok) return { ok: false, message: r.message || '浏览器没起来' }
+      return { ok: true, browser: webBrowser }
+    } catch (e) {
+      return { ok: false, message: e.message }
+    }
+  }
   const nowMs = () => now()
   const localToday = () => today(new Date(nowMs()))
 
@@ -172,7 +213,7 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
 
   function getClient() {
     if (!client) {
-      client = clientFactory({ cookie: cookie(), risk: readState().risk, onRisk: saveRisk, now })
+      client = clientFactory({ cookie: cookie(), deviceId: ensureDeviceId(), risk: readState().risk, onRisk: saveRisk, now })
       if (disposed) client.dispose()
     } else client.cookie = cookie()
     return client
@@ -193,6 +234,16 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
       fs.writeFileSync(stateFile, JSON.stringify(next, null, 2))
       return true
     } catch (e) { log?.warn?.('写小黑盒状态失败：' + e.message); return false }
+  }
+
+  /** 设备指纹：每台机器随机生成一次并存进状态文件，重启后保持不变 */
+  function ensureDeviceId() {
+    const st = readState()
+    if (/^[0-9a-f]{32}$/.test(String(st.deviceId || ''))) return st.deviceId
+    const id = newDeviceId()
+    st.deviceId = id
+    writeState(st)
+    return id
   }
 
   function quota() {
@@ -598,7 +649,7 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
     return { ok: true, list: sorted.slice(0, Math.max(1, Number(limit) || 20)), total: sorted.length, message: sorted.length ? `匹配到 ${sorted.length} 个话题` : '没匹配到话题' }
   }
 
-  // 规则：活动和普通话题可以一起挂（活动最多 1 个 + 普通最多 3 个，共 4 个）。
+  // 规则：活动和普通话题可以一起挂，但**共享总共 3 个名额**（活动仍最多 1 个）。
   //
   // ⚠ 解析出来的 { id, name } 只是个中间形态。真正发帖时**只发 name 的纯文本数组**
   //   （见 post 里 hashtags 那一行）：服务端拿名字自己匹配成话题，写进帖子的 content_tags。
@@ -607,7 +658,7 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
   //   style_type=2 项里，protocol 指向 /bbs/hashtag。
   /**
    * 把话题（id 或名字）解析成 { id, name } 列表，供发帖带出去。
-   * 规则：活动最多 1 个，普通最多 3 个，可以同时带。
+   * 规则：活动和普通不互斥，共享 3 个名额（活动最多 1 个，剩下的位置给普通话题）。
    */
   async function resolveHashtagItems(input) {
     const raw = (Array.isArray(input) ? input : (input ? [input] : []))
@@ -632,7 +683,7 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
         const parts = want.split(/[,，;；\s]+/).map((x) => x.trim()).filter(Boolean)
         for (const p of parts) {
           const h2 = list.find((a) => a.name === p) || list.find((a) => a.name.includes(p) || p.includes(a.name))
-          if (h2 && !plains.some((x) => x.id === String(h2.id)) && plains.length < 3) {
+          if (h2 && !plains.some((x) => x.id === String(h2.id)) && plains.length < HASHTAG_TOTAL_CAP) {
             const nm = String(h2.name || p).trim()
             if (nm && !/^\d+$/.test(nm)) {
               log?.warn?.(`小黑盒：话题「${want}」是按逗号/空格拆开挂的（拆出「${nm}」），检查一下排期里的话题是不是写成了一个串`)
@@ -664,17 +715,19 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
         if (acts.length >= 1) { log?.warn?.('小黑盒：创作活动只能挂 1 个，多余的已跳过'); continue }
         acts.push(item)
       } else {
-        if (plains.length >= 3) { log?.warn?.('小黑盒：普通话题最多 3 个，多余的已跳过'); continue }
+        if (plains.length >= HASHTAG_TOTAL_CAP) { log?.warn?.(`小黑盒：话题总共只能挂 ${HASHTAG_TOTAL_CAP} 个，多余的普通话题已跳过`); continue }
         if (!plains.some((x) => x.id === item.id)) plains.push(item)
       }
     }
-    // ⚠ 以前这里有「创作活动和普通话题互斥，只保留活动」的规则。
-    //   实测（2026-11-02）名字数组一次可以带多个，服务端会全部写进 content_tags，
-    //   真实帖子也常常活动+普通话题同时挂（如「分享我的养鱼日常」+「盒友日常」+「deepseek」）。
-    //   所以不再互斥：活动最多 1 个 + 普通最多 3 个，一起带出去，总数不超过 4。
+    // ⚠ 规则演进：最早是「创作活动和普通话题互斥，只保留活动」（错的，#21 去掉）；
+    //   后来是「活动 1 个 + 普通 3 个 = 最多 4 个」。现在按主人的口径：
+    //   **不互斥，但活动和普通共享总共 3 个名额**（活动最多 1 个，优先占席），
+    //   超出的直接截掉并 warn 出来，别悄悄少挂。
     const out = []
     if (acts.length) out.push(acts[0])
-    for (const p of plains.slice(0, 3)) out.push(p)
+    const room = HASHTAG_TOTAL_CAP - out.length
+    if (plains.length > room) log?.warn?.(`小黑盒：话题总共只能挂 ${HASHTAG_TOTAL_CAP} 个，第 ${room + 1} 个起的普通话题（${plains.slice(room).map((x) => x.name).join('、')}）已跳过`)
+    out.push(...plains.slice(0, room))
     return out
   }
 
@@ -894,6 +947,10 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
     const intro = []
     const inline = []
     const tail = []
+    // 上传失败要计数：以前只 warn 一句就跳过，帖子照样以纯文字发出去，
+    // 事后只能靠人肉看页面才发现「配图没上」——线上那些无图长文就是这么来的。
+    let uploadTried = 0
+    let uploadFailed = 0
     for (const seg of segments || []) {
       if (seg.type !== 'img' || !seg.buf) continue
       const pos = seg.position === 'tail' ? 'tail' : (seg.position === 'inline' ? 'inline' : 'afterIntro')
@@ -902,8 +959,9 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
         log?.info?.('正文不足 ' + minWords + ' 字，跳过文首配图：' + seg.filename)
         continue
       }
+      uploadTried++
       const up = await uploadInline(seg)
-      if (!up) continue
+      if (!up) { uploadFailed++; continue }
       if (pos === 'afterIntro') intro.push(up)
       else if (pos === 'inline') inline.push(up)
       else tail.push(up)
@@ -930,7 +988,7 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
     for (const b of allImgs) blocks.push({ type: 'img', url: b.url, width: String(b.width), height: String(b.height) })
     return {
       blocks, fullText, words,
-      images: { intro: intro.length, inline: inline.length, tail: tail.length, total: allImgs.length },
+      images: { intro: intro.length, inline: inline.length, tail: tail.length, total: allImgs.length, uploadTried, uploadFailed },
       introSkipped: !canIntroImg && words < minWords,
     }
   }
@@ -965,13 +1023,13 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
     const giveBack = () => { if (reserved) { reserved = false; releaseQuota('post') } }
 
     try {
-    // 字数范围：显式传入的（自动发帖给模型写的要求）> 排期 > 面板手改 > 风格自带值
+    // 字数范围：只认自定义值 —— 显式传入的（自动发帖给模型写的要求）> 排期 > 面板。
     // ⚠ 排期项里缺一个值时必须回落，不能把 undefined 当成覆盖，否则 words 会变成 NaN 校验直接失效
-    const wordCfg = (wordsMin || wordsMax)
-      ? { postWordsMin: wordsMin || plan.wordsMin || cfg.postWordsMin, postWordsMax: wordsMax || plan.wordsMax || cfg.postWordsMax }
-      : (plan.wordsMin || plan.wordsMax)
-        ? { postWordsMin: plan.wordsMin, postWordsMax: plan.wordsMax }
-        : cfg
+    // ⚠ 风格不再自带字数：没配自定义值时不做字数硬校验（自带值会把「写不够」变成死循环）
+    const wordCfg = {
+      postWordsMin: wordsMin || plan.wordsMin || cfg.postWordsMin || 0,
+      postWordsMax: wordsMax || plan.wordsMax || cfg.postWordsMax || 0,
+    }
     const st = styleOf(style || plan.style || cfg.postStyle, wordCfg)
     const words = countWords(text)
     // 字数**硬校验**：以前只在明显偏短时记一条 warn，照样发出去，结果就是「永远达不到设置的字数」。
@@ -984,8 +1042,8 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
         ok: false,
         code: 'too_short',
         words, minWords: minW, maxWords: maxW, needMore: short,
-        message: `正文只有 ${words} 字，低于「${st.label}」的下限 ${minW} 字（还差 ${short} 字），没有发出。`
-          + `请补到 ${minW}~${maxW} 字再发：可以多给一个具体细节（价格 / 销量 / 机制名 / 时间点）、`
+        message: `正文只有 ${words} 字，低于设的字数下限 ${minW} 字（还差 ${short} 字），没有发出。`
+          + `请补到 ${maxW ? minW + '~' + maxW : minW + ' 字以上'}再发：可以多给一个具体细节（价格 / 销量 / 机制名 / 时间点）、`
           + `多写一段你自己的看法，或者把某个点展开说。别用「首先其次总之」这类词凑字数。`,
       }
     }
@@ -994,7 +1052,7 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
         ok: false,
         code: 'too_long',
         words, minWords: minW, maxWords: maxW, exceed: words - maxW,
-        message: `正文 ${words} 字，超过「${st.label}」的上限 ${maxW} 字（多 ${words - maxW} 字），没有发出。请删减到 ${minW}~${maxW} 字再发。`,
+        message: `正文 ${words} 字，超过设的字数上限 ${maxW} 字（多 ${words - maxW} 字），没有发出。请删减到 ${minW ? minW + '~' + maxW : maxW + ' 字以内'}再发。`,
       }
     }
 
@@ -1148,7 +1206,36 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
     const blocks = built.blocks
     const fullText = built.fullText
     const desc = fullText.replace(/\s+/g, ' ').slice(0, 80)
-    const d = await getClient().post('/bbs/app/api/link/post', {
+    // ── 浏览器兜底 ──
+    // 服务端把 App 侧发帖接口关了（`发布功能暂不可用`）时这里会抛 HeyboxError('api')。
+    // 同一个登录取网页创作者编辑器能正常发（实测带图成功、能拿到 id、也能删），
+    // 所以这类「接口还在、只是不让我们用」的软拒改走网页发布；别把它当成
+    // 网络/校验失败直接退掉——那样主人会以为是她写的有问题。
+    let webFallback = null
+    const tryWeb = async (apiError) => {
+      if (webFallback) return webFallback
+      if (!shouldFallbackToWeb({ ok: false, message: apiError?.message || '', code: apiError?.code })) return null
+      log?.warn?.('小黑盒 API 发帖被拒（' + String(apiError?.message || '').slice(0, 40) + '），改走浏览器兜底')
+      const br = await getWebBrowser()
+      if (!br.ok) { log?.warn?.('网页兜底：浏览器起不来（' + br.message + '）'); return null }
+      try {
+        webFallback = await postViaWeb({
+          browser: br.browser,
+          cookie: cookie(),
+          title: t,
+          blocks,
+          communityName: cfg.webPostCommunity || '盒友杂谈',
+          log,
+        })
+      } catch (e) {
+        log?.warn?.('网页兜底出错：' + e.message)
+        webFallback = { ok: false, message: '网页兜底出错：' + e.message }
+      }
+      return webFallback
+    }
+    let d
+    try {
+      d = await getClient().post('/bbs/app/api/link/post', {
       link_tag: '11',                         // 11=文章（富文本，行内插图真正生效）
       text: JSON.stringify(blocks),
       title: t,
@@ -1170,6 +1257,37 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
       original: '1',
       declaration: '0',
     })
+
+    } catch (apiError) {
+      // 只兜「服务端不让我们用这个接口」这一类；别的错误照原样往上抛
+      log?.warn?.('DBG catch hit: ' + (apiError?.message||'') + ' code=' + apiError?.code + ' should=' + shouldFallbackToWeb({ok:false,message:apiError?.message||'',code:apiError?.code})); const w = await tryWeb(apiError)
+      if (!w || !w.ok) {
+        if (w && w.needLogin) log?.warn?.('网页兜底：浏览器里也没有登录态，得让主人重新扫码')
+        throw apiError
+      }
+      // 兜底成功了：按 normal 路径收尾（额度已消耗，别退回去）
+      reserved = false
+      const wid = String(w.linkId || '')
+      const wurl = w.url || (wid ? `${WEB_BASE}/app/bbs/link/${wid}` : '')
+      pushHistory({ kind: 'post', linkId: wid, title: t })
+      memory?.addEvent?.({ text: `我在小黑盒发了一帖《${t}》`, tags: ['小黑盒'], importance: 0.5 })
+      log?.info?.('小黑盒网页兜底发帖成功：' + wurl)
+      return {
+        ok: true,
+        message: (wurl ? `发出去了（网页兜底）：${wurl}` : '网页兜底发出去了，但没拿到帖子编号')
+          + `（风格：${st.label}，行内图 ${w.imgs || 0} 张）`,
+        url: wurl, linkId: wid, inline: w.imgs || 0, topicId, style: st.id,
+        images: built.images, introSkipped: built.introSkipped,
+        textOnly: built.images.total === 0,
+        hashtags: actItems.map((x) => x.name),
+        // 网页路径没走 content_tags，话题得靠编辑器里手动挂；如实标成 null 表示「没回查」
+        hashtagsVerified: null, hashtagsOk: null, hashtagsNote: '网页兜底不挂话题',
+        autoImages: autoPlan ? { planned: autoPlan.slots.length, generated: autoPlan.generated, fallback: autoPlan.fallback, kinds: autoPlan.slots.map((x) => x.kind), sources: autoPlan.slots.map((x) => x.from || 'meme') } : null,
+        plan: plan.fromPlan ? plan.slot : null,
+        viaWeb: true,
+        communityOk: w.communityOk !== false,
+      }
+    }
 
     const r = d.result || {}
     let id = String((typeof r === 'object' && (r.link_id ?? r.linkid)) || d.link_id || d.linkid || '')
@@ -1204,7 +1322,7 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
       hashtagsOk: tagsVerified ? tagsVerified.length : null,
       hashtagsNote: actItems.length ? '' : '',
       // 自动配图来源：现画几张、表情包兜底几张（手动传图时是 null）
-      autoImages: autoPlan ? { planned: autoPlan.slots.length, generated: autoPlan.generated, fallback: autoPlan.fallback, kinds: autoPlan.slots.map((x) => x.kind) } : null,
+      autoImages: autoPlan ? { planned: autoPlan.slots.length, generated: autoPlan.generated, fallback: autoPlan.fallback, kinds: autoPlan.slots.map((x) => x.kind), sources: autoPlan.slots.map((x) => x.from || 'meme') } : null,
       plan: plan.fromPlan ? plan.slot : null,
     }
     } catch (e) {
@@ -1399,16 +1517,28 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
     let generated = 0
     let fallback = 0
     const out = []
+    // ── 取图顺序：表情包优先，没有匹配的才现画 ─────────────────────────
+    // 主人定的：配图优先用表情包库里的图；图库里没有匹配的，再调生图模型。
+    // （旧版是反过来的「生图优先、表情包兜底」。反过来有两个实际坏处：
+    //   1) 生图没配好时（这台机器 imageGen.model 是空的，enabled() 恒 false）
+    //      每张都先白试一次才落到表情包，日志里全是「生图失败」的噪音；
+    //   2) 她的人设就是表情包里的那只大肥鱼，表情包比现画更贴调性、零成本。）
+    const wantReal = String(realStyle || '').toLowerCase() === 'real'
     for (const s of slots) {
       let p = ''
-      if (imagegen) {
+      let fromMeme = false
+      // 1) 表情包：先按位置挑对应情绪的图（happy/daily/…），文末优先 daily
+      p = pickFallback(s.kind, used)
+      if (p) { fallback++; fromMeme = true }
+      // 2) 图库里没有可用的（或者这张要写实风、表情包对不上）→ 现画
+      if (!p && imagegen) {
         try {
           const gen = await imagegen.enabled?.()
           if (gen) {
-            // 生图加超时：GENERATE_TIMEOUT_MS 里没回来就当这次失败、走表情包兜底。
+            // 生图加超时：GENERATE_TIMEOUT_MS 里没回来就当这次失败、放弃这张。
             // 不加超时的话，生图服务卡住会把整个发帖拖死（发帖是串行等图的）。
             const buf = await withTimeout(
-              imagegen.generate(imageIdeaFor(s.kind, { mood, excerpt: s.excerpt, style: realStyle }), { shape: 'square' }),
+              imagegen.generate(imageIdeaFor(s.kind, { mood, excerpt: s.excerpt, style: wantReal ? 'real' : 'anime' }), { shape: 'square' }),
               GENERATE_TIMEOUT_MS,
               '生图超过 ' + Math.round(GENERATE_TIMEOUT_MS / 1000) + ' 秒没返回',
             )
@@ -1426,20 +1556,16 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
               pruneImageDir(f)
             }
           }
-        } catch (e) { log?.warn?.('生图失败，用表情包兜底：' + String(e.message).slice(0, 60)) }
+        } catch (e) { log?.warn?.('生图失败，这张跳过：' + String(e.message).slice(0, 60)) }
       }
-      if (!p) {
-        p = pickFallback(s.kind, used)
-        if (p) fallback++
-      }
-      if (p) out.push({ kind: s.kind, path: p })
+      if (p) out.push({ kind: s.kind, path: p, from: fromMeme ? 'meme' : 'generated' })
     }
     return {
       slots: out,
       generated,
       fallback,
       words,
-      note: out.length === 0 ? '一张配图都没拿到（生图失败且图库为空），这帖会被拒发' : '',
+      note: out.length === 0 ? '一张配图都没拿到（图库为空且生图不可用），这帖会被拒发' : '',
     }
   }
 
@@ -1740,6 +1866,12 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
     const c = getConfig().heybox || {}
     if (c.autoPost === false) return { ok: false, skipped: true, message: '自动发帖已关（面板里关的）' }
     if (risk().leftMs > 0) return { ok: false, skipped: true, message: '小黑盒在冷却中' }
+    // 上一轮真失败过（模型没写成 / 稿子被硬校验拒了）就按退避等，别再每分钟写一篇废稿。
+    // 挡在这里（而不是 tick 里）：runDuty「逛完顺手发帖」那条路也一起受管。
+    const st0 = readState()
+    if (st0.postRetryAt && nowMs() < st0.postRetryAt) {
+      return { ok: false, skipped: true, message: '发帖在退避中（还要等 ' + Math.ceil((st0.postRetryAt - nowMs()) / 60_000) + ' 分钟）' }
+    }
     const pend = pendingPosts()
     if (!pend.configured) return { ok: false, skipped: true, message: '没配排期，不自动发' }
     if (pend.owe <= 0) return { ok: false, skipped: true, message: `今天的排期已经发完了（${pend.done}/${Math.min(pend.configured, pend.cap)}）` }
@@ -1772,30 +1904,140 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
         '只输出 JSON：{"title":"标题，30 字以内","text":"正文，段落用 \\n\\n 分隔"}',
         '不要输出任何 JSON 以外的字符，不要加代码块围栏。',
       ].join('\n\n')
-      let out = ''
-      try {
-        out = await hub.runSystemTurn('heybox', 'QQ · 小黑盒发帖', prompt, { timeoutMs: 240000, noTools: true })
-      } catch (e) {
-        log?.warn?.('小黑盒自动发帖：模型没写成（' + e.message + '），本篇先跳过')
-        return { ok: false, skipped: true, message: '模型没写成，本篇先跳过' }
+      const st = styleOf(plan.style || c.postStyle, {
+        postWordsMin: plan.wordsMin || c.postWordsMin || 0,
+        postWordsMax: plan.wordsMax || c.postWordsMax || 0,
+      })
+      const minW = Number(st.words?.[0]) || 0
+      const maxW = Number(st.words?.[1]) || 0
+      // ── 写这一篇稿子：高下限走分块扩写，不够再补写（最多 EXPAND_ROUNDS 轮）──
+      // 线上三天实测：下限 1500 时一稿只有 659~1301 字，单轮全文补写也只能从 880 顶到 1301。
+      // 但「每段写三四百字」是这个模型的舒适区，所以下限高时先出大纲、再逐段生成、本地拼接。
+      const runTurn = async (p, timeoutMs) => {
+        try { return { out: await hub.runSystemTurn('heybox', 'QQ · 小黑盒发帖', p, { timeoutMs, noTools: true }) } }
+        catch (e) { return { err: e } }
+      }
+      const takeDraft = (o) => {
+        const d = pickJson(o)
+        return { title: String(d?.title || '').trim(), text: String(d?.text || '').trim() }
+      }
+      // 分段扩写：大纲 + 逐段生成，最后本地拼接（再让模型合成一遍等于再给它一次缩水机会）
+      const expandBySections = async (needWords) => {
+        const g1 = await runTurn([
+          '【先给这篇小黑盒帖子做分段大纲，不是聊天】也不要调用工具，直接输出 JSON。',
+          brief,
+          '整篇要写 ' + needWords + ' 字左右，一次写完谁都写不够 —— 所以先只出大纲：',
+          '每段 200~400 字，段数按总字数摊开；每段给一个重点，并写清这段必须出现的**具体素材**（数字 / 细节 / 时间点）。',
+          '别写成论文提纲，口吻还是照上面那份风格要求。',
+          '只输出 JSON：{"title":"标题，30 字以内","sections":[{"focus":"这段讲什么","points":"要写进去的具体素材"}]}',
+          '不要输出任何 JSON 以外的字符，不要加代码块围栏。',
+        ].join('\n\n'), POST_TURN_TIMEOUT_MS)
+        if (g1.err) return { err: g1.err }
+        if (disposed) return { closed: true }
+        const od = pickJson(g1.out)
+        const outline = (Array.isArray(od?.sections) ? od.sections : []).filter((s) => s && (s.focus || s.points))
+        if (!outline.length) return { badOutline: true }
+        const picked = outline.slice(0, MAX_SECTIONS)
+        const per = Math.max(200, Math.ceil(needWords / picked.length))
+        const parts = []
+        for (let k = 0; k < picked.length; k++) {
+          if (disposed) return { closed: true }
+          const s = picked[k]
+          const gk = await runTurn([
+            '【写这篇小黑盒帖子的其中一段，不是聊天】也不要调用工具，直接输出 JSON。',
+            '整篇的口吻和风格要求：',
+            brief,
+            '整篇大纲（按顺序）：' + picked.map((x, n) => (n + 1) + '.' + String(x.focus || '')).join('；'),
+            '现在只写第 ' + (k + 1) + ' 段（共 ' + picked.length + ' 段）：' + String(s.focus || ''),
+            '这段要写进去的具体素材：' + String(s.points || '（自己补一个具体细节）'),
+            '这段写 ' + per + '~' + (per + 150) + ' 字；只写这一段，别写标题、别把别段的内容提前写进来。',
+            k === 0 ? '这是第一段，按风格要求该自我介绍就自我介绍。' : '别用「首先 / 其次 / 总之」起头，直接接上文说事。',
+            '只输出 JSON：{"text":"这一段"}',
+          ].join('\n\n'), SECTION_TURN_TIMEOUT_MS)
+          if (gk.err) { log?.warn?.('小黑盒自动发帖：第 ' + (k + 1) + ' 段没写成（' + gk.err.message + '），就发已写成的部分'); break }
+          if (disposed) return { closed: true }
+          const seg = String(pickJson(gk.out)?.text || '').trim()
+          if (seg) parts.push(seg)
+        }
+        if (!parts.length) return { noParts: true }
+        let joined = parts.join('\n\n')
+        // 按 post() 同一口径（去空白计字）收住上限：超了就从尾部丢段
+        if (maxW) { while (parts.length > 1 && countWords(joined) > maxW) { parts.pop(); joined = parts.join('\n\n') } }
+        const t0 = String(od?.title || '').trim()
+        return { title: t0 || String(picked[0].focus || '').slice(0, 30), text: joined, words: countWords(joined), got: parts.length, of: picked.length }
+      }
+      // 带原文补写：把差额和原文一起交给模型，比从零重写更容易达标
+      const expandOnce = async (cur) => {
+        const g = await runTurn([
+          '【把这篇小黑盒帖子补长一点，不是聊天】也不要调用工具，直接输出 JSON。',
+          '现在的正文只有 ' + cur.words + ' 字，至少要 ' + minW + ' 字，还差 ' + (minW - cur.words) + ' 字。',
+          '保留原文的口吻和结构，把篇幅补到' + (maxW ? ' ' + minW + '~' + maxW : ' ' + minW + ' 字以上') + '：',
+          '补的是**具体信息** —— 多给一个数字（价格 / 销量 / 时长 / 日期）、多讲一段自己的看法、把某个点点开说。',
+          '别用「首先 / 其次 / 总之」这类词凑字数，也别把同一句话换个说法再讲一遍。',
+          '标题：' + cur.title,
+          '正文：',
+          cur.text,
+          '',
+          '只输出 JSON：{"title":"标题，30 字以内","text":"补长后的正文"}',
+        ].join('\n\n'), POST_TURN_TIMEOUT_MS)
+        if (g.err) { log?.warn?.('小黑盒自动发帖：补字数那一轮没成（' + g.err.message + '）'); return { err: g.err } }
+        if (disposed) return { closed: true }
+        return takeDraft(g.out)
+      }
+      const wantChunked = minW >= CHUNK_TARGET_MIN
+      let draft = null
+      let r = null
+      const send = (d) => post({ title: d.title, text: d.text, style: plan.style || '', hashtags: plan.hashtags || [], topic: plan.topic || '', wordsMin: minW, wordsMax: maxW })
+
+      // 第 1 步：整篇写一稿（所有下限都先走这条，低下限往往一次就够）
+      const g0 = await runTurn(prompt, POST_TURN_TIMEOUT_MS)
+      if (g0.err) {
+        log?.warn?.('小黑盒自动发帖：模型没写成（' + g0.err.message + '），本篇先跳过')
+        // 模型侧失败（回合超时、后台会话在冷却）不是「配置不让发」，必须让 tick 退避。
+        // 不退避就会每分钟撞一次：每次撞都要开一个几分钟的长回合，回合超时又让宿主
+        // 把这个卡住的会话归档重建 —— 线上表现就是「一天凭空多出好几条 system:heybox 会话」。
+        return { ok: false, retry: true, message: '模型没写成，本篇先跳过' }
       }
       // 等回复的这几分钟里模块可能已经卸载了，别再往下发
       if (disposed) return { ok: false, skipped: true, message: '模块已关闭' }
-      const draft = pickJson(out)
-      const title = String(draft?.title || '').trim()
-      const text = String(draft?.text || '').trim()
-      if (!title || !text) {
+      draft = takeDraft(g0.out)
+      if (!draft.title || !draft.text) {
         log?.warn?.('小黑盒自动发帖：模型没给成型的标题/正文，本轮跳过')
-        return { ok: false, skipped: true, message: '模型输出的不是合法 JSON，本轮跳过' }
+        return { ok: false, retry: true, message: '模型输出的不是合法 JSON，本轮跳过' }
       }
-      // 排期/风格里配了字数下限的，按这个下限写给模型（写不够 post() 会 too_short 拒发，白占一轮）
-      const st = styleOf(plan.style || c.postStyle, { ...c, postWordsMin: plan.wordsMin || c.postWordsMin, postWordsMax: plan.wordsMax || c.postWordsMax })
-      const minW = Number(st.words?.[0]) || 0
-      const maxW = Number(st.words?.[1]) || 0
-      const r = await post({ title, text, style: plan.style || '', hashtags: plan.hashtags || [], topic: plan.topic || '', wordsMin: minW, wordsMax: maxW })
-      if (r?.ok) log?.info?.(`小黑盒自动发帖成功：${title}`)
-      else log?.warn?.('小黑盒自动发帖被拒：' + String(r?.message || '').slice(0, 80))
-      return r
+      r = await send(draft)
+
+      // 第 2 步：高下限还差字 → 分段扩写（比第 N 轮全文补写靠谱得多）。
+      // 大纲拿不到就放弃这条路，交给第 3 步的整篇补写，别发半截稿。
+      if (r && !r.ok && r.code === 'too_short' && wantChunked) {
+        log?.info?.('小黑盒自动发帖：一稿 ' + r.words + ' 字到不了下限 ' + minW + '，改走分段扩写')
+        const ex = await expandBySections(minW)
+        if (ex.closed) return { ok: false, skipped: true, message: '模块已关闭' }
+        if (ex.err) return { ok: false, retry: true, message: '分段扩写没成：' + ex.err.message }
+        if (ex.badOutline || ex.noParts) log?.warn?.('小黑盒自动发帖：分段大纲没拿到 / 一段都没写成，退回整篇补写')
+        else {
+          log?.info?.('小黑盒自动发帖：分段扩写拼出 ' + ex.words + ' 字（' + ex.got + '/' + ex.of + ' 段）')
+          draft = { title: ex.title, text: ex.text }
+          r = await send(draft)
+        }
+      }
+
+      // 第 3 步：还差字就带原文补写，最多 EXPAND_ROUNDS 轮。
+      // 只有「还差字」值得再来一轮；别的拒发（配图 / 分区 / 超上限）重试也没用。
+      for (let k = 0; k < EXPAND_ROUNDS && r && !r.ok && r.code === 'too_short'; k++) {
+        if (disposed) return { ok: false, skipped: true, message: '模块已关闭' }
+        log?.warn?.('小黑盒自动发帖：第 ' + (k + 2) + ' 稿 ' + r.words + ' 字仍低于下限 ' + minW + '，再补一轮')
+        const ex2 = await expandOnce({ title: draft.title, text: draft.text, words: r.words })
+        if (ex2.closed) return { ok: false, skipped: true, message: '模块已关闭' }
+        if (!ex2.title || !ex2.text) continue
+        draft = { title: ex2.title, text: ex2.text }
+        r = await send(draft)
+      }
+
+      if (r?.ok) log?.info?.('小黑盒自动发帖成功：' + draft.title)
+      else if (r && !r.skipped) log?.warn?.('小黑盒自动发帖被拒：' + String(r.message || '').slice(0, 80))
+      // post() 的硬拒发（字数 / 配图 / 分区）同样要退避：不退避就是每分钟重写一遍注定被拒的稿
+      return r && !r.ok && !r.skipped ? { ...r, retry: true } : r
     } finally {
       if (tookLock) running = false
     }
@@ -1868,9 +2110,30 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
         ? await maybeAutoPost({ memory, owner, token: myToken })
         : await runDuty({ memory, owner, token: myToken })
       const fresh = readState()
-      fresh.failures = 0
-      fresh.retryAt = 0
-      if (!r.ok) fresh.lastSkipReason = r.message
+      // 两种「没干成」要分开：
+      //   · skipped —— 安全阀（关了自动发帖、没配排期、额度用完、还没到点、正在退避），
+      //     本来就不该干活，不进阶梯；
+      //   · retry —— 真失败（模型没写成、稿子过不了 post() 的硬校验）。旧版在这里一律
+      //     清零 failures/retryAt，于是 tick 每分钟重来一遍：每分钟开一个几分钟的长回合，
+      //     回合超时又让宿主不断归档重建后台会话。
+      // 退避只记在 postRetryAt 上，不碰 retryAt —— 后者会连「逛」一起挡掉，而逛本身没事。
+      // runDuty 把发帖结果嵌在 r.post 里；直接补发那一路 r 本身就是发帖结果。
+      const postRes = r.post !== undefined ? r.post : r
+      const hardFail = Boolean(postRes?.retry)
+      if (hardFail) {
+        const n = Math.min(RETRY_BACKOFF_MS.length, (Number(fresh.postFailures) || 0) + 1)
+        fresh.postFailures = n
+        fresh.postRetryAt = nowMs() + RETRY_BACKOFF_MS[n - 1]
+        fresh.lastSkipReason = postRes.message || '发帖失败'
+        log?.warn?.(`小黑盒自动发帖退避 ${Math.round(RETRY_BACKOFF_MS[n - 1] / 60000)} 分钟：` + String(fresh.lastSkipReason).slice(0, 60))
+      } else {
+        fresh.failures = 0
+        fresh.retryAt = 0
+        // 只有**发帖真的成功**才清零退避。逛成功不代表发帖成功，
+        // 早先写成看 r.ok 会把「这一圈逛得很顺」误当成稿子发掉了，顺手抹掉还在生效的退避。
+        if (postRes?.ok) { fresh.postFailures = 0; fresh.postRetryAt = 0 }
+        if (!r.ok) fresh.lastSkipReason = r.message
+      }
       writeState(fresh)
       if (r.ok) log?.info?.('小黑盒后台会话跑完：' + String(r.message || '').slice(0, 40))
     } catch (e) {
@@ -2011,13 +2274,41 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
       if (!r.hasPkey || r.verified !== true) return { ok: false, state: 'unverified', verified: false, message: '扫码账号尚未验证通过：' + (r.verifyError || '未取得可用账号') }
       if (session.riskToken !== c.riskToken() || session.originalCookie !== cookie()) return { ok: false, state: 'unverified', verified: false, message: '账号或风控状态已改变，请重新开始' }
       if (typeof setCookie !== 'function') return { ok: false, state: 'save-failed', message: '配置保存接口不可用' }
-      await setCookie(r.cookie)
+      // ── 补取 x_xhh_tokenid ──
+      // 扫码接口只给 pkey；写操作要的 x_xhh_tokenid 是网页前端 JS 种进浏览器的
+      // （实测：灌 pkey 打开首页 3~6 秒后出现），所以这里必须借一次浏览器。
+      // 取不到不算失败：扫码本身成功了，保留只有 pkey 的 Cookie 并如实告知限制。
+      let finalCookie = r.cookie
+      let tokenNote = ''
+      if (!/x_xhh_tokenid=/.test(finalCookie)) {
+        const br = await getWebBrowser().catch((e) => ({ ok: false, message: e.message }))
+        if (br.ok) {
+          const got = await fetchWebToken({ browser: br.browser, cookie: finalCookie, log })
+          if (got.ok) {
+            finalCookie = finalCookie + '; x_xhh_tokenid=' + got.token
+            tokenNote = '（含发帖令牌）'
+          } else {
+            tokenNote = '（缺 x_xhh_tokenid：' + got.reason + '）'
+            log?.warn?.('扫码登录：没能取回 x_xhh_tokenid —— ' + got.reason)
+          }
+        } else {
+          tokenNote = '（缺 x_xhh_tokenid：浏览器起不来）'
+          log?.warn?.('扫码登录：浏览器起不来，无法补取 x_xhh_tokenid —— ' + br.message)
+        }
+      } else {
+        tokenNote = '（含发帖令牌）'
+      }
+      await setCookie(finalCookie)
       if (disposed || qrSession !== session) return { ok: false, state: 'cancelled', message: '模块已关闭' }
-      saveCookie(r.cookie)
+      saveCookie(finalCookie)
       // 保存后如果发生了新风控，不得清除新冷却。
       if (session.riskToken === c.riskToken()) c.clearRisk()
       qrSession = null
-      return { ok: true, state: 'ok', verified: true, nickname: r.nickname, heyboxId: r.heyboxId, message: '扫码登录成功' }
+      return {
+        ok: true, state: 'ok', verified: true, nickname: r.nickname, heyboxId: r.heyboxId,
+        hasToken: /x_xhh_tokenid=/.test(finalCookie),
+        message: '扫码登录成功' + tokenNote,
+      }
     } catch (e) { return { ok: false, state: 'error', message: '查询扫码状态失败：' + e.message } }
     finally {
       // 未验证的候选 Cookie 不写入配置，也不保留在扫码会话中。
@@ -2095,6 +2386,8 @@ export function createHeybox({ getConfig, setCookie, hub, memory, log, proactive
     verifySession = null
     client?.dispose()
     verifier?.dispose()
+    try { webBrowser?.close?.() } catch { /* 关不干净不拦着卸载 */ }
+    webBrowser = null
   }
 
   log?.info?.('小黑盒模块起来了' + (cookie() ? '' : '（还没填 Cookie）'))

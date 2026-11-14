@@ -175,7 +175,7 @@ export function createSite({ browser, log }) {
     // 卡片是懒加载的：先滚两屏把内容催出来，再解析，parseCards 内部有兜底滚动重试
     let cards = await parseCards(20)
     if (!cards.length) {
-      await b.scroll({ dy: 900 }).catch(() => {})
+      await b.evaluate('window.scrollBy(0, 900)').catch(() => {})
       await new Promise((r) => setTimeout(r, 1500))
       cards = await parseCards(20)
     }
@@ -189,7 +189,7 @@ export function createSite({ browser, log }) {
     await b.waitFor('section.note-item', 12000)
     let cards = await parseCards(20)
     if (!cards.length) {
-      await b.scroll({ dy: 900 }).catch(() => {})
+      await b.evaluate('window.scrollBy(0, 900)').catch(() => {})
       await new Promise((r) => setTimeout(r, 1500))
       cards = await parseCards(20)
     }

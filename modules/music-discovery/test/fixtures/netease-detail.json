@@ -1,0 +1,102 @@
+{
+  "_comment": "固定 fixture：网易云歌单/榜单详情回包（/api/v6/playlist/detail）。id 111 用歌单形态，id 3778678 用榜单形态。",
+  "playlist": {
+    "id": 111,
+    "name": "自习室的安静钢琴",
+    "tracks": [
+      {
+        "id": 501,
+        "name": "River Flows in You",
+        "ar": [{ "id": 11, "name": "Yiruma" }],
+        "al": { "id": 12, "name": "First Love" },
+        "dt": 210000,
+        "alia": [],
+        "originCoverType": 1
+      },
+      {
+        "id": 502,
+        "name": "Kiss the Rain",
+        "ar": [{ "id": 11, "name": "Yiruma" }],
+        "al": { "id": 12, "name": "First Love" },
+        "dt": 224000,
+        "alia": [],
+        "originCoverType": 1
+      },
+      {
+        "id": 503,
+        "name": "第三首不该被取到",
+        "ar": [{ "id": 13, "name": "某人" }],
+        "al": { "id": 14, "name": "某专辑" },
+        "dt": 200000,
+        "alia": [],
+        "originCoverType": 1
+      }
+    ]
+  },
+  "playlist222": {
+    "id": 222,
+    "name": "写代码不被打断",
+    "tracks": [
+      {
+        "id": 601,
+        "name": "Weightless",
+        "ar": [{ "id": 21, "name": "Marconi Union" }],
+        "al": { "id": 22, "name": "Weightless" },
+        "dt": 480000,
+        "alia": [],
+        "originCoverType": 1
+      },
+      {
+        "id": 602,
+        "name": "Experience",
+        "ar": [{ "id": 23, "name": "Ludovico Einaudi" }],
+        "al": { "id": 24, "name": "In a Time Lapse" },
+        "dt": 315000,
+        "alia": [],
+        "originCoverType": 1
+      }
+    ]
+  },
+  "chart": {
+    "id": 3778678,
+    "name": "热歌榜",
+    "tracks": [
+      {
+        "id": 701,
+        "name": "热歌一号",
+        "ar": [{ "id": 31, "name": "歌手甲" }],
+        "al": { "id": 32, "name": "专辑甲" },
+        "dt": 200000,
+        "alia": [],
+        "originCoverType": 1
+      },
+      {
+        "id": 702,
+        "name": "热歌二号",
+        "ar": [{ "id": 33, "name": "歌手乙" }],
+        "al": { "id": 34, "name": "专辑乙" },
+        "dt": 210000,
+        "alia": [],
+        "originCoverType": 1
+      },
+      {
+        "id": 703,
+        "name": "热歌三号",
+        "ar": [{ "id": 35, "name": "歌手丙" }],
+        "al": { "id": 36, "name": "专辑丙" },
+        "dt": 220000,
+        "alia": [],
+        "originCoverType": 1
+      },
+      {
+        "id": 704,
+        "name": "热歌四号",
+        "ar": [{ "id": 37, "name": "歌手丁" }],
+        "al": { "id": 38, "name": "专辑丁" },
+        "dt": 230000,
+        "alia": [],
+        "originCoverType": 1
+      }
+    ]
+  }
+}

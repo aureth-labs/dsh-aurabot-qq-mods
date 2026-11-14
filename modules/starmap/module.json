@@ -1,0 +1,25 @@
+{
+  "id": "starmap",
+  "name": "星图",
+  "version": "1.1.0",
+  "description": "把 Aurabot 自己的记忆渲染成可交互的星图，两种看法：关系星图看结构，银河云图看时间。",
+  "category": "tool",
+  "tags": [
+    "星图",
+    "记忆",
+    "识海",
+    "银河",
+    "可视化"
+  ],
+  "author": "zcx1021",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "filesystem",
+    "plugin-internals",
+    "plugin-config",
+    "network"
+  ]
+}

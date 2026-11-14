@@ -1,0 +1,15 @@
+{
+  "id": "wardrobe",
+  "name": "衣柜",
+  "version": "1.0.1",
+  "description": "她的衣服：每套带参考图和文字描述，挑一套当前穿搭，按固定姿势生成预览；不能带参考图的服务直接用描述",
+  "category": "creative",
+  "tags": ["衣柜", "穿搭", "生图", "人设"],
+  "author": "YanOnjun",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": ["imagegen"],
+  "capabilities": ["network", "filesystem", "process", "plugin-config", "plugin-internals"],
+  "homepage": ""
+}

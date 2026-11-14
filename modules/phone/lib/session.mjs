@@ -55,16 +55,33 @@ export function createSession({ timeoutMs = 900000, sweepMs = 30000, now = Date.
   timer.unref?.() // 不阻止进程退出
 
   return {
-    /** 获取锁：空闲立即授予；被占则进队列并 await 到授予。 */
-    acquire(name) {
-      if (disposed) return Promise.resolve({ ok: false })
+    /**
+     * 获取锁：空闲立即授予；被占则进队列并 await 到授予。
+     * waitMs > 0 时排队超过这么久就放弃（返回 {ok:false, reason:'queue-timeout'}），
+     * 免得一个卡死的旧任务把后面所有轮次全部挂住、还不说为什么。
+     */
+    acquire(name, waitMs = 0) {
+      if (disposed) return Promise.resolve({ ok: false, reason: 'instance-disposed' })
       if (!owner) {
         owner = name
         since = now()
         lastActive = since
         return Promise.resolve({ ok: true, queued: false })
       }
-      return new Promise((resolve) => queue.push({ owner: name, resolve }))
+      return new Promise((resolve) => {
+        const entry = { owner: name, resolve }
+        queue.push(entry)
+        if (waitMs > 0) {
+          const t = setTimeout(() => {
+            const i = queue.indexOf(entry)
+            if (i >= 0) queue.splice(i, 1)
+            resolve({ ok: false, reason: `queue-timeout(${Math.round(waitMs / 1000)}s)` })
+          }, waitMs)
+          t.unref?.()
+          const grant = entry.resolve
+          entry.resolve = (r) => { clearTimeout(t); grant(r) }
+        }
+      })
     },
 
     /** 工作区每步调用，刷新最后活跃时间，避免被清扫强断。 */

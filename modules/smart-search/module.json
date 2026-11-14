@@ -1,0 +1,26 @@
+{
+  "id": "smart-search",
+  "name": "联网搜索",
+  "version": "1.0.2",
+  "description": "需要时自己查资料、读网页，回答附上来源；默认沿用 DSH 搜索",
+  "category": "tool",
+  "tags": [
+    "搜索",
+    "网页",
+    "资料"
+  ],
+  "author": "b1ghawk119",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.1",
+  "requires": [],
+  "capabilities": [
+    "network",
+    "plugin-config",
+    "plugin-internals"
+  ],
+  "build": {
+    "out": ".build"
+  },
+  "homepage": "https://github.com/b1ghawk119/dsh-aurabot-qq-smartsearch-plugin"
+}

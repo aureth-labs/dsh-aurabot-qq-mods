@@ -1,0 +1,14 @@
+{
+  "id": "billiards",
+  "name": "台球",
+  "version": "1.0.0",
+  "description": "桌宠那台台球桌搬出来了：拖白球出杆打八球，整个桌面当球桌，球桌以外照常点东西。",
+  "category": "desktop",
+  "tags": ["台球", "八球", "小游戏", "桌面"],
+  "author": "asyncxt",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["filesystem", "process"]
+}

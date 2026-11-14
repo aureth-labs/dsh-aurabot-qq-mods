@@ -1,0 +1,14 @@
+{
+  "name": "aurabot-feed",
+  "version": "3.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Aurabot 的喂食扩展：按作息饿、会自己找零食也会喊饿，带一块能投喂她、她会回话的面板。",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  }
+}

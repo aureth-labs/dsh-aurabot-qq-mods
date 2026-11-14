@@ -74,6 +74,14 @@ export function validateManifest(m, id, known = new Set(BUILTINS)) {
   if (m.id !== id) errors.push(`id「${m.id ?? ''}」要和文件夹名「${id}」一样`)
   if (!CATEGORIES[m.category]) errors.push(`category 要从这些里选：${Object.keys(CATEGORIES).join('、')}`)
   if (m.tags !== undefined && !(Array.isArray(m.tags) && m.tags.length <= 5 && m.tags.every((t) => typeof t === 'string' && t.trim()))) errors.push('tags 要是字符串数组，最多 5 个')
+  if (m.platforms !== undefined) {
+    if (!Array.isArray(m.platforms) || !m.platforms.length) errors.push('platforms 要是非空数组；不写表示只支持 QQ')
+    else if (m.platforms.includes('*') && m.platforms.length !== 1) errors.push('platforms 里的 "*" 只能单独使用')
+    else {
+      for (const p of m.platforms) if (p !== '*' && (typeof p !== 'string' || !/^[a-z][a-z0-9-]{0,39}$/.test(p))) errors.push(`platforms 里的「${p}」不对：只能用小写字母、数字和 -`)
+      if (new Set(m.platforms).size !== m.platforms.length) errors.push('platforms 里不能有重复项')
+    }
+  }
   if (!VERSION_RE.test(String(m.version || ''))) errors.push('version 要写成 1.2.3')
   if (!Number.isInteger(m.api) || m.api < 1) errors.push('api 要写按哪一版扩展接口开发的（整数）')
   if (!VERSION_RE.test(String(m.minPluginVersion || ''))) errors.push('minPluginVersion 要写成 1.2.3')
@@ -206,16 +214,20 @@ export function collect(mod, m = readManifest(mod.dir)) {
 /** 把发布内容放到临时目录真正加载一次，确认入口能跑通、和 module.json 对得上。 */
 export function smokeTest(files, m) {
   const tmp = mkdtempSync(join(tmpdir(), 'aurabot-mod-'))
+  // 用 module.json 的 id 作为临时子目录名：有些模块从「文件夹名」推导自己的 id
+  // （如 aura-mimo 支持改名为 voice 接管内置语音），随机临时目录名会让入口 id
+  // 和 module.json 对不上。真实安装目录也是模块 id，这样最接近发布后的形态。
+  const root = join(tmp, m.id)
   try {
     for (const [name, data] of files) {
-      mkdirSync(dirname(join(tmp, name)), { recursive: true })
-      writeFileSync(join(tmp, name), data)
+      mkdirSync(dirname(join(root, name)), { recursive: true })
+      writeFileSync(join(root, name), data)
     }
-    const entry = entryOf(tmp)
+    const entry = entryOf(root)
     if (!entry) return ['发布内容里没有入口文件']
-    const script = `globalThis.aurabot={lib:()=>new Proxy({},{get:()=>()=>{}}),src:'file:///'};const d=(await import(${JSON.stringify(pathToFileURL(join(tmp, entry)).href)})).default;console.log('@@'+JSON.stringify({id:d?.id,version:d?.version,api:d?.api,setup:typeof d?.setup}));process.exit(0)`
+    const script = `globalThis.aurabot={lib:()=>new Proxy({},{get:()=>()=>{}}),src:'file:///'};const d=(await import(${JSON.stringify(pathToFileURL(join(root, entry)).href)})).default;console.log('@@'+JSON.stringify({id:d?.id,version:d?.version,api:d?.api,setup:typeof d?.setup}));process.exit(0)`
     let out
-    try { out = execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: tmp, encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'] }) } catch (error) { return [`入口加载失败：${String(error.stderr || error.message).slice(0, 500)}`] }
+    try { out = execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: root, encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'] }) } catch (error) { return [`入口加载失败：${String(error.stderr || error.message).slice(0, 500)}`] }
     const got = JSON.parse(out.split('\n').find((l) => l.startsWith('@@')).slice(2))
     const errors = []
     if (got.setup !== 'function') errors.push('入口要 export default 一个带 setup(api) 的对象')
@@ -237,7 +249,7 @@ export function packModule(mod, outDir) {
   mkdirSync(outDir, { recursive: true })
   writeFileSync(join(outDir, file), zip)
   const { id, name, version, description, category, author, license, api, minPluginVersion, requires, capabilities } = m
-  return { id, name, version, description, category, tags: m.tags || [], author, license, api, minPluginVersion, requires, capabilities, replacesBuiltin: Boolean(m.replacesBuiltin), ...(m.homepage ? { homepage: m.homepage } : {}), tag, file, path: `${tag}/${file}`, size: zip.length, sha256: createHash('sha256').update(zip).digest('hex') }
+  return { id, name, version, description, category, tags: m.tags || [], ...(m.platforms ? { platforms: m.platforms } : {}), author, license, api, minPluginVersion, requires, capabilities, replacesBuiltin: Boolean(m.replacesBuiltin), ...(m.homepage ? { homepage: m.homepage } : {}), tag, file, path: `${tag}/${file}`, size: zip.length, sha256: createHash('sha256').update(zip).digest('hex') }
 }
 
 /** 按这次打包结果和现有模块生成新的索引。删掉目录的模块自动下架；内容没变就原样返回。 */

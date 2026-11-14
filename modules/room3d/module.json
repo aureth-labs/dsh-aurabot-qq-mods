@@ -1,0 +1,14 @@
+{
+  "id": "room3d",
+  "name": "房间",
+  "version": "1.0.3",
+  "description": "给她一个自己的 3D 房间：屋里一开始是空的，只有她一个人（大肥鱼）；家具、地板、猫都能自己摆，她还看得见自己在哪儿。",
+  "category": "social",
+  "tags": ["3D", "房间", "家具", "空间感", "陪伴"],
+  "author": "zcx1021",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["network", "filesystem", "plugin-internals"]
+}

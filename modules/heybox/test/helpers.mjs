@@ -12,7 +12,7 @@ export const defer = () => {
   return { promise, resolve, reject }
 }
 
-export function fixture({ config = {}, fetcher = async () => { throw new Error('禁止联网') }, hub, verifier, initialState, now = new Date(2026, 5, 8, 10).getTime() } = {}) {
+export function fixture({ config = {}, fetcher = async () => { throw new Error('禁止联网') }, hub, verifier, initialState, now = new Date(2026, 5, 8, 10).getTime(), tokenBrowser = undefined } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'heybox-test-'))
   let time = now
   const cfg = {
@@ -34,7 +34,23 @@ export function fixture({ config = {}, fetcher = async () => { throw new Error('
     getConfig: () => cfg,
     setCookie: (value) => { cfg.heybox.cookie = value },
     hub: chat, verifier, stateFile, credFile: join(dir, 'missing.json'), now: () => time,
+    // 扫码补取 x_xhh_tokenid 那步默认注入一个「什么都不给」的假浏览器，
+    // 免得单测真的去起 Edge；要测成功路径时传入 tokenBrowser
+    tokenBrowser: tokenBrowser === undefined ? fakeTokenBrowser({ token: null }) : tokenBrowser,
     clientFactory: (options) => new HeyboxClient({ ...options, random: () => 0.5, delay: async (ms) => { time += ms }, fetchImpl: async (...args) => { calls.push(args); return fetcher(...args) } }),
   })
   return { hb, cfg, calls, turns, sends, stateFile, get time() { return time }, set time(v) { time = v }, close() { hb.dispose(); rmSync(dir, { recursive: true, force: true }) } }
+}
+
+/** 假的取 token 浏览器：给什么 token 就返回什么，token 为 null 表示前端没种 */
+export function fakeTokenBrowser({ token = null, failOpen = false } = {}) {
+  const state = { opened: 0, cookies: token ? [{ name: 'x_xhh_tokenid', value: token }] : [] }
+  return {
+    state,
+    open: async () => (failOpen ? { ok: false, message: '起不来' } : { ok: true }),
+    setCookies: async (list) => (list || []).length,
+    goto: async () => {},
+    cookies: async () => state.cookies,
+    close: async () => {},
+  }
 }

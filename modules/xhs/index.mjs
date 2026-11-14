@@ -29,7 +29,7 @@ const silenceOf = (() => { try { return __lib('chat/reply.js').isSilence } catch
 export default {
   id: 'xhs',
   name: '刷小红书',
-  version: '0.2.0',
+  version: '0.3.5',
   api: 1,
   description: '用专用浏览器刷小红书：逛推荐/搜索、看笔记写记忆、点赞收藏评论（人格生成、每日上限）、认别人发来的小红书链接、看主人的私信并回复；发帖走「草稿 → 主人确认」两步，绝不闷头发。各能力独立开关，默认全关。',
   panel: 'panel.js', // 自定义面板（panel.js 接管全部设置表单；settings 数组保留作兜底与检查用）
@@ -81,7 +81,7 @@ export default {
     // 模块 settings 整体 + 插件主配置里的 ownerQQ/ownerName：duty 的暂停汇报、分享、
     // 私信记忆要用；权限档 profileToolVisible/profilePermits 判「是不是主人」也要用
     //（社区模块 settings 里没有这两项，不并上就永远判不出主人、工具一个都不挂）。
-    const cfgAll = () => ({ ...api.settings(), ownerQQ: api.config().ownerQQ, ownerName: api.config().ownerName })
+    const cfgAll = () => ({ ...api.settings(), ownerQQ: api.config().ownerQQ, ownerName: api.config().ownerName, browser: api.config().browser })
 
     // 分享/汇报给主人 QQ：先问出站治理面（api.proactive，宿主绑定模块身份），
     // 治理面没注入/不支持/被拦时退回 hub.sendText 直发；试运行短路治理面（不进账本），

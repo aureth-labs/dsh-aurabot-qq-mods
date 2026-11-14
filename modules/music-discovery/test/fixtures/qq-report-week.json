@@ -1,0 +1,16 @@
+{
+  "_comment": "按 me.md 周报字段构造的脱敏 fixture；listenTime 是日均，不是一周总量",
+  "ret": 0,
+  "sub_ret": 0,
+  "weekData": {
+    "listenTime": 2100,
+    "floatNumber": 0.125,
+    "averageTime": [],
+    "singerListen": [
+      { "sum": 5400, "singerMid": "0025NhlN2yWrP4", "singerName": "周杰伦" }
+    ],
+    "songListen": [
+      { "sum": 12, "songMid": "0039MnYb0qxYhV", "songName": "晴天", "singerMid": "0025NhlN2yWrP4", "singerName": "周杰伦" }
+    ]
+  }
+}

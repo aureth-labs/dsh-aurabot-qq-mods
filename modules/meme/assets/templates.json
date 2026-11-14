@@ -1,0 +1,85 @@
+[
+  {
+    "key": "huang_renxun_say",
+    "keywords": [
+      "黄仁勋说",
+      "老黄说"
+    ],
+    "tags": [
+      "人物",
+      "文字"
+    ],
+    "defaultText": "显存不够？\n再加一张。",
+    "image": "huang-renxun-say.jpg",
+    "width": 1280,
+    "height": 853,
+    "textBox": {
+      "x": 730,
+      "y": 65,
+      "width": 420,
+      "height": 260,
+      "maxSize": 64,
+      "minSize": 20,
+      "lineHeight": 1.2,
+      "color": "#ffffff"
+    }
+  },
+  {
+    "key": "huang_renxun_holdsign",
+    "keywords": [
+      "黄仁勋举牌",
+      "老黄举牌"
+    ],
+    "tags": [
+      "人物",
+      "举牌",
+      "文字"
+    ],
+    "defaultText": "买得越多，省得越多。",
+    "image": "huang-holdsign-smile.jpg",
+    "width": 1024,
+    "height": 1024,
+    "textBox": {
+      "x": 210,
+      "y": 615,
+      "width": 620,
+      "height": 320,
+      "maxSize": 90,
+      "minSize": 24,
+      "lineHeight": 1.2,
+      "color": "#111111"
+    },
+    "variants": {
+      "option": "表情",
+      "default": "笑",
+      "images": {
+        "笑": "huang-holdsign-smile.jpg",
+        "哭": "huang-holdsign-cry.jpg"
+      }
+    },
+    "shortcuts": [
+      {
+        "pattern": "黄仁勋哭举牌",
+        "humanized": "黄仁勋哭举牌",
+        "texts": [],
+        "options": {
+          "表情": {
+            "type": "String",
+            "field0": "哭"
+          }
+        }
+      },
+      {
+        "pattern": "老黄哭举牌",
+        "humanized": "老黄哭举牌",
+        "texts": [],
+        "options": {
+          "表情": {
+            "type": "String",
+            "field0": "哭"
+          }
+        }
+      }
+    ]
+  }
+]

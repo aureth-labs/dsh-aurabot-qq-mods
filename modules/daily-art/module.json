@@ -1,0 +1,14 @@
+{
+  "id": "daily-art",
+  "name": "每日推图 · 逛图站",
+  "version": "3.2.0",
+  "author": "Reinero",
+  "description": "在同一页管理 Konachan 和 Yande.re 定时推图及 QQ 按需找图。",
+  "category": "platform",
+  "tags": ["图片", "定时", "Konachan"],
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["network", "filesystem", "plugin-config", "plugin-internals"]
+}

@@ -1,0 +1,22 @@
+{
+  "id": "callme",
+  "name": "语音通话",
+  "version": "1.0.0",
+  "description": "在 Windows 上用自己的 QQ 账号拨 QQ 语音通话：私聊通话、群语音（把 @ 她的人一起拉进来）、随时挂断。",
+  "category": "social",
+  "tags": [
+    "语音通话",
+    "QQ",
+    "Windows"
+  ],
+  "author": "DFH-clouds",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "process",
+    "filesystem",
+    "plugin-internals"
+  ]
+}

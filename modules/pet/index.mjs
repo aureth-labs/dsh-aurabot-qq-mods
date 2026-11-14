@@ -25,6 +25,7 @@ import { join, dirname, sep, basename, extname } from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto'
 import { createRequire } from 'node:module'
+import { homedir } from 'node:os'
 import { deflateRawSync, inflateRawSync } from 'node:zlib'
 
 const ONLINE_TTL = 60_000        // 心跳超时：60 秒内没轮询过 /events 就算离线
@@ -35,14 +36,14 @@ const MIN_MS = 60_000            // 一分钟（碎碎念间隔/静默窗口都�
 export default {
   id: 'pet',
   name: '桌宠',
-  version: '1.0.14',
+  version: '1.0.18',
   api: 1,
   description: '把大肥鱼请到桌面上：会冒气泡、做小动作，你在干活时也陪着你。',
 
   defaults: {
     carrier: 'qq', modality: 'text', petFallbackToQQ: true, pack: 'default',
     // 默认素材包下载地址（「大肥鱼」形象包不进插件仓库，从素材仓库拉；网络不佳可换成任意镜像直链）
-    petPackUrl: 'https://github.com/accomplish07zrh-eng/dsh-aurabot-qq-mods/archive/refs/heads/main.zip',
+    petPackUrl: 'https://github.com/aureth-labs/dsh-aurabot-qq-mods/archive/refs/heads/main.zip',
     // Electron 下载镜像（末尾带 /；留空 = 用内置默认）。npm 与 zip 直装两条路都读它
     electronMirror: 'https://npmmirror.com/mirrors/electron/',
     // 碎碎念（桌宠自己的气泡流，与「主动搭话」完全独立：载体选 QQ 时她也会在桌面上自己嘟囔）
@@ -108,7 +109,7 @@ export default {
     { key: 'carrier', label: '主动搭话载体', type: 'select', options: [{ value: 'qq', label: 'QQ 私聊' }, { value: 'pet', label: '桌宠气泡' }], hint: 'pet 时桌宠不在线会按下面的开关回落到 QQ；两边永不双发' },
     { key: 'modality', label: '气泡形式', type: 'select', options: [{ value: 'text', label: '文字气泡' }, { value: 'voice', label: '文字 + 语音' }], hint: '语音失败自动降级为纯文字' },
     { key: 'petFallbackToQQ', label: '桌宠离线回落 QQ', type: 'switch' },
-    { key: 'petPackUrl', label: '素材包下载地址', type: 'text', hint: '「大肥鱼」形象包 zip 直链（默认走 GitHub 素材仓库 dsh-aurabot-qq-mods；国内网络可换成 Gitee 等镜像直链）。zip 里素材要放文件夹（如 pet-pack/default-animation/），archive 自带的单层仓库目录会自动剥。装完插件后缺包自动下载，也可在面板手动重下' },
+    { key: 'petPackUrl', label: '素材包下载地址', type: 'text', hint: '「大肥鱼」形象包 zip 直链（默认走 GitHub 素材仓库 dsh-aurabot-qq-mods；国内网络可换成 Gitee 等镜像直链）。zip 里素材要放文件夹（如 pet-pack/default-animation/），archive 自带的单层仓库目录会自动剥。装完插件后缺包自动下载，也可在面板手动重下；zip 里带 pet-home/ 时小屋素材（manifest.json+图片）一并落位到 house/' },
     { key: 'electronMirror', label: 'Electron 下载镜像', type: 'text', hint: '装 Electron 时从哪下（末尾带 /）。默认 npmmirror（国内快）；连不上可换 https://github.com/electron/electron/releases/download/ 等。npm 装失败会自动改用 zip 直装' },
     { key: 'whisperEnabled', label: '碎碎念', type: 'switch', hint: '只出现在桌宠气泡里，不会发到 QQ；载体是 QQ 时照常生效' },
     { key: 'whisperSource', label: '碎碎念内容', type: 'select', options: [{ value: 'model', label: '她自己想一句（工作区看得到思考）' }, { value: 'pool', label: '用现成文案' }] },
@@ -1005,6 +1006,32 @@ export default {
       }
     }
 
+    /** 反算 app/ 现状的模板签名（算法与 clientTemplate 一致）：与生成凭据里的 sig 相等 = 生成后没被人手改过。 */
+    function installedSig() {
+      const dest = appDir()
+      const files = CLIENT_FILES.map((f) => ({ name: f, hash: fileHash(join(dest, f)) })).filter((f) => f.hash)
+      if (!files.length) return ''
+      return createHash('sha1').update(files.map((f) => `${f.name}:${f.hash}`).join('|')).digest('hex').slice(0, 12)
+    }
+
+    /** 自动重装过期客户端（治「市场升级到新版后，点小屋还是白屏/黑屏」）：
+     *  用户端升级模块只换插件里的模板，数据目录 app/ 这个客户端副本不会跟着更新，
+     *  旧壳没有新修复照样白屏，而很多人不会去看面板提示。这里在模块启动时兜一道：
+     *  只覆盖「生成后没被手改」的 app/（现状签名 == 生成凭据签名）；手改过的一律不动，
+     *  维持只读对账由面板提示。 */
+    function autoRegenClient() {
+      try {
+        const stamp = readJson(join(appDir(), CLIENT_STAMP), null)
+        if (!stamp || typeof stamp.sig !== 'string' || !stamp.sig) return null // 没凭据的老安装：不猜，交给面板
+        const tpl = clientTemplate()
+        if (!tpl.sig || stamp.sig === tpl.sig) return null // 已一致 / 没模板：不动
+        if (installedSig() !== stamp.sig) return null // 被手改过：绝不自动覆盖
+        const r = installClient()
+        if (r?.ok) api.log.info('客户端模板有更新且 app/ 未被手改：已自动重新生成（正在运行的 Electron 重启后生效）')
+        return r
+      } catch (error) { api.log.warn('客户端自动重装失败（不影响使用）：', String(error?.message || error)); return null }
+    }
+
     // ---------- Electron 三键（面板按钮 / HTTP 路由共用）：安装 → 启动 → 停止 ----------
     // 安装走 npmmirror 镜像（真机直连 github release 会 fetch failed）；启动前必须清掉
     // 子进程环境的 ELECTRON_RUN_AS_NODE（宿主环境必带，不清则 Electron 以纯 Node 模式启动即崩）。
@@ -1309,6 +1336,33 @@ export default {
     }
 
     /**
+     * 小屋素材是否缺失。完整性 = manifest.json 在 + 至少一张底图/manifest 引用的图在盘上。
+     * 只有 manifest、一张图都没有（上次下载中断只落了一半）也算缺 → 走自动补全；
+     * manifest 引用的图全部不在盘上同样算缺。已有文件不会被补全覆盖（见 ensureDefaultPack 落位循环）。
+     */
+    function housePackMissing() {
+      try {
+        const dir = houseDir()
+        if (!existsSync(join(dir, 'manifest.json'))) return true
+        const IMG = /\.(?:jpe?g|png|webm|gif)$/i
+        const files = readdirSync(dir)
+        if (!files.some((f) => IMG.test(f))) return true // manifest 在但一张图都没有：上次中断只落了一半
+        try {
+          // manifest 里引用到的图（底图/姿势帧/patch）至少一张在，全缺也算半截包
+          const refs = []
+          const walk = (v) => {
+            if (typeof v === 'string') { if (IMG.test(v)) refs.push(v) }
+            else if (Array.isArray(v)) v.forEach(walk)
+            else if (v && typeof v === 'object') Object.values(v).forEach(walk)
+          }
+          walk(JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')))
+          if (refs.length && !refs.some((f) => existsSync(join(dir, f)))) return true
+        } catch {} // manifest 解析不了不当缺：落位时原样收下的清单，客户端自己会报
+        return false
+      } catch { return true }
+    }
+
+    /**
      * 在解压暂存目录里找素材包根（含 default-animation/ 的那一层）。找不到返回 null。
      * 素材仓库约定：**素材必须放文件夹里**（不在仓库根目录摊 106 个 webm），文件夹名随意（pet-pack/、default/、大肥鱼/ 都行）。
      * 所以要按层找：包根 = 暂存目录本身 / <仓库名>-<分支>/ / <任意一层文件夹>/ / <仓库名>-<分支>/<任意一层文件夹>/。
@@ -1326,6 +1380,25 @@ export default {
       return null
     }
 
+    /** 在解压暂存目录里找小屋素材根（含 manifest.json 且同层有图片的那一层）。与 findPackRoot 同思路按层找。 */
+    function findHouseRoot(stage) {
+      const isHouseRoot = (dir) => {
+        try {
+          if (!existsSync(join(dir, 'manifest.json'))) return false
+          return readdirSync(dir).some((f) => /\.(?:jpe?g|png|webm|gif)$/i.test(f))
+        } catch { return false }
+      }
+      const subDirs = (dir) => {
+        try { return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => join(dir, e.name)) } catch { return [] }
+      }
+      if (isHouseRoot(stage)) return stage
+      for (const d1 of subDirs(stage)) {
+        if (isHouseRoot(d1)) return d1
+        for (const d2 of subDirs(d1)) if (isHouseRoot(d2)) return d2
+      }
+      return null
+    }
+
     /**
      * 下载并落位 default 素材包。
      * @param {boolean} force true = 包已在也重新下载（面板「重新下载素材包」）；false = 只在缺包时下载
@@ -1333,7 +1406,7 @@ export default {
      */
     async function ensureDefaultPack(force = false) {
       if (packDownloading) return { ok: false, message: '素材包正在下载中，别急' }
-      if (!force && !defaultPackMissing()) return { ok: true, skipped: true, message: 'default 素材包已就位，不用下载' }
+      if (!force && !defaultPackMissing() && !housePackMissing()) return { ok: true, skipped: true, message: '素材包已就位，不用下载' }
       const url = String(api.settings().petPackUrl || '').trim()
       if (!url) return { ok: false, message: '没有配置素材包下载地址（面板「桌宠」页 →「素材包」卡里填）' }
       packDownloading = true
@@ -1344,23 +1417,47 @@ export default {
         mkdirSync(stage, { recursive: true })
         unzipTo(zip, stage)
         const root = findPackRoot(stage)
-        if (!root) throw new Error('zip 里找不到 default-animation/（内容结构不对：素材要放文件夹里，如 pet-pack/default-animation/）')
-        mkdirSync(animsDirOf('default'), { recursive: true })
+        const houseRoot0 = findHouseRoot(stage)
+        if (!root && !houseRoot0) throw new Error('zip 里找不到 default-animation/（内容结构不对：素材要放文件夹里，如 pet-pack/default-animation/）')
         let copied = 0
-        for (const f of readdirSync(join(root, 'default-animation'))) {
-          const src = join(root, 'default-animation', f)
-          try { if (!statSync(src).isFile()) continue } catch { continue }
-          copyFileSync(src, join(animsDirOf('default'), f))
-          copied++
+        if (root) {
+          mkdirSync(animsDirOf('default'), { recursive: true })
+          for (const f of readdirSync(join(root, 'default-animation'))) {
+            const src = join(root, 'default-animation', f)
+            try { if (!statSync(src).isFile()) continue } catch { continue }
+            copyFileSync(src, join(animsDirOf('default'), f))
+            copied++
+          }
+          if (copied === 0) throw new Error('default-animation/ 里没有动画文件（.webm）')
+          for (const f of ['default-config.json', 'default-manifest.json']) {
+            const src = join(root, f)
+            try { if (statSync(src).isFile()) copyFileSync(src, join(packsDir(), f)) } catch {}
+          }
+          api.log.info(`桌宠：素材包已下载落位（${copied} 个动画 → packs/default-animation/）`)
         }
-        if (copied === 0) throw new Error('default-animation/ 里没有动画文件（.webm）')
-        for (const f of ['default-config.json', 'default-manifest.json']) {
-          const src = join(root, f)
-          try { if (statSync(src).isFile()) copyFileSync(src, join(packsDir(), f)) } catch {}
+        // 小屋素材同包搭车：zip 里哪一层有 manifest.json + 图片（pet-home/ 这种层）就整层落位到 house/。
+        // 旧镜像 zip 里没有小屋素材时静默跳过，不算失败——小屋没素材只是「素材未就绪」，不挡形象包。
+        let houseCopied = 0
+        const houseRoot = houseRoot0
+        if (houseRoot) {
+          mkdirSync(houseDir(), { recursive: true })
+          for (const f of readdirSync(houseRoot)) {
+            if (!/^(manifest\.json|.*\.(?:jpe?g|png|webm|gif))$/i.test(f)) continue // 只收清单与图片，README 之类不带
+            const src = join(houseRoot, f)
+            try { if (!statSync(src).isFile()) continue } catch { continue }
+            const dst = join(houseDir(), f)
+            if (!force && existsSync(dst)) continue // 已有文件不动：手改过的/上次已落位的不覆盖不回滚，只补缺的
+            copyFileSync(src, dst)
+            houseCopied++
+          }
+          if (houseCopied) {
+            api.log.info(`桌宠：小屋素材已下载落位（${houseCopied} 个文件 → house/）`)
+            ensureHouseRoutes()
+          }
         }
-        api.log.info(`桌宠：素材包已下载落位（${copied} 个动画 → packs/default-animation/）`)
-        ensureAssetRoutes()
-        return { ok: true, count: copied, message: `素材包下载完成（${copied} 个动画）` }
+        if (copied || houseCopied) { ensureAssetRoutes(); if (houseCopied) ensureHouseRoutes() } // 落位后立刻注册素材路由，不等 120s 兜底
+        const extra = houseCopied ? `，小屋素材 ${houseCopied} 个` : ''
+        return { ok: true, count: copied, houseCount: houseCopied, message: `素材包下载完成（${copied} 个动画${extra}）` }
       } catch (error) {
         const msg = `素材包下载失败：${String(error?.message || error).slice(0, 200)}`
         api.log.warn(msg)
@@ -1377,7 +1474,7 @@ export default {
     if (!api.__petTestHooks) {
       const kick = setTimeout(() => { ensureDefaultPack().catch(() => {}) }, 5_000)
       kick.unref?.()
-      api.every(PACK_CHECK_MS, () => { if (defaultPackMissing()) ensureDefaultPack().catch(() => {}) }, '素材包自动落位')
+      api.every(PACK_CHECK_MS, () => { if (defaultPackMissing() || housePackMissing()) ensureDefaultPack().catch(() => {}) }, '素材包自动落位')
     }
 
     // 官方 electron zip 是「扁平包」：electron.exe / electron 直接在压缩包根目录，没有 dist/ 前缀
@@ -2072,6 +2169,10 @@ export default {
           .map((x) => x.trim().toLowerCase())
           .filter((x) => x && ALL_ACTIONS.has(x)),
       )
+      // 抓鼠标默认关（2026-11-07）：petClickChase / petTeaseChase 任一为 false（默认都 false）
+      // 就把 chase_cursor 塞进禁用清单，AI 动作表、反应层（点击/勾引）、聊天联动简报共用这份口径；
+      // 两个都开时不塞，恢复原有扑鼠标行为。与面板手填的禁用清单合并去重（Set 天然去重）。
+      if (!petClickChase() || !petTeaseChase()) disabledSet.add('chase_cursor')
       return {
         enabled: s.behaviorEnabled !== false,
         minMinutes,
@@ -3129,6 +3230,8 @@ export default {
       api.core.http.send(res, 200, {
         ok: true, name: 'aurabot-pet', version: api.version,
         online: online(), focus: focusOn(), scale: petScale(), releaseLand: petReleaseLand(), bootId, seq,
+        physics: petPhysics(), animRate: petAnimRate(), balanceEnabled: petShowBalance(),
+        clickChase: petClickChase(), teaseChase: petTeaseChase(), // 面板回显抓鼠标两开关（默认都关）
         carrier: s.carrier, modality: s.modality, fallbackToQQ: s.petFallbackToQQ !== false,
         pack: activePack(), playbackCount: playbacks.length,
         work: { ...workSnapshot(), label: WORK_STATE_LABEL[workSnap.state] || '' }, // 当前她在干什么（思考中/干活中/完成…）
@@ -3396,6 +3499,7 @@ export default {
 
     // ---------- 启动 ----------
     writeHostFile(true)
+    autoRegenClient() // 升级后 app/ 未被手改就自动跟上新模板（治「升级完点小屋还是白屏」）
     ensureAssetRoutes()
     ensureHouseRoutes()
     // 碎碎念排程先落一次盘：面板一打开就能看到「下次约 N 分钟后」，重启也不丢排程

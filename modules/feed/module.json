@@ -1,0 +1,14 @@
+{
+  "id": "feed",
+  "name": "喂食",
+  "version": "3.2.0",
+  "description": "按作息饿、会自己找零食也会喊饿。饿了有曲线、吃了有反应，还带一块能投喂她、她会回话的面板。",
+  "category": "social",
+  "tags": ["喂食", "饥饿", "好感度", "养成"],
+  "author": "z729769794",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": ["mood", "memory"],
+  "capabilities": ["filesystem", "plugin-config", "plugin-internals"]
+}

@@ -3,7 +3,10 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    # 模块拆分分支（upstream/<module>）在 fork 上 push 时也跑一遍，
+    # 这样开 PR 前就能拿到 check/pack 结果。
+    branches: [main, 'upstream/**', 'feat/**']
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -11,6 +14,9 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    env:
+      # 模块测试和作息/饥饿曲线按东八区设计；runner 默认 UTC 会让依赖本地时间的用例偶发失败。
+      TZ: Asia/Shanghai
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

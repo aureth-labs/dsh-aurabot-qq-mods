@@ -1,14 +1,24 @@
 {
   "id": "xhs",
   "name": "刷小红书",
-  "version": "0.2.0",
+  "version": "0.3.5",
   "description": "用专用浏览器刷小红书：逛推荐/搜索、看笔记写记忆、点赞收藏评论（人格生成、每日上限）、认别人发来的小红书链接、看主人的私信并回复；发帖走「草稿 → 主人确认」两步，绝不闷头发。各能力独立开关，默认全关。",
   "category": "platform",
-  "tags": ["小红书", "笔记", "种草"],
+  "tags": [
+    "小红书",
+    "笔记",
+    "种草"
+  ],
   "author": "Aurabot",
   "license": "MIT",
   "api": 1,
   "minPluginVersion": "1.2.0",
   "requires": [],
-  "capabilities": ["network", "filesystem", "process", "plugin-config", "plugin-internals"]
+  "capabilities": [
+    "network",
+    "filesystem",
+    "process",
+    "plugin-config",
+    "plugin-internals"
+  ]
 }

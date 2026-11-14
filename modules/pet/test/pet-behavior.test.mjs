@@ -1,4 +1,4 @@
-﻿// 桌宠「AI 行为大脑（决策层）」测试（服务端部分）：
+// 桌宠「AI 行为大脑（决策层）」测试（服务端部分）：
 //   · 间隔 clamp 下限 1 分钟 / 每日上限 / force 绕过
 //   · 动作单宽松解析：提取第一个 JSON 对象；非法/暂未开放动作一律拒绝
 //   · 解析失败回退本地池子文案（铁律 1：AI 只能从硬编码枚举里选）
@@ -129,7 +129,8 @@ test('间隔 clamp：下限 1 分钟（配 0 分钟也不许更快）、每日�
   assert.ok(b.openActions.includes('nudge_window'), '第三批：nudge_window 已开放')
   assert.ok(!b.openActions.includes('peek_window'), '2026-10-30 用户裁撤：peek_window 已删除')
   assert.deepEqual(b.deferredActions, [], '第三批已全部实现，没有占位动作')
-  assert.deepEqual(b.disabledActions, [], '默认没有禁用动作')
+  // 2026-11-07 新契约：抓鼠标默认关（petClickChase/petTeaseChase 缺省 false），chase_cursor 默认进禁用清单
+  assert.deepEqual(b.disabledActions, ['chase_cursor'], '默认禁用 chase_cursor（抓鼠标默认关）')
 })
 
 test('排程落盘 round-trip：首次进 tick 先排 nextAt；跨天清 count；行为文件字段齐全', () => {
@@ -181,8 +182,9 @@ test('闸门：离线 force 也拦（没人执行）；到点没到不发；到�
 test('解析：宽松提取第一个 JSON 对象；前后有杂物也能解析；非法/清单外动作返回 null', () => {
   const e = startModule()
   const p = e.exports.behaviorParse
-  assert.deepEqual(p('好的，我选这个：{"action":"chase_cursor","params":{},"say":"扑！","moodDelta":3} 以上'),
-    { action: 'chase_cursor', params: {}, say: '扑！', moodDelta: 3 }, '宽松提取第一个 JSON 对象')
+  // 2026-11-07 新契约：chase_cursor 默认被禁，宽松提取样例改用 wander（未被禁）；被禁动作照样按清单外丢弃
+  assert.deepEqual(p('好的，我选这个：{"action":"wander","params":{},"say":"溜达","moodDelta":3} 以上'),
+    { action: 'wander', params: {}, say: '溜达', moodDelta: 3 }, '宽松提取第一个 JSON 对象')
   assert.equal(p.moodDelta, undefined)
   assert.deepEqual(p('{"action":"say","params":{"text":"嘿"},"say":"","moodDelta":99}').moodDelta, 10, 'moodDelta 钳到 +10')
   assert.deepEqual(p('{"action":"say","say":"","moodDelta":-99}').moodDelta, -10, 'moodDelta 钳到 -10')
@@ -222,7 +224,8 @@ test('解析失败回退本地池子文案（不调动作、不发行为事件�
 // ---------- 正常下发链路 ----------
 
 test('正常动作单：emit behavior 事件 + say 走气泡；mood 修正走 api.use(\'mood\')；落盘计数与 recent', async () => {
-  const env = startModule()
+  // 2026-11-07 新契约：抓鼠标默认关；本测试要验证 chase_cursor 正常链路，故显式打开开关
+  const env = startModule({ settings: { petClickChase: true, petTeaseChase: true } })
   const { cursor } = await env.connect()
   seedBehavior(env.api, { nextAt: Date.now() - 1000 })
   env.setThinkReply('【思考】主人在摸鱼\n{"action":"chase_cursor","params":{},"say":"（扑向光标！）","moodDelta":2}')
@@ -563,7 +566,8 @@ test('behaviorDisabledActions：禁用动作不进 AI 动作表（解析拒绝�
   const env = startModule({ settings: { behaviorDisabledActions: 'wander, steal_cursor ,不存在也没事' } })
   await env.connect()
   const b = env.exports.behaviorStatus()
-  assert.deepEqual(b.disabledActions.sort(), ['steal_cursor', 'wander'], '解析成数组供面板渲染（未知名字被滤掉）')
+  // 2026-11-07 新契约：抓鼠标默认关，chase_cursor 被并入默认禁用清单（与 wander/steal_cursor 合并去重）
+  assert.deepEqual(b.disabledActions.sort(), ['chase_cursor', 'steal_cursor', 'wander'], '解析成数组供面板渲染（未知名字被滤掉；默认禁 chase_cursor）')
   // AI 路径：选了被禁的 wander → 解析拒绝 → 回退池子文案
   seedBehavior(env.api, { nextAt: Date.now() - 1000 })
   env.setThinkReply('{"action":"wander","params":{},"say":"","moodDelta":0}')
@@ -573,7 +577,8 @@ test('behaviorDisabledActions：禁用动作不进 AI 动作表（解析拒绝�
   // 直接解析也拒绝
   assert.equal(env.exports.behaviorParse('{"action":"wander","params":{}}'), null)
   assert.equal(env.exports.behaviorParse('{"action":"steal_cursor","params":{}}'), null)
-  assert.equal(env.exports.behaviorParse('{"action":"chase_cursor","params":{}}').action, 'chase_cursor', '没禁的照常')
+  assert.equal(env.exports.behaviorParse('{"action":"chase_cursor","params":{}}'), null, '2026-11-07 新契约：chase_cursor 默认被禁（抓鼠标默认关）→ 丢弃')
+  assert.equal(env.exports.behaviorParse('{"action":"drag_icon","params":{"icon":"x.lnk"}}').action, 'drag_icon', '没禁的照常（drag_icon 未进禁用清单）')
   // 手动通道不受限：wander 照样下发
   const manual = await env.call('/behavior', { method: 'POST', json: { action: 'wander', params: {} } })
   assert.equal(manual.status, 200)

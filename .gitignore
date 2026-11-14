@@ -4,3 +4,6 @@ dist/
 .registry/
 .aurabot-cache/
 .runtime/
+
+# 测试临时数据（测试往这里写，不提交）
+.tmp-data/
