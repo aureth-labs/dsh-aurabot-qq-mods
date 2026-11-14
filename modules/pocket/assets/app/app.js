@@ -1013,6 +1013,8 @@ function renderStatus(qqOnline) {
   // 出门用的地址由电脑自动同步过来（隧道换域名时手机自己就更新了，不用人记）
   const away = (st.endpoints && st.endpoints.tunnel) || localStorage.getItem(LS.tunnel) || ''
   $('#set-away').textContent = away ? away.replace(/^https:\/\//, '') : '只在局域网'
+  // 域名长，界面上会被省略号截断，完整值放 title（长按能看到）
+  $('#set-away').title = away || '没开隧道时只能在家连'
   $('#set-token').textContent = S.token ? S.token.slice(0, 5) + '…' : '–'
   $('#set-mem').textContent = st.memoryCount != null ? st.memoryCount + ' 条' : '–'
   // 显示电脑端模块版本：界面和功能都跟着它走，apk 只是外壳（1.0.x）
