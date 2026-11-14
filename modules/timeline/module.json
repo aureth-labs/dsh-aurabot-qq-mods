@@ -1,0 +1,16 @@
+{
+  "id": "timeline",
+  "name": "时间线",
+  "version": "1.0.0",
+  "description": "给 AI 伙伴建一份自己的日程表：回复涉及「你在做什么/几点/今天安排/考试放假」时，把当前时间块注入她的上下文，避免她即兴编时间；周表按当前人格正文自动拟，换人格会重排。",
+  "category": "tool",
+  "tags": ["日程", "时间线", "时间管理", "注入", "安排"],
+  "author": "Neltharion4G",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": ["mood", "memory"],
+  "capabilities": ["network", "filesystem", "plugin-config", "plugin-internals"],
+  "panel": "panel.js"
+}
+
