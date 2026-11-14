@@ -10,6 +10,8 @@ return function Panel({ settings, draftSettings, setSettings, toast }) {
   const enabled = cfg.enabled !== false;
   const loginPending = Boolean(state?.browser?.loginPending);
   const account = state?.browser?.account;
+  const engine = state?.browser?.engine;
+  const engineLabel = engine === 'headless' ? '系统无头浏览器（页面可渲染，登录需手动填 Cookie）' : engine === 'builtin' ? '内置浏览器组件' : null;
   const cookieGuide = state?.browser?.cookieGuide || result?.cookieGuide;
   const accountMessage = loginPending ? state.browser.lastLogin : account?.loggedIn === true ? '已登录：' + account.name : account?.message || '尚未检查登录';
   const refresh = async () => { try { setState(await call('/state')); } catch(e) { toast(e.message); } };
@@ -27,8 +29,9 @@ return function Panel({ settings, draftSettings, setSettings, toast }) {
   return h('div', { className: 'ab-grid' },
     !editable ? h('p', { className: 'ab-note' }, '当前 Aurabot 面板缺少草稿接口，请更新面板后使用底部统一保存。') : null,
     h(ui.Card, { title: '贴吧登录', right: h(ui.Switch, { on: enabled, disabled: !editable, title: '贴吧功能总开关；修改后点击底部保存设置', onChange: value => set('enabled', value) }),
-      desc: '右上角为贴吧功能总开关，关闭后停止读帖和定时浏览，保留登录信息。自动检测已有内置浏览器，无需手动配置。' },
+      desc: '右上角为贴吧功能总开关，关闭后停止读帖和定时浏览，保留登录信息。自动检测内置组件或系统里的 Chrome / Chromium，一般无需手动配置。' },
       h(ui.Row, { label: '登录状态', hint: '显示上次检查结果，不是实时在线状态；点击检查登录可重新确认。' }, h('span', { className: 'ab-note' }, accountMessage,
+        engineLabel ? h('small', { className: 'ab-muted', style: { display: 'block' } }, '读取方式：' + engineLabel) : null,
         !loginPending && account?.checkedAt ? h('small', { className: 'ab-muted', style: { display: 'block' } }, '最近检查：' + new Date(account.checkedAt).toLocaleTimeString('zh-CN', { hour12: false })) : null),
         h(ui.Btn, { small: true, disabled: locked, title: '刷新状态', onClick: refresh }, '↻')),
       h('div', { className: 'ab-flex' },
@@ -39,6 +42,8 @@ return function Panel({ settings, draftSettings, setSettings, toast }) {
       cookieGuide && (state?.browser?.available === false || result?.mode === 'external') ? h('div', { className: 'ab-note' },
         h('b', null, cookieGuide.title), h('ol', null, cookieGuide.steps.map((step, i) => h('li', { key: i, style: { marginBottom: 6 } }, step))),
         h('small', { className: 'ab-muted' }, cookieGuide.warning)) : null,
+      h(ui.Row, { label: '无头浏览器路径（可选）', hint: '没有内置组件时，用系统里的 Chrome / Chromium 读页面。填可执行文件完整路径；留空自动在常见安装位置里找；填 off 只用内置组件。' },
+        h('input', { className: 'ab-input wide', type: 'text', spellCheck: false, value: cfg.browserPath || '', placeholder: '留空自动探测；也可填 chrome-headless-shell 的完整路径', onChange: e => set('browserPath', e.target.value) })),
       h(ui.Row, { label: '手动 Cookie（可选）', hint: '填入后点击底部“保存设置”。只在本机保存，保存后不回显；留空不修改已有 Cookie。' },
         h('input', { className: 'ab-input wide', type: 'password', autoComplete: 'off', spellCheck: false, value: cfg.cookie || '', placeholder: state?.cookieSet || settings.cookieSet ? '已保存，不回显；留空不修改（新 Cookie 填入后底部保存设置）' : '粘贴 Cookie → 底部保存设置 → 检查登录；无需另点登录', onChange: e => set('cookie', e.target.value) })),
       ),
