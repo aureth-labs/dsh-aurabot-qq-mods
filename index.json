@@ -1718,6 +1718,39 @@
       "publishedAt": "2026-11-07T14:49:23.782Z"
     },
     {
+      "id": "wool-runner",
+      "name": "薅羊毛任务中心",
+      "version": "1.0.0",
+      "description": "参考青龙的订阅、环境变量、Cron 任务与日志管理，支持京东扫码获取 JD_COOKIE",
+      "category": "manage",
+      "tags": [
+        "青龙",
+        "京东",
+        "什么值得买",
+        "签到",
+        "定时任务"
+      ],
+      "author": "Aurabot",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.3.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "process",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "wool-runner-v1.0.0",
+      "file": "wool-runner-v1.0.0.zip",
+      "path": "wool-runner-v1.0.0/wool-runner-v1.0.0.zip",
+      "size": 27091,
+      "sha256": "bebfff2bef4c81484b7e01f6071f3eec8578bbffe4016c09205a0bab83702d31",
+      "commit": "8e5071f7633061eaacbaec92b9aa83b8d46d34ab",
+      "publishedAt": "2026-11-14T10:55:58.426Z"
+    },
+    {
       "id": "xhs",
       "name": "刷小红书",
       "version": "0.3.5",
@@ -1786,5 +1819,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-14T08:20:25.125Z"
+  "generatedAt": "2026-11-14T10:55:58.426Z"
 }
