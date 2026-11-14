@@ -47,7 +47,9 @@ jobs:
           done
       - name: 跑搬来的模块的测试（要插件源码）
         run: |
-          git clone -q --depth 1 --branch release/1.2.0 https://github.com/accomplish07zrh-eng/dsh-aurabot-qq "$RUNNER_TEMP/plugin"
+          # 这条线跟模块声明的 minPluginVersion 对齐：1.2.0 里没有 core/media.js，
+          # 用了它的模块（mobile）测试会整个文件 import 失败。加核心接口后记得一起抬。
+          git clone -q --depth 1 --branch release/1.3.0 https://github.com/accomplish07zrh-eng/dsh-aurabot-qq "$RUNNER_TEMP/plugin"
           AURABOT_PLUGIN_DIR="$RUNNER_TEMP/plugin" node --import ./scripts/plugin-env.mjs --test "modules/*/test/*.test.mjs"
       - name: 试打包
         run: node scripts/pack.mjs --out dist
