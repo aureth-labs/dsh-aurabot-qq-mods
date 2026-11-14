@@ -1720,7 +1720,7 @@
     {
       "id": "wool-runner",
       "name": "薅羊毛任务中心",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "参考青龙的订阅、环境变量、Cron 任务与日志管理，支持京东扫码获取 JD_COOKIE",
       "category": "manage",
       "tags": [
@@ -1742,13 +1742,13 @@
         "plugin-internals"
       ],
       "replacesBuiltin": false,
-      "tag": "wool-runner-v1.0.0",
-      "file": "wool-runner-v1.0.0.zip",
-      "path": "wool-runner-v1.0.0/wool-runner-v1.0.0.zip",
-      "size": 27091,
-      "sha256": "bebfff2bef4c81484b7e01f6071f3eec8578bbffe4016c09205a0bab83702d31",
-      "commit": "8e5071f7633061eaacbaec92b9aa83b8d46d34ab",
-      "publishedAt": "2026-11-14T10:55:58.426Z"
+      "tag": "wool-runner-v1.1.0",
+      "file": "wool-runner-v1.1.0.zip",
+      "path": "wool-runner-v1.1.0/wool-runner-v1.1.0.zip",
+      "size": 31880,
+      "sha256": "2c01947894a4d57e241cb7f81a05573af403c19731ef5d470b85859033c85f6b",
+      "commit": "227df255891d92b954278f47e52ac63aed283f92",
+      "publishedAt": "2026-11-14T11:27:01.919Z"
     },
     {
       "id": "xhs",
@@ -1819,5 +1819,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-14T10:55:58.426Z"
+  "generatedAt": "2026-11-14T11:27:01.919Z"
 }
