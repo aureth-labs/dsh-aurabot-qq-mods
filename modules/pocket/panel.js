@@ -389,7 +389,7 @@ return function Panel({ settings, save, toast }) {
       ),
       !tun.installed
         ? h('p', { className: 'ab-small ab-muted', style: { marginTop: 6 } },
-            'cloudflared 是隧道用的一个独立小程序，装一次就行。点上面「一键下载 cloudflared」会自动下到模块目录，不需要管理员权限、也不改系统设置。自己下也行：从 github.com/cloudflare/cloudflared/releases 拿 cloudflared-windows-amd64.exe 改名为 cloudflared.exe，然后启动隧道（面板会自动找到它）。')
+            'cloudflared 是隧道用的一个独立小程序，装一次就行。点上面「一键下载 cloudflared」会自动下到模块目录，不需要管理员权限、也不改系统设置。下载的是**固定版本**，装好后会核对官方 SHA-256，对不上就拒绝使用（镜像被换过也进不来）。自己下也行：从 github.com/cloudflare/cloudflared/releases 拿 cloudflared-windows-amd64.exe 改名为 cloudflared.exe，然后启动隧道（面板会自动找到它）。')
         : null,
       tun.error ? h('p', { className: 'ab-small', style: { marginTop: 6, color: '#c0392b' } }, tun.error) : null,
     ),

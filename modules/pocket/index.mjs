@@ -17,7 +17,7 @@ import { spawn, execFileSync } from 'node:child_process'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 
 const RING_MAX = 500
-const VERSION = '1.5.2'
+const VERSION = '1.5.3'
 const DEFAULT_PORT = 7788
 const MAX_MEDIA_BYTES = 12 * 1024 * 1024
 
@@ -929,6 +929,14 @@ export default {
 
     // 「一键下载」装到模块数据目录里，不动系统 PATH、不需要管理员权限
     const cloudflaredLocal = () => join(api.dataDir(), 'bin', 'cloudflared.exe')
+    // 供应链安全：固定版本 + 官方 SHA-256，下载内容必须逐字节匹配才允许执行。
+    // 镜像只用于国内访问 GitHub 困难的情况——镜像本身不可信，真正信任的只有 hash。
+    const CF_VERSION = '2026.11.0'
+    const CF_ASSET = 'cloudflared-windows-amd64.exe'
+    const CF_SIZE = 55397592
+    const CF_SHA256 = 'd5c1d82031da6253dcdcff64c944cd0fe063016edeb2e4fd088075fc9bd52d0a'
+    const CF_BASE = `https://github.com/cloudflare/cloudflared/releases/download/${CF_VERSION}/${CF_ASSET}`
+    const CF_MIRRORS = [CF_BASE, `https://ghfast.top/${CF_BASE}`, `https://gh-proxy.com/${CF_BASE}`]
     /**
      * 下载 cloudflared（普通用户最卡的一步：让人去 GitHub 找 releases、选对文件、再放 PATH，
      * 十个人有八个做不下来）。下到模块数据目录，失败时把「下一步怎么办」写清楚。
@@ -936,11 +944,7 @@ export default {
     async function installCloudflared() {
       const dest = cloudflaredLocal()
       if (existsSync(dest)) return { ok: true, path: dest, message: '已经有了，不用重复下载' }
-      const urls = [
-        'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe',
-        'https://ghfast.top/https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe',
-        'https://gh-proxy.com/https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe',
-      ]
+      const urls = CF_MIRRORS
       let lastErr = ''
       for (const u of urls) {
         try {
@@ -950,9 +954,15 @@ export default {
             continue
           }
           const buf = Buffer.from(await r.arrayBuffer())
-          // 正常是 40–80MB 的 PE 文件；太小说明下到的是错误页
-          if (buf.length < 5 * 1024 * 1024) {
-            lastErr = `下载内容不对（只有 ${Math.round(buf.length / 1024)}KB，${new URL(u).host}）`
+          const host = new URL(u).host
+          // 先按官方大小排除错误页/截断，再逐字节核对 SHA-256；不符立即丢弃，绝不落盘执行
+          if (buf.length !== CF_SIZE) {
+            lastErr = `大小不符（拿到 ${buf.length} 字节，官方 ${CF_SIZE}，${host}）`
+            continue
+          }
+          const digest = createHash('sha256').update(buf).digest('hex')
+          if (digest !== CF_SHA256) {
+            lastErr = `SHA-256 校验失败（${host}），不是官方文件，已拒绝写入`
             continue
           }
           mkdirSync(dirname(dest), { recursive: true })
@@ -962,7 +972,14 @@ export default {
           try {
             ver = String(execFileSync(dest, ['--version'], { encoding: 'utf8', windowsHide: true, timeout: 15000 })).trim()
           } catch {}
-          return { ok: true, path: dest, size: buf.length, version: ver, message: '下载好了，可以直接启动隧道（' + Math.round(buf.length / 1024 / 1024) + 'MB）' }
+          return {
+            ok: true,
+            path: dest,
+            size: buf.length,
+            version: ver,
+            sha256: digest.slice(0, 12),
+            message: `下载好了（固定版本 v${CF_VERSION}，SHA-256 已核对通过），可以直接启动隧道（${Math.round(buf.length / 1024 / 1024)}MB）`,
+          }
         } catch (e) {
           lastErr = String(e?.message || e)
         }
@@ -1623,7 +1640,7 @@ export default {
       ...svcInfo(),
     })
 
-    hooks.__test = { inject, voiceNote, guard, petInteract, petState, pushEvent, ring: () => ring, readHistory, tokenOf, lanAddresses, urlOf, ops, handle, decodeImage, mediaBytesOf, sniffMime }
+    hooks.__test = { inject, voiceNote, guard, petInteract, petState, pushEvent, ring: () => ring, readHistory, tokenOf, lanAddresses, urlOf, ops, handle, decodeImage, mediaBytesOf, sniffMime, installCloudflared, cfPolicy: { version: CF_VERSION, size: CF_SIZE, sha256: CF_SHA256, base: CF_BASE, mirrors: CF_MIRRORS } }
   },
 }
 

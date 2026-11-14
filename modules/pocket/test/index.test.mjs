@@ -1,6 +1,6 @@
 import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -332,6 +332,35 @@ test('her-media 语音事件：record 段转 base64 推给 app', async () => {
   const media = events.filter((e) => e.type === 'her-media' && e.kind === 'voice')
   assert.equal(media.length, 1)
   assert.equal(media[0].mime, 'audio/wav')
+})
+
+test('隧道：一键下载固定版本 + SHA-256 校验，内容不符必须拒绝且不落盘', async () => {
+  const p = T.cfPolicy
+  assert.equal(p.version, '2026.11.0', '必须固定版本，不能再用 releases/latest')
+  assert.ok(p.size > 40 * 1024 * 1024, '官方大小应当大于 40MB')
+  assert.match(p.sha256, /^[0-9a-f]{64}$/, 'SHA-256 必须是 64 位小写 hex')
+  assert.ok(p.mirrors[0].startsWith('https://github.com/cloudflare/cloudflared/releases/download/'), '首选必须是官方固定版本地址')
+  assert.ok(!p.mirrors[0].includes('/latest/'), '首选不能是 latest')
+
+  const dest = join(DATA_DIR, 'bin', 'cloudflared.exe')
+  rmSync(dest, { force: true })
+  const realFetch = globalThis.fetch
+  try {
+    // 大小对、内容被换过 —— 模拟镜像投毒，必须拒绝且不写盘
+    globalThis.fetch = async () => new Response(Buffer.alloc(p.size, 0), { status: 200 })
+    const bad = await T.installCloudflared()
+    assert.equal(bad.ok, false, 'hash 不符不能算成功')
+    assert.match(bad.message, /SHA-256/)
+    assert.equal(existsSync(dest), false, '校验失败绝不能把文件写进去')
+
+    // 大小不对（错误页 / 被截断）—— 也要拒绝
+    globalThis.fetch = async () => new Response(Buffer.alloc(2048, 0), { status: 200 })
+    const small = await T.installCloudflared()
+    assert.equal(small.ok, false)
+    assert.match(small.message, /大小/)
+  } finally {
+    globalThis.fetch = realFetch
+  }
 })
 
 function mockRes() {
