@@ -63,7 +63,7 @@ return function Panel({ settings, save, toast }) {
       if (/^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(v4)) return '家里 WiFi（和电脑连同一个路由器时用）'
       return '局域网 IPv4'
     }
-    if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(v4)) return 'Tailscale（装了才用）'
+    if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(v4)) return 'Tailscale（两端都要装；国内首次登录常连不上，直连失败会很慢）'
     if (v4.includes(':')) return '公网 IPv6（要求手机流量有 IPv6 + 光猫放行端口）'
     return ''
   }
@@ -175,6 +175,7 @@ return function Panel({ settings, save, toast }) {
       h('ul', { className: 'ab-small ab-muted', style: { margin: '4px 0 0', paddingLeft: 20, lineHeight: 1.8 } },
         h('li', null, h('b', null, '公网 IPv6（上面带「公网 IPv6」标注的地址）'), '：地址固定、不用额外软件；但要求手机的流量有 IPv6（很多手机套餐没有），还要在光猫/路由器里放行 ' + port + ' 端口'),
         h('li', null, h('b', null, '隧道（下面按钮）'), '：手机任何网络都能连，不用公网 IP、不碰光猫；https 地址，手机浏览器打开网页也能直接录语音。代价：免费临时域名，电脑重启后要重新点一次「启动隧道」，把新地址填回 app'),
+        h('li', null, h('b', null, 'Tailscale（地址列表里 100.x.x.x 那种）'), '：两端都装、登同一账号，打洞成功时速度接近你家宽带上行。国内有三点要知道：① 它本身就是 VPN，手机上一开就占了系统唯一的 VPN 槽位，和代理/加速器不能同时开；② 控制面在境外，新设备首次登录（GitHub/Google 账号）经常连不上、要反复试；③ 官方中继没有大陆节点（最近在香港、东京），打洞失败会绕道境外，延迟 150–300ms 很慢。账号早就登好的人用它最省事，没装过就别折腾，直接用隧道'),
         h('li', null, h('b', null, '外面的 WiFi 本身也会拦'), '：公司、酒店、校园网常只放行 80/443，IPv6 直连的 ' + port + ' 就通不了；要网页登录的访客网络没登录前什么都连不上（app 会报 P30）。这种场合用隧道最省事，实在不行开自己手机热点。'),
       ),
       h('p', { className: 'ab-small ab-muted', style: { marginTop: 6 } },
