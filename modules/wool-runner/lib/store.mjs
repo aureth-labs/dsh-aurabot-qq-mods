@@ -7,17 +7,17 @@ export const DEFAULT_SUBSCRIPTIONS = [
     id: 'jdpro', name: '京东脚本 · jdpro', url: 'https://github.com/cyuni1996/jdpro.git', branch: 'main',
     whitelist: '(^|/)(jd_|jx_|jddj_)', blacklist: 'backUp|(^|/)(tools|tests|docs|docker)/',
     dependences: '(^|/)jd[^_]|USER|JD|(^|/)function/|sendNotify|(^|/)notify\\.py$|(^|/)utils/|(^|/)package(-lock)?\\.json$|(^|/)requirements\\.txt$',
-    extensions: 'js py sh', enabled: true, autoAddCron: true, autoDelCron: false,
+    extensions: 'js py sh', enabled: true, autoAddCron: true, autoDelCron: true,
   },
   {
     id: 'smzdm', name: '什么值得买 · smzdm_script', url: 'https://github.com/hex-ci/smzdm_script.git', branch: 'main',
     whitelist: 'smzdm_', blacklist: '', dependences: 'env.js|bot.js|sendNotify.js|library_',
-    extensions: 'js', enabled: true, autoAddCron: true, autoDelCron: false,
+    extensions: 'js', enabled: true, autoAddCron: true, autoDelCron: true,
   },
   {
     id: 'ql-public', name: '公共签到 · QLScriptPublic', url: 'https://github.com/smallfawn/QLScriptPublic.git', branch: 'main',
     whitelist: '', blacklist: '(^|/)(docs|images?|node_modules)/', dependences: 'sendNotify|package(-lock)?\\.json$|requirements\\.txt$',
-    extensions: 'js py', enabled: true, autoAddCron: true, autoDelCron: false,
+    extensions: 'js py', enabled: true, autoAddCron: true, autoDelCron: true,
   },
 ]
 
@@ -48,14 +48,16 @@ export function createStore(root) {
   }
   if (!Array.isArray(env)) env = []
   if (!Array.isArray(runs)) runs = []
-  // 一次性迁移：早期版本 autoAddCron 默认关闭，导致「立即同步」永远不产出定时任务。
-  // 只对旧版本存下来的内置订阅做升级（schemaVersion 缺失），且仅在用户从未保存过该订阅配置时生效；
-  // 用户显式保存过的订阅（有 updatedAt）保持原值，避免覆盖用户的主动选择。
+  // 一次性迁移：早期版本 autoAddCron/autoDelCron 默认关闭，导致「立即同步」既不建任务也不清理旧任务。
+  // 只对旧版本存下来的订阅做升级（schemaVersion < 3）；用户显式保存过的订阅（有 updatedAt）保持原值。
   for (const item of state.subscriptions) {
-    if (item.schemaVersion === 2) continue
+    if (item.schemaVersion >= 3) continue
+    const userSaved = Boolean(item.updatedAt)
     if (typeof item.autoAddCron !== 'boolean') item.autoAddCron = true
-    else if (item.autoAddCron === false && !item.updatedAt) item.autoAddCron = true
-    item.schemaVersion = 2
+    else if (item.autoAddCron === false && !userSaved) item.autoAddCron = true
+    if (typeof item.autoDelCron !== 'boolean') item.autoDelCron = true
+    else if (item.autoDelCron === false && !userSaved) item.autoDelCron = true
+    item.schemaVersion = 3
   }
   const saveState = () => atomic(stateFile, state)
   const saveEnv = () => atomic(envFile, env)
@@ -152,9 +154,9 @@ export function normalizeSubscription(s) {
     branch: String(s.branch || 'main').replace(/[^\w./-]/g, ''),
     whitelist: String(s.whitelist || '').slice(0, 500), blacklist: String(s.blacklist || '').slice(0, 500),
     dependences: String(s.dependences || '').slice(0, 500), extensions: String(s.extensions || 'js py sh').slice(0, 50),
-    enabled: s.enabled !== false, autoAddCron: typeof s.autoAddCron === 'boolean' ? s.autoAddCron : true, autoDelCron: s.autoDelCron === true,
+    enabled: s.enabled !== false, autoAddCron: typeof s.autoAddCron === 'boolean' ? s.autoAddCron : true, autoDelCron: typeof s.autoDelCron === 'boolean' ? s.autoDelCron : true,
     lastSyncAt: s.lastSyncAt || '', lastSyncStatus: s.lastSyncStatus || 'never', lastSyncMessage: s.lastSyncMessage || '',
-    commit: s.commit || '', schemaVersion: s.schemaVersion === 2 ? 2 : 1,
+    commit: s.commit || '', schemaVersion: s.schemaVersion >= 3 ? 3 : 1,
   }
 }
 

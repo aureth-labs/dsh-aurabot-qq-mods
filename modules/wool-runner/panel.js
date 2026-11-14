@@ -1,6 +1,6 @@
 const { useState, useEffect, useRef } = React
 
-const emptySource = { id: '', name: '', url: 'https://github.com/', branch: 'main', whitelist: '', blacklist: '', dependences: '', extensions: 'js py sh', enabled: true, autoAddCron: true, autoDelCron: false }
+const emptySource = { id: '', name: '', url: 'https://github.com/', branch: 'main', whitelist: '', blacklist: '', dependences: '', extensions: 'js py sh', enabled: true, autoAddCron: true, autoDelCron: true }
 const inputStyle = { width: '100%', boxSizing: 'border-box', marginBottom: 6 }
 const rowStyle = { borderTop: '1px solid var(--ab-border, #e5e7eb)', padding: '10px 0' }
 
@@ -11,6 +11,7 @@ return function Panel({ toast, settings, save }) {
   const [source, setSource] = useState(null)
   const [scripts, setScripts] = useState(null)
   const [scriptSub, setScriptSub] = useState('')
+  const [taskFilter, setTaskFilter] = useState('')
   const [envForm, setEnvForm] = useState({ name: 'JD_COOKIE', value: '', remarks: '' })
   const [qr, setQr] = useState(null)
   const [log, setLog] = useState(null)
@@ -47,7 +48,7 @@ return function Panel({ toast, settings, save }) {
     h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 8 } },
       field('id', '订阅 ID（小写字母/数字/-）'), field('name', '显示名称'), field('url', 'Git 仓库地址（https://… .git）'), field('branch', '分支'), field('extensions', '文件后缀（空格分隔）')),
     field('whitelist', '脚本白名单正则'), field('blacklist', '脚本黑名单正则'), field('dependences', '依赖文件正则（仅记录，不执行）'),
-    boolField('enabled', '启用订阅'), boolField('autoAddCron', '同步后自动写入定时任务', '识别到 Cron 的脚本会立即出现在任务列表；新任务默认停用，需逐条审批后启用'), boolField('autoDelCron', '同步后删除已消失的脚本任务'),
+    boolField('enabled', '启用订阅'), boolField('autoAddCron', '同步后自动写入定时任务', '识别到 Cron 的脚本会立即出现在任务列表；新任务默认停用，需逐条审批后启用'), boolField('autoDelCron', '同步后清理本订阅已消失的脚本任务', '同步即与本订阅对齐；只清理本订阅的任务，不影响其它源'),
     h('div', { className: 'ab-flex' },
       h(ui.Btn, { kind: 'primary', small: true, disabled: busy === 'source-save', onClick: async () => {
         const exists = (data?.subscriptions || []).some((s) => s.id === source.id)
@@ -64,17 +65,18 @@ return function Panel({ toast, settings, save }) {
         h('div', { style: { minWidth: 220, flex: 1 } },
           h('strong', null, s.name), ' ', h('span', { className: 'ab-badge' }, s.id),
           h('div', { className: 'ab-small ab-muted', style: { wordBreak: 'break-all' } }, s.url, ' · ', s.branch),
-          h('div', { className: 'ab-small' }, s.lastSyncStatus === 'ok' ? `已同步 ${s.commit || ''} · ${s.lastSyncMessage}` : s.lastSyncStatus === 'error' ? `同步失败：${s.lastSyncMessage}` : '尚未同步')),
+          h('div', { className: 'ab-small' }, s.lastSyncStatus === 'ok' ? `已同步 ${s.commit || ''} · ${s.lastSyncMessage}` : s.lastSyncStatus === 'offline' ? `⚠️ 离线 ${s.commit || ''} · ${s.lastSyncMessage}` : s.lastSyncStatus === 'error' ? `同步失败：${s.lastSyncMessage}` : '尚未同步')),
         h('div', { className: 'ab-flex' },
           h(ui.Btn, { small: true, kind: 'primary', disabled: busy === 'sync-' + s.id, onClick: async () => {
             const r = await act('sync-' + s.id, '/subscription/sync', { id: s.id })
             if (r?.ok) {
               const parts = [`发现 ${r.scripts ?? 0} 个脚本`]
               if (r.added) parts.push(`新增 ${r.added} 个定时任务`)
+              if (r.removed) parts.push(`清理 ${r.removed} 个失效任务`)
               if (r.updated) parts.push(`更新 ${r.updated} 个 Cron`)
-              if (r.tasks) parts.push(`当前共 ${r.tasks} 个任务`)
-              toast(parts.join('，') + '（新任务默认停用，需审批后启用）', 'ok')
-              if (r.added) setTab('tasks')
+              if (typeof r.tasks === 'number') parts.push(`本订阅现有 ${r.tasks} 个任务`)
+              toast(parts.join('，') + '（新任务默认停用，需审批后启用）', r.offline ? 'err' : 'ok')
+              if (r.added || r.removed) setTab('tasks')
             }
           } }, busy === 'sync-' + s.id ? '同步中…' : '立即同步'),
           h(ui.Btn, { small: true, onClick: () => setSource({ ...s }) }, '切换源 / 编辑'),
@@ -89,7 +91,29 @@ return function Panel({ toast, settings, save }) {
     const s = (data?.subscriptions || []).find((x) => x.id === t.subscriptionId)
     return window.confirm(`${action}「${t.name}」？\n\n来源：${s?.url || t.subscriptionId}\n分支：${s?.branch || ''}\nCommit：${s?.commit || '未同步'}\n脚本：${t.file}\n\n审批将绑定当前来源、commit 和脚本 SHA-256。源码更新后旧审批自动失效。`)
   }
+  // 按订阅源筛选任务（'' = 全部）
+  const allTasks = data?.tasks || []
+  const shownTasks = taskFilter ? allTasks.filter((t) => t.subscriptionId === taskFilter) : allTasks
+  const taskCountBySub = allTasks.reduce((acc, t) => { acc[t.subscriptionId] = (acc[t.subscriptionId] || 0) + 1; return acc }, {})
+  const filterName = (data?.subscriptions || []).find((s) => s.id === taskFilter)?.name || ''
+
   const tasks = h(ui.Card, { title: '定时任务', desc: '任务默认停用、未审批且不注入凭据。手动运行和启用定时都需逐次确认；源码或来源变化会自动撤销审批。' },
+    h('div', { className: 'ab-flex', style: { marginBottom: 8, flexWrap: 'wrap', gap: 6, alignItems: 'center' } },
+      h('select', { className: 'ab-input', style: { minWidth: 180 }, value: taskFilter, onChange: (e) => setTaskFilter(e.target.value) },
+        h('option', { value: '' }, `全部订阅（${allTasks.length} 个任务）`),
+        (data?.subscriptions || []).map((s) => h('option', { key: s.id, value: s.id }, `${s.name}（${taskCountBySub[s.id] || 0} 个）`))),
+      h(ui.Btn, { small: true, kind: 'primary', disabled: !shownTasks.length, onClick: async () => {
+        const scope = shownTasks.length
+        if (!window.confirm(`确认并启用${filterName ? `「${filterName}」下` : '全部'} ${scope} 个任务？\n\n会为每个任务分别记录审批（绑定各自的来源、commit 和脚本 SHA-256）。源码更新后审批仍会自动失效。`)) return
+        const r = await act('enable-all', '/task/enable-all', { subscriptionId: taskFilter, confirm: true })
+        if (r?.ok) toast(`已启用 ${r.enabled} 个任务${r.skipped ? `，${r.skipped} 个跳过` : ''}`, r.skipped ? 'err' : 'ok')
+      } }, '一键全部开启'),
+      h(ui.Btn, { small: true, disabled: !shownTasks.some((t) => t.enabled), onClick: async () => {
+        const n = shownTasks.filter((t) => t.enabled).length
+        if (!window.confirm(`停用${filterName ? `「${filterName}」下` : '全部'} ${n} 个已启用的任务？审批记录会保留。`)) return
+        await act('disable-all', '/task/disable-all', { subscriptionId: taskFilter }, '已批量停用')
+      } }, '全部停用'),
+      h('span', { className: 'ab-small ab-muted' }, `显示 ${shownTasks.length} / ${allTasks.length} 个任务`)),
     h('div', { className: 'ab-flex', style: { marginBottom: 8 } },
       h('select', { className: 'ab-input', value: scriptSub, onChange: (e) => { setScriptSub(e.target.value); setScripts(null) } },
         h('option', { value: '' }, '选择订阅以添加脚本'), (data?.subscriptions || []).map((s) => h('option', { key: s.id, value: s.id }, s.name))),
@@ -99,12 +123,15 @@ return function Panel({ toast, settings, save }) {
       scripts.map((s) => h('div', { key: s.id, className: 'ab-flex', style: { justifyContent: 'space-between', borderBottom: '1px dashed #ddd', padding: '4px 0' } },
         h('span', { className: 'ab-small', style: { wordBreak: 'break-all' } }, s.file, s.cron ? ` · ${s.cron}` : ' · 未识别 Cron'),
         h(ui.Btn, { small: true, disabled: s.subscribed, onClick: async () => {
-          const cron = s.cron || window.prompt('这个脚本没有识别到 Cron，请输入 5 或 6 字段表达式', '0 8 * * *')
+          const cron = s.cron || window.prompt('这个脚本没有识别到 Cron，请输入 5 或 6 字段表达式（支持 @daily 等快捷写法）', '0 8 * * *')
           if (!cron) return
-          const r = await act('add-task-' + s.id, '/task/add', { subscriptionId: scriptSub, scriptId: s.id, cron }, '任务已添加（默认停用）')
-          if (r?.ok) setScripts(scripts.map((x) => x.id === s.id ? { ...x, subscribed: true } : x))
+          const r = await act('add-task-' + s.id, '/task/add', { subscriptionId: scriptSub, scriptId: s.id, cron }, '')
+          if (r?.ok) {
+            toast(r.message || '任务已添加（默认停用）', 'ok')
+            setScripts(scripts.map((x) => x.id === s.id ? { ...x, subscribed: true } : x))
+          }
         } }, s.subscribed ? '已添加' : '添加')))),
-    (data?.tasks || []).map((t) => h('div', { key: t.id, style: rowStyle },
+    shownTasks.map((t) => h('div', { key: t.id, style: rowStyle },
       h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
         h('div', { style: { flex: 1, minWidth: 220 } },
           h('strong', null, t.name), t.running ? h('span', { className: 'ab-badge', style: { marginLeft: 6 } }, '运行中') : null,
@@ -131,7 +158,8 @@ return function Panel({ toast, settings, save }) {
           if (cron && cron !== t.cron) await act('cron-' + t.id, '/task/update', { id: t.id, cron }, 'Cron 已修改')
         } }, '改 Cron'),
         h(ui.Btn, { small: true, kind: 'ghost', onClick: async () => { if (window.confirm('删除这个任务？订阅源码会保留。')) await act('del-task-' + t.id, '/task/delete', { id: t.id }) } }, '删除')))),
-    !data?.tasks?.length ? h(ui.Empty, { icon: '⏱️', text: '还没有任务，从上方选择订阅并添加脚本' }) : null)
+    !allTasks.length ? h(ui.Empty, { icon: '⏱️', text: '还没有任务，从上方选择订阅并添加脚本' })
+      : !shownTasks.length ? h(ui.Empty, { icon: '🔍', text: `「${filterName}」下还没有任务，可切换“全部订阅”查看` }) : null)
 
   const startQr = async () => {
     const r = await act('jd-qr', '/qr/jd/start', {}, '二维码已生成')

@@ -213,3 +213,182 @@ test('旧状态迁移：内置订阅升级为自动写入，用户改过的不�
   assert.equal(jd.autoAddCron, true, '未被用户改过的内置订阅应升级')
   assert.equal(custom.autoAddCron, false, '用户保存过的订阅不应被覆盖')
 })
+
+test('网络不可用时回退本地源码，仍登记定时任务', async (t) => {
+  const { execFileSync } = await import('node:child_process')
+  const { writeFileSync } = await import('node:fs')
+  const root = temp(t)
+  const upstream = join(root, 'upstream')
+  mkdirSync(upstream, { recursive: true })
+  const git = (...args) => execFileSync('git', args, { cwd: upstream, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  git('init', '-q'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't')
+  writeFileSync(join(upstream, 'jd_bean.js'), '// cron 5 9 * * *\nconsole.log("a")\n')
+  git('add', '-A'); git('commit', '-qm', 'init')
+
+  const dataDir = join(root, 'data')
+  const store = createStore(dataDir)
+  // 故意指向不可达地址，模拟断网/仓库下线；本地已有克隆
+  store.addSubscription({ id: 'local', name: '本地源', url: 'https://127.0.0.1:1/none.git', branch: 'main', whitelist: '', blacklist: '', extensions: 'js', enabled: true })
+  const repo = join(dataDir, 'repos', 'local')
+  execFileSync('git', ['clone', '-q', upstream, repo], { encoding: 'utf8' })
+  // 克隆来源是本地目录，需把 origin 改到不可达地址，才能模拟「远端挂了但本地有源码」
+  execFileSync('git', ['-C', repo, 'remote', 'set-url', 'origin', 'https://127.0.0.1:1/none.git'], { encoding: 'utf8' })
+  writeFileSync(join(dataDir, 'repos', 'local.source'), 'https://127.0.0.1:1/none.git#main')
+
+  const runner = createRunner({ store, log: null, settings: () => ({ enabled: false }) })
+  t.after(() => runner.dispose())
+
+  const result = await runner.sync('local')
+  assert.equal(result.ok, true)
+  assert.equal(result.offline, true, '拉取失败但有本地源码时应标记离线')
+  assert.equal(result.added, 1, '仍应按本地源码登记任务')
+  assert.equal(store.state().subscriptions.find((s) => s.id === 'local').lastSyncStatus, 'offline')
+  assert.equal(store.state().tasks.length, 1)
+  assert.equal(store.state().tasks[0].enabled, false, '离线登记的任务同样默认停用')
+})
+
+test('无本地源码且拉取失败时明确报错', async (t) => {
+  const root = temp(t)
+  const store = createStore(join(root, 'data'))
+  store.addSubscription({ id: 'gone', name: '坏源', url: 'https://127.0.0.1:1/none.git', branch: 'main', whitelist: '', blacklist: '', extensions: 'js', enabled: true })
+  const runner = createRunner({ store, log: null, settings: () => ({ enabled: false }) })
+  t.after(() => runner.dispose())
+  await assert.rejects(runner.sync('gone'), /拉取失败/)
+  assert.equal(store.state().subscriptions.find((s) => s.id === 'gone').lastSyncStatus, 'error')
+})
+
+test('同步即对齐：删除本订阅已消失的脚本任务，且不影响其它订阅', async (t) => {
+  const { execFileSync } = await import('node:child_process')
+  const { writeFileSync } = await import('node:fs')
+  const root = temp(t)
+  const git = (cwd, ...a) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  const makeUpstream = (name, files) => {
+    const dir = join(root, name)
+    mkdirSync(dir, { recursive: true })
+    git(dir, 'init', '-q'); git(dir, 'config', 'user.email', 't@t'); git(dir, 'config', 'user.name', 't')
+    for (const [f, c] of Object.entries(files)) writeFileSync(join(dir, f), c)
+    git(dir, 'add', '-A'); git(dir, 'commit', '-qm', 'init')
+    return dir
+  }
+  const upA = makeUpstream('upA', { 'jd_a.js': '// cron 1 8 * * *\nconsole.log(1)\n', 'jd_b.js': '// cron 2 8 * * *\nconsole.log(2)\n' })
+  const upB = makeUpstream('upB', { 'jd_x.js': '// cron 3 8 * * *\nconsole.log(3)\n' })
+
+  const dataDir = join(root, 'data')
+  const store = createStore(dataDir)
+  store.addSubscription({ id: 'src-a', name: 'A', url: 'https://example.com/repo-src-a.git', branch: 'main', extensions: 'js', enabled: true })
+  store.addSubscription({ id: 'src-b', name: 'B', url: 'https://example.com/repo-src-b.git', branch: 'main', extensions: 'js', enabled: true })
+  for (const [id, up] of [['src-a', upA], ['src-b', upB]]) {
+    execFileSync('git', ['clone', '-q', up, join(dataDir, 'repos', id)], { encoding: 'utf8' })
+    writeFileSync(join(dataDir, 'repos', `${id}.source`), `https://example.com/repo-${id}.git#main`)
+  }
+
+  const runner = createRunner({ store, log: null, settings: () => ({ enabled: false }) })
+  t.after(() => runner.dispose())
+  await runner.sync('src-a'); await runner.sync('src-b')
+  assert.equal(store.state().tasks.length, 3)
+
+  // 上游 A 删除 jd_b.js 并新增 jd_c.js
+  execFileSync('git', ['rm', '-q', 'jd_b.js'], { cwd: upA })
+  writeFileSync(join(upA, 'jd_c.js'), '// cron 4 8 * * *\nconsole.log(4)\n')
+  git(upA, 'add', '-A'); git(upA, 'commit', '-qm', 'change')
+
+  const result = await runner.sync('src-a')
+  assert.equal(result.added, 1, '新增脚本应建任务')
+  assert.equal(result.removed, 1, '已消失脚本的任务应被清理')
+  const files = store.state().tasks.map((x) => x.file).sort()
+  assert.deepEqual(files, ['jd_a.js', 'jd_c.js', 'jd_x.js'], 'B 订阅的任务不受影响')
+  assert.equal(store.state().tasks.some((x) => x.file === 'jd_b.js'), false)
+
+  // 用户关闭自动清理后，同步不再删除
+  store.updateSubscription('src-a', { autoDelCron: false })
+  execFileSync('git', ['rm', '-q', 'jd_c.js'], { cwd: upA })
+  git(upA, 'add', '-A'); git(upA, 'commit', '-qm', 'rm c')
+  const second = await runner.sync('src-a')
+  assert.equal(second.removed, 0, '用户关闭清理后不得删除任务')
+  assert.equal(store.state().tasks.some((x) => x.file === 'jd_c.js'), true)
+})
+
+test('Cron 解析：逗号列表、快捷语法、注释与引号', () => {
+  assert.equal(parseCron('0 6,18 * * *').raw, '0 6,18 * * *')
+  assert.equal(parseCron('@daily').raw, '0 0 * * *')
+  assert.equal(parseCron('@hourly').raw, '0 * * * *')
+  assert.equal(parseCron('1 1 1 1 *; 仅执行一次').raw, '1 1 1 1 *')
+  assert.equal(parseCron('"15 2 * * *"').raw, '15 2 * * *')
+  assert.throws(() => parseCron(''), /不能为空/)
+})
+
+test('Cron 提取：兼容各仓库真实写法', () => {
+  assert.equal(extractCron('// cron */1 * * * * *'), '*/1 * * * * *')
+  assert.equal(extractCron('/* cron 31 11 * * *\n * next */'), '31 11 * * *')
+  assert.equal(extractCron('const cron = "15 2 * * *"'), '15 2 * * *')
+  assert.equal(extractCron('cron:1 1 1 1 *'), '1 1 1 1 *')
+  // 注释末尾带文件名（ql-public 常见）
+  assert.equal(extractCron(' * cron 17 18 * * *  gqft.js'), '17 18 * * *')
+  // 注释末尾带中文说明
+  assert.equal(extractCron(' * cron 0 6,18 * * *  好奇车生活.js'), '0 6,18 * * *')
+  assert.equal(extractCron('# 定时：30 8 * * *'), '30 8 * * *')
+  // 没有 cron 声明时不应误报
+  assert.equal(extractCron('function Env(o,t){class s{}}'), '')
+})
+
+test('重复添加任务不报错：已存在时更新 Cron 并停用待确认', async (t) => {
+  const { execFileSync } = await import('node:child_process')
+  const { writeFileSync } = await import('node:fs')
+  const root = temp(t)
+  const up = join(root, 'up')
+  mkdirSync(up, { recursive: true })
+  const git = (...a) => execFileSync('git', a, { cwd: up, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  git('init', '-q'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't')
+  writeFileSync(join(up, 'a.js'), '// cron 1 8 * * *\nconsole.log(1)\n')
+  git('add', '-A'); git('commit', '-qm', 'init')
+
+  const dataDir = join(root, 'data')
+  const store = createStore(dataDir)
+  store.addSubscription({ id: 'src-a', name: 'A', url: 'https://example.com/repo-src-a.git', branch: 'main', extensions: 'js', enabled: true })
+  execFileSync('git', ['clone', '-q', up, join(dataDir, 'repos', 'src-a')], { encoding: 'utf8' })
+  writeFileSync(join(dataDir, 'repos', 'src-a.source'), 'https://example.com/repo-src-a.git#main')
+  const runner = createRunner({ store, log: null, settings: () => ({ enabled: false }) })
+  t.after(() => runner.dispose())
+  await runner.sync('src-a')
+
+  const [task] = store.state().tasks
+  // 模拟面板再次点「添加」：同步后改为更新而非抛错
+  const updated = store.upsertTask({ ...task, cron: '5 9 * * *', enabled: false, revokedReason: 'Cron 已修改，请重新确认后启用' })
+  assert.equal(updated.cron, '5 9 * * *')
+  assert.equal(store.state().tasks.length, 1, '不应产生重复任务')
+  assert.equal(updated.enabled, false)
+})
+
+test('一键开启：逐个授权各自指纹，可再次全部停用', async (t) => {
+  const { execFileSync } = await import('node:child_process')
+  const { writeFileSync } = await import('node:fs')
+  const root = temp(t)
+  const up = join(root, 'up')
+  mkdirSync(up, { recursive: true })
+  const git = (...a) => execFileSync('git', a, { cwd: up, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  git('init', '-q'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't')
+  writeFileSync(join(up, 'a.js'), '// cron 1 8 * * *\nconsole.log(1)\n')
+  writeFileSync(join(up, 'b.js'), '// cron 2 8 * * *\nconsole.log(2)\n')
+  git('add', '-A'); git('commit', '-qm', 'init')
+
+  const dataDir = join(root, 'data')
+  const store = createStore(dataDir)
+  store.addSubscription({ id: 'src-a', name: 'A', url: 'https://example.com/repo-src-a.git', branch: 'main', extensions: 'js', enabled: true })
+  execFileSync('git', ['clone', '-q', up, join(dataDir, 'repos', 'src-a')], { encoding: 'utf8' })
+  writeFileSync(join(dataDir, 'repos', 'src-a.source'), 'https://example.com/repo-src-a.git#main')
+  const runner = createRunner({ store, log: null, settings: () => ({ enabled: false }) })
+  t.after(() => runner.dispose())
+  await runner.sync('src-a')
+  assert.equal(store.state().tasks.length, 2)
+
+  for (const item of store.state().tasks) {
+    runner.authorize(item.id)
+    store.upsertTask({ ...store.state().tasks.find((x) => x.id === item.id), enabled: true })
+  }
+  assert.equal(store.state().tasks.every((x) => x.enabled), true)
+  const fps = store.state().tasks.map((x) => x.approval.fingerprint)
+  assert.equal(new Set(fps).size, 2, '每个任务的审批指纹应各不相同')
+
+  for (const x of store.state().tasks) store.upsertTask({ ...x, enabled: false })
+  assert.equal(store.state().tasks.every((x) => !x.enabled && x.approval), true, '停用不丢审批')
+})

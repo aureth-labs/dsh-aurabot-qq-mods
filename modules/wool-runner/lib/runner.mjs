@@ -110,18 +110,28 @@ export function createRunner({ store, log, settings }) {
         if (existsSync(dir)) rmSync(dir, { recursive: true, force: true })
         result = await execute('git', ['clone', '--depth', '1', '--branch', item.branch, '--', item.url, dir], { timeout: 240_000 })
       }
+      let offline = false
       if (result.code !== 0) {
-        store.updateSubscription(id, { lastSyncAt: new Date().toISOString(), lastSyncStatus: 'error', lastSyncMessage: result.output.slice(-1500) })
-        throw new Error('拉取失败：' + result.output.slice(-600))
+        // 拉取失败（断网、GitHub 不可达等）：若本地已有可用源码，仍按现有源码登记定时任务，
+        // 避免「网络问题」把用户已经下载好的脚本挡在任务列表之外。同步状态会标记为离线。
+        const hasLocal = existsSync(join(dir, '.git'))
+        if (!hasLocal) {
+          store.updateSubscription(id, { lastSyncAt: new Date().toISOString(), lastSyncStatus: 'error', lastSyncMessage: result.output.slice(-1500) })
+          throw new Error('拉取失败：' + result.output.slice(-600))
+        }
+        offline = true
       }
-      const { writeFileSync } = await import('node:fs')
-      writeFileSync(signatureFile, signature, 'utf8')
+      if (!offline) {
+        const { writeFileSync } = await import('node:fs')
+        writeFileSync(signatureFile, signature, 'utf8')
+      }
       const commit = await execute('git', ['-C', dir, 'rev-parse', '--short', 'HEAD'])
       const nextCommit = commit.code === 0 ? commit.output.trim() : ''
       if (item.commit && nextCommit && item.commit !== nextCommit) store.revokeTasks(id, '订阅已更新到新 commit，旧审批失效，任务已停用')
       const discovered = discover(id)
       let added = 0
       let updated = 0
+      let removed = 0
       if (item.autoAddCron) {
         for (const script of discovered.filter((x) => x.cron)) {
           const tid = taskId(id, script.file)
@@ -136,18 +146,36 @@ export function createRunner({ store, log, settings }) {
           }
         }
       }
-      if (item.autoDelCron) {
+      if (item.autoDelCron !== false) {
+        // 同步即对齐：本订阅里已经不存在的脚本，其定时任务一并删除，避免残留跑空的旧任务。
+        // 只清理本订阅的任务，且先停进程再删记录，不影响其它订阅。
         const existing = new Set(discovered.map((x) => x.file))
-        for (const t of [...store.state().tasks]) if (t.subscriptionId === id && !existing.has(t.file)) { await stop(t.id, '脚本已从订阅消失'); store.removeTask(t.id) }
+        for (const t of [...store.state().tasks]) {
+          if (t.subscriptionId !== id) continue
+          if (existing.has(t.file)) continue
+          await stop(t.id, '脚本已从订阅消失，同步时清理')
+          store.removeTask(t.id)
+          removed++
+        }
       }
+      const detail = [
+        `发现 ${discovered.length} 个脚本`,
+        `新增 ${added} 个任务`,
+        removed ? `清理 ${removed} 个失效任务` : '',
+        updated ? `更新 ${updated} 个 Cron` : '',
+      ].filter(Boolean).join('，')
       store.updateSubscription(id, {
-        lastSyncAt: new Date().toISOString(), lastSyncStatus: 'ok',
-        lastSyncMessage: `发现 ${discovered.length} 个脚本，新增 ${added} 个任务${updated ? `，更新 ${updated} 个 Cron` : ''}（新任务默认停用，需审批后启用）`,
+        lastSyncAt: new Date().toISOString(), lastSyncStatus: offline ? 'offline' : 'ok',
+        lastSyncMessage: `${offline ? '网络不可用，使用本地已有源码：' : ''}${detail}（新任务默认停用，需审批后启用）`,
         commit: nextCommit,
       })
       return {
         ok: true,
-        message: `同步完成：${discovered.length} 个脚本，新增 ${added} 个定时任务${updated ? `，更新 ${updated} 个 Cron` : ''}；新任务默认停用，需在任务列表确认审批后启用`,
+        offline,
+        added, updated, removed,
+        scripts: discovered.length,
+        tasks: store.state().tasks.filter((t) => t.subscriptionId === id).length,
+        message: `${offline ? '网络不可用，已按本地源码处理：' : '同步完成：'}${detail}；新任务默认停用，需在任务列表确认审批后启用`,
         scripts: discovered.length, added, updated, tasks: store.state().tasks.filter((t) => t.subscriptionId === id).length,
       }
     })().finally(() => syncing.delete(id))

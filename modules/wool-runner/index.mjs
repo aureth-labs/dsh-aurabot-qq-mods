@@ -8,7 +8,7 @@ import { parseCron } from './lib/cron.mjs'
 export default {
   id: 'wool-runner',
   name: '薅羊毛任务中心',
-  version: '1.0.0',
+  version: '1.1.0',
   api: 1,
   description: '参考青龙的订阅、环境变量、Cron 任务与日志管理，内置 jdpro、smzdm_script、QLScriptPublic 源，支持京东扫码获取 JD_COOKIE',
   panel: 'panel.js',
@@ -77,13 +77,24 @@ export default {
     route('/task/add', async (req) => {
       const input = await body(req)
       const sub = store.state().subscriptions.find((s) => s.id === input.subscriptionId)
-      if (!sub) throw new Error('订阅不存在')
-      const script = runner.discover(sub.id).find((x) => x.id === input.scriptId || x.file === input.file)
-      if (!script) throw new Error('脚本不存在，请重新同步')
-      if (store.state().tasks.some((t) => t.id === script.id)) throw new Error('这个脚本已在任务列表中')
+      if (!sub) throw new Error('订阅不存在，请先同步该订阅')
+      const discovered = runner.discover(sub.id)
+      if (!discovered.length) throw new Error('这个订阅还没有本地源码，请先点「立即同步」')
+      const script = discovered.find((x) => x.id === input.scriptId || x.file === input.file)
+      if (!script) throw new Error('脚本不存在，请重新同步后再试')
       const cron = String(input.cron || script.cron || '').trim()
+      if (!cron) throw new Error('这个脚本没有识别到 Cron，请手动填写 5 或 6 字段表达式（如 0 8 * * *）')
       parseCron(cron)
-      return { ok: true, item: store.upsertTask({ id: script.id, subscriptionId: sub.id, file: script.file, name: String(input.name || script.name), cron, enabled: false, envNames: [], approval: null }) }
+      const existing = store.state().tasks.find((t) => t.id === script.id)
+      if (existing) {
+        // 同步已经自动建过这个任务：不报错，改为更新表达式并提示，避免「添加」永远失败
+        const changed = existing.cron !== cron
+        const item = changed
+          ? store.upsertTask({ ...existing, cron, enabled: false, revokedReason: 'Cron 已修改，请重新确认后启用' })
+          : existing
+        return { ok: true, existed: true, item, message: changed ? `任务已存在，Cron 已更新为 ${cron} 并停用，请重新确认` : '这个脚本的任务已经存在，无需重复添加' }
+      }
+      return { ok: true, existed: false, item: store.upsertTask({ id: script.id, subscriptionId: sub.id, file: script.file, name: String(input.name || script.name), cron, enabled: false, envNames: [], approval: null }) }
     })
     route('/task/update', async (req) => {
       const input = await body(req)
@@ -104,6 +115,38 @@ export default {
       for (const name of envNames) if (!known.has(name)) throw new Error(`环境变量 ${name} 不存在`)
       store.upsertTask({ ...old, envNames })
       return { ok: true, message: envNames.length ? `已授权 ${envNames.join('、')}` : '已设为不注入任何自定义凭据' }
+    })
+    route('/task/enable-all', async (req) => {
+      const input = await body(req)
+      // subscriptionId 为空表示全部订阅；confirm 必须为 true，一键开启等同于逐条确认当前源码
+      const scope = String(input.subscriptionId || '')
+      const targets = store.state().tasks.filter((t) => (!scope || t.subscriptionId === scope))
+      if (!targets.length) return { ok: true, enabled: 0, skipped: 0, message: scope ? '这个订阅下还没有任务' : '还没有任务' }
+      if (input.confirm !== true) return { ok: false, needsConfirmation: true, count: targets.length, message: `将确认并启用 ${targets.length} 个任务，需要确认` }
+      const subOf = (id) => store.state().subscriptions.find((s) => s.id === id)
+      let enabled = 0
+      const failed = []
+      for (const item of targets) {
+        const sub = subOf(item.subscriptionId)
+        if (!sub || !sub.enabled) { failed.push({ name: item.name, reason: '订阅已停用' }); continue }
+        try {
+          // 逐个审批：审批仍绑定各自的 url/branch/commit/file/sha256，只是把确认动作批量化
+          runner.authorize(item.id)
+          store.upsertTask({ ...store.state().tasks.find((t) => t.id === item.id), enabled: true })
+          enabled++
+        } catch (error) { failed.push({ name: item.name, reason: String(error?.message || error).slice(0, 120) }) }
+      }
+      return {
+        ok: true, enabled, skipped: failed.length, failed: failed.slice(0, 20),
+        message: `已确认并启用 ${enabled} 个任务${failed.length ? `，${failed.length} 个跳过` : ''}`,
+      }
+    })
+    route('/task/disable-all', async (req) => {
+      const scope = String((await body(req)).subscriptionId || '')
+      const targets = store.state().tasks.filter((t) => !scope || t.subscriptionId === scope)
+      let count = 0
+      for (const t of targets) if (t.enabled) { store.upsertTask({ ...t, enabled: false }); count++ }
+      return { ok: true, disabled: count, message: `已停用 ${count} 个任务（审批保留）` }
     })
     route('/task/run', async (req) => {
       const input = await body(req)
