@@ -21,10 +21,13 @@ const S = {
   token: localStorage.getItem(LS.token) || '',
   tone: localStorage.getItem(LS.tone) || DEFAULT_TONE,
   toneLocal: localStorage.getItem(LS.toneLocal) === '1',
-  seq: 0,
+  seq: 0, // 已经画到的事件序号：只认 seq 更大的，重复批次直接丢
+  pollBusy: false, // 轮询单飞：上一次没回来就不发下一次（弱网并发会把同一批事件画好几遍）
+  histCount: 0, // 历史里画了几条（决定启动时要不要跳过事件环回放）
+  histEnd: 0, // 历史最后一条的时间（启动补画时用来判断哪几条历史没覆盖到）
   msgs: [],
   pending: 0,
-  polling: null,
+  polling: null, // 轮询定时器（setTimeout 链，天然不重叠）
   online: true,
   state: null,
   playing: null,
@@ -489,6 +492,8 @@ async function loadHistory() {
       S.msgs.push(m)
       addMsg({ ...m, text: parseReply(m.text).text }, { animate: false })
     }
+    S.histCount = list.length
+    S.histEnd = list.length ? Number(list[list.length - 1].at) || 0 : 0
     scrollBottom(true)
   } catch (e) {
     handleErr(e)
@@ -941,33 +946,69 @@ function insertAtCursor(t) {
   autoGrow()
 }
 
+// 轮询用 setTimeout 串起来，而不是 setInterval：
+// setInterval 不看上一轮有没有回来，弱网时必然越堆越多（同一条消息被画好几遍的元凶）。
+function stopPolling() {
+  clearTimeout(S.polling)
+  clearInterval(S.polling)
+  S.polling = null
+}
+
+function startPolling() {
+  stopPolling()
+  const loop = async () => {
+    await poll()
+    if (!S.polling) return // 中途进了配对页/断了，就别再排下一轮
+    S.polling = setTimeout(loop, 1600)
+  }
+  S.polling = setTimeout(loop, 0)
+}
+
+// 把一条事件画到界面上（轮询和启动补画共用，免得两处逻辑走偏）
+function applyEvent(e) {
+  if (e.type === 'her') {
+    const p = parseReply(e.text)
+    if (!p.text) return
+    S.pending = 0
+    $('#typing').hidden = true
+    pushMsg({ who: 'her', text: p.text, at: e.at, voice: p.hasVoice })
+  } else if (e.type === 'her-media') {
+    // 她发的图片 / 表情包 / 语音条（send 钩子抓的原始段）
+    S.pending = 0
+    $('#typing').hidden = true
+    if (e.kind === 'image' && e.data) {
+      pushMsg({ who: 'her', text: e.text || '', image: `data:${e.mime || 'image/png'};base64,${e.data}`, at: e.at })
+    } else if (e.kind === 'voice' && e.data) {
+      pushMsg({ who: 'her', text: '', audio: `data:${e.mime || 'audio/wav'};base64,${e.data}`, audioMime: e.mime, at: e.at })
+    }
+  } else if (e.type === 'qq-state') {
+    renderStatus(e.state === 'connected')
+  }
+}
+
 // 轮询她的话
+// 两个坑会让同一条消息在屏幕上出现好几次，这里都堵上：
+// 1) 原来是每 1.6 秒发一次请求、单次超时 8 秒。手机弱网下一次要好几百毫秒到几秒，
+//    于是好几个请求带着同一个 after= 并发在飞，回来的是同一批事件 → 画两遍、三遍。
+//    现在：上一次没回来就不发下一次（单飞），并且逐条比较 seq，重复的批次直接丢。
+// 2) 启动时先画 7 天历史，再从事件环 after=0 把最近的又重放一遍 → 每次开 app 都重。
+//    启动流程现在会把游标抬到「事件环已经到几号」，这里只按 seq 兜底。
 async function poll() {
+  if (S.pollBusy) return
+  S.pollBusy = true
   try {
     const r = await api('/api/events?after=' + S.seq, { timeout: 8000 })
     setOnline(true)
     if (!r || !r.ok) return
-    S.seq = r.seq || S.seq
-    for (const e of r.list || []) {
-      if (e.type === 'her') {
-        const p = parseReply(e.text)
-        if (!p.text) continue
-        S.pending = 0
-        $('#typing').hidden = true
-        pushMsg({ who: 'her', text: p.text, at: e.at, voice: p.hasVoice })
-      } else if (e.type === 'her-media') {
-        // 她发的图片 / 表情包 / 语音条（send 钩子抓的原始段）
-        S.pending = 0
-        $('#typing').hidden = true
-        if (e.kind === 'image' && e.data) {
-          pushMsg({ who: 'her', text: e.text || '', image: `data:${e.mime || 'image/png'};base64,${e.data}`, at: e.at })
-        } else if (e.kind === 'voice' && e.data) {
-          pushMsg({ who: 'her', text: '', audio: `data:${e.mime || 'audio/wav'};base64,${e.data}`, audioMime: e.mime, at: e.at })
-        }
-      } else if (e.type === 'qq-state') {
-        renderStatus(e.state === 'connected')
-      }
+    const list = Array.isArray(r.list) ? r.list : []
+    for (const e of list) {
+      const n = Number(e.seq) || 0
+      if (n <= S.seq) continue // 已经画过（并发、重试、重连都可能让同一批事件再来一次）
+      S.seq = n
+      applyEvent(e)
     }
+    // 这一轮什么都没拿到：把游标跟到服务端当前值，省得下次重复问
+    if (!list.length && r.seq) S.seq = Math.max(S.seq, Number(r.seq) || 0)
     if (S.pending && Date.now() - S.pending > 120000) {
       S.pending = 0
       $('#typing').hidden = true
@@ -975,6 +1016,8 @@ async function poll() {
   } catch (e) {
     if (e.code === 401) return toPair('密钥不对，重新输一下')
     setOnline(false)
+  } finally {
+    S.pollBusy = false
   }
 }
 
@@ -1224,8 +1267,7 @@ function showPairErr(text, codes = []) {
 }
 
 function toPair(reason, codes) {
-  clearInterval(S.polling)
-  S.polling = null
+  stopPolling()
   if (reason) showPairErr(reason, codes || [])
   else {
     $('#pair-err').hidden = true
@@ -1368,10 +1410,22 @@ async function boot() {
     // 服务器上有色调设置、本地没改过 → 跟服务器走
     if (st.tone && !localStorage.getItem(LS.tone) ) paintTone(st.tone)
     show('chat')
+    // 启动时别把「历史」和「事件环」的内容各画一遍（老版本每开一次 app，最近几条都会重）。
+    // 做法：先问事件环现在是几号 → 画 7 天历史 → 补画「问号」到「画完历史」这一小段里
+    // 历史没覆盖到的（她写 chatlog 早于推事件，所以这段基本都在历史里，只有媒体段要补）。
+    const cursor = await api('/api/seq', { timeout: 6000 }).catch(() => null)
+    const from = Number(cursor && cursor.seq) || 0
     await loadHistory()
-    clearInterval(S.polling)
-    S.polling = setInterval(poll, 1600)
-    poll()
+    if (S.histCount && from) {
+      const gap = await api('/api/events?after=' + from, { timeout: 6000 }).catch(() => null)
+      const gapList = gap && Array.isArray(gap.list) ? gap.list : []
+      for (const e of gapList) if (Number(e.at) > S.histEnd) applyEvent(e)
+      S.seq = Math.max(from, Number(gap && gap.seq) || from)
+    } else {
+      // 没有历史可依（chatlog 还是空的 / 老服务端没有 /seq）：让事件环整段回放，总比空屏好
+      S.seq = 0
+    }
+    startPolling()
   } catch (e) {
     if (e.code === 401) return toPair('[P21] 密钥不对\n抄面板「口袋aurabot」页那条 pk_ 开头的，重新输一下。', ['P21'])
     const list = S.hosts.length ? S.hosts : S.host ? [S.host] : []

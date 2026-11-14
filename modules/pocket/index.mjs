@@ -17,7 +17,7 @@ import { spawn, execFileSync } from 'node:child_process'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 
 const RING_MAX = 500
-const VERSION = '1.5.3'
+const VERSION = '1.5.4'
 const DEFAULT_PORT = 7788
 const MAX_MEDIA_BYTES = 12 * 1024 * 1024
 
@@ -691,7 +691,16 @@ export default {
           })(),
         }
       },
-      events: (after) => ({ ok: true, seq, list: ring.filter((e) => e.seq > Number(after || 0)).slice(0, 200) }),
+      // 返回的 seq 是「这一批的最后一条」而不是全局 seq：批次被 200 条截断时，
+      // 客户端若直接跳到全局 seq 会漏掉中间那些没发出去的事件
+      events: (after) => {
+        const a = Number(after || 0)
+        const list = ring.filter((e) => e.seq > a).slice(0, 200)
+        return { ok: true, seq: list.length ? list[list.length - 1].seq : seq, list }
+      },
+      // 只读游标，不带事件体：app 启动时先问「现在到几号」，
+      // 好把「历史接口已经画过」的那一段跳过去，否则历史 + 事件环会把同一条消息画两遍
+      seq: () => ({ ok: true, seq }),
       history: (days) => ({ ok: true, list: readHistory(days) }),
       message: (text, image) => inject(text, image),
       voiceNote: (audio) => voiceNote(audio),
@@ -1306,6 +1315,7 @@ export default {
     })
     api.route('/state', (req, res) => (guard(req, res) ? ops.state() : undefined))
     api.route('/events', (req, res) => (guard(req, res) ? ops.events(urlOf(req).searchParams.get('after')) : undefined))
+    api.route('/seq', (req, res) => (guard(req, res) ? ops.seq() : undefined))
     api.route('/history', (req, res) => (guard(req, res) ? ops.history(Number(urlOf(req).searchParams.get('days') || 3) || 3) : undefined))
     api.route('/moments', async (req, res) => (guard(req, res) ? ops.moments() : undefined))
     api.route('/skin', (req, res) => (guard(req, res) ? ops.skin() : undefined))
@@ -1458,6 +1468,7 @@ export default {
         }
         if (route === 'state') return json(res, 200, ops.state())
         if (route === 'events') return json(res, 200, ops.events(url.searchParams.get('after')))
+        if (route === 'seq') return json(res, 200, ops.seq())
         if (route === 'history') return json(res, 200, ops.history(Number(url.searchParams.get('days') || 3) || 3))
         if (route === 'moments') return json(res, 200, await ops.moments())
         if (route === 'skin') return json(res, 200, ops.skin())
