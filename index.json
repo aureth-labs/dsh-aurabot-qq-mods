@@ -729,6 +729,37 @@
       "publishedAt": "2026-11-13T17:45:58.167Z"
     },
     {
+      "id": "livin",
+      "name": "过日子",
+      "version": "1.2.0",
+      "description": "她自己的一整天：无聊了从乐子清单自己挑一件事——刷抖音、玩游戏、逛B站、写小说、发呆都行，做完看心情分享，下次什么时候醒也她自己定。不是任务清单，是生活。",
+      "category": "desktop",
+      "tags": [
+        "自主",
+        "乐子",
+        "生活"
+      ],
+      "author": "Ariz0324",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "livin-v1.2.0",
+      "file": "livin-v1.2.0.zip",
+      "path": "livin-v1.2.0/livin-v1.2.0.zip",
+      "size": 18348,
+      "sha256": "658a62acfa8cacd04b2e48d0a75f8d71b766d6bee36cc7014aa65793f7d83f7c",
+      "commit": "d2f4653d8fa396614750eb7aa62f1a6b8239eff5",
+      "publishedAt": "2026-11-14T03:05:47.178Z"
+    },
+    {
       "id": "love-mode",
       "name": "快来跟我恋爱吧",
       "version": "1.5.0",
@@ -1692,5 +1723,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-14T01:32:15.894Z"
+  "generatedAt": "2026-11-14T03:05:47.178Z"
 }
