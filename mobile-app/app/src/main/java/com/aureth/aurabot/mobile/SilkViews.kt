@@ -1,573 +1,917 @@
 package com.aureth.aurabot.mobile
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.res.ColorStateList
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorFilter
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PixelFormat
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.RadialGradient
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.os.Build
+import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.animation.DecelerateInterpolator
-import android.view.animation.LinearInterpolator
+import android.view.animation.OvershootInterpolator
+import android.view.animation.PathInterpolator
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.ColorUtils
-import kotlin.math.PI
-import kotlin.math.sin
+import androidx.core.graphics.drawable.DrawableCompat
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
- * 原生界面的视觉组件库：颜色全部来自 colors.xml（浅/深模式自动切换），不写死任何色值。
- * 统一圆角（按钮/输入框 14dp，卡片 20dp）、按压缩放 0.97 + 涟漪、细线进度与冷启动品牌波纹。
+ * Silk 风格液态玻璃圆角/圆形绘制器：
+ * 半透磨砂底 + 顶部纵向高光 + 对角线 3 段高光折边（liquidRim）+ 极细外轮廓线。
+ */
+class LiquidGlassDrawable(
+    private val fillColor: Int,
+    private val topSheenColor: Int,
+    private val rimHi: Int,
+    private val rimLo: Int,
+    private val rimBack: Int,
+    private val outerStrokeColor: Int,
+    private val cornerRadiusPx: Float = 0f,
+    private val rimWidthPx: Float = 2f,
+    private val outerStrokeWidthPx: Float = 1f,
+    private val isCircle: Boolean = false
+) : Drawable() {
+
+    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = fillColor
+    }
+    private val sheenPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
+    private val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = rimWidthPx
+    }
+    private val outerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = outerStrokeWidthPx
+        color = outerStrokeColor
+    }
+    private val rect = RectF()
+    private val rimRect = RectF()
+    private val outerRect = RectF()
+    private var lastW = -1
+    private var lastH = -1
+
+    override fun onBoundsChange(bounds: Rect) {
+        super.onBoundsChange(bounds)
+        lastW = -1
+        lastH = -1
+    }
+
+    private fun ensureShaders(w: Float, h: Float) {
+        if (lastW == w.roundToInt() && lastH == h.roundToInt()) return
+        lastW = w.roundToInt()
+        lastH = h.roundToInt()
+
+        sheenPaint.shader = LinearGradient(
+            0f, 0f, 0f, h * 0.56f,
+            intArrayOf(topSheenColor, Color.TRANSPARENT),
+            floatArrayOf(0f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        rimPaint.shader = LinearGradient(
+            0f, 0f, w, h,
+            intArrayOf(rimHi, rimLo, rimBack),
+            floatArrayOf(0f, 0.45f, 1f),
+            Shader.TileMode.CLAMP
+        )
+    }
+
+    override fun draw(canvas: Canvas) {
+        val b = bounds
+        val w = b.width().toFloat()
+        val h = b.height().toFloat()
+        if (w <= 0f || h <= 0f) return
+
+        ensureShaders(w, h)
+        val radius = if (isCircle) min(w, h) * 0.5f else min(cornerRadiusPx, min(w, h) * 0.5f)
+        rect.set(b.left.toFloat(), b.top.toFloat(), b.right.toFloat(), b.bottom.toFloat())
+
+        canvas.drawRoundRect(rect, radius, radius, fillPaint)
+        if (Color.alpha(topSheenColor) > 0) {
+            canvas.drawRoundRect(rect, radius, radius, sheenPaint)
+        }
+
+        val rimInset = rimWidthPx * 0.5f + outerStrokeWidthPx * 0.5f
+        rimRect.set(
+            rect.left + rimInset,
+            rect.top + rimInset,
+            rect.right - rimInset,
+            rect.bottom - rimInset
+        )
+        val rimRadius = (radius - rimInset).coerceAtLeast(0f)
+        canvas.drawRoundRect(rimRect, rimRadius, rimRadius, rimPaint)
+
+        if (outerStrokeWidthPx > 0f && Color.alpha(outerStrokeColor) > 0) {
+            val outInset = outerStrokeWidthPx * 0.5f
+            outerRect.set(
+                rect.left + outInset,
+                rect.top + outInset,
+                rect.right - outInset,
+                rect.bottom - outInset
+            )
+            val outRadius = (radius - outInset).coerceAtLeast(0f)
+            canvas.drawRoundRect(outerRect, outRadius, outRadius, outerPaint)
+        }
+    }
+
+    override fun setAlpha(alpha: Int) {
+        fillPaint.alpha = alpha
+        sheenPaint.alpha = alpha
+        rimPaint.alpha = alpha
+        outerPaint.alpha = alpha
+        invalidateSelf()
+    }
+
+    override fun setColorFilter(colorFilter: ColorFilter?) {
+        fillPaint.colorFilter = colorFilter
+        invalidateSelf()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+}
+
+/**
+ * 视觉体系工具集：延续 Silk 钱包的克制质感，严格遵循单一颜色真源与系统字体。
  */
 object SilkUi {
-    val EASE_OUT = DecelerateInterpolator(1.6f)
+    val silkEase = PathInterpolator(0.22f, 1f, 0.36f, 1f)
+    val EASE_OUT: PathInterpolator = silkEase
+    private val springOvershoot = OvershootInterpolator(1.6f)
 
     fun dp(ctx: Context, v: Float): Int =
-        TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, ctx.resources.displayMetrics).toInt()
+        TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, ctx.resources.displayMetrics).roundToInt()
 
     fun dpF(ctx: Context, v: Float): Float =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, ctx.resources.displayMetrics)
 
     fun color(ctx: Context, resId: Int): Int = ContextCompat.getColor(ctx, resId)
 
-    /** 重要操作（扫码成功、配对连接）触发轻微震动反馈。 */
-    fun hapticConfirm(view: View?) {
-        view ?: return
-        val flag = if (Build.VERSION.SDK_INT >= 30) {
-            HapticFeedbackConstants.CONFIRM
-        } else {
-            HapticFeedbackConstants.VIRTUAL_KEY
-        }
-        view.performHapticFeedback(flag)
+    fun space(ctx: Context, heightDp: Float): View = View(ctx).apply {
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, heightDp))
     }
 
-    fun hapticClick(view: View?) {
-        view?.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-    }
-
-    /** 为所有可点击控件附上按压 0.97 缩放回弹效果（不吞掉原有点击监听）。 */
+    /**
+     * Silk Q 弹按压缩放：按下快速收敛，松开带轻柔弹性回弹，无廉价灰框涟漪。
+     */
     @SuppressLint("ClickableViewAccessibility")
-    fun attachPressScale(view: View, scaleDown: Float = 0.97f) {
+    fun attachPressScale(view: View, pressedScale: Float = 0.96f) {
         view.setOnTouchListener { v, event ->
+            if (!v.isEnabled) return@setOnTouchListener false
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     v.animate().cancel()
-                    v.animate().scaleX(scaleDown).scaleY(scaleDown).setDuration(90).setInterpolator(EASE_OUT).start()
+                    v.animate()
+                        .scaleX(pressedScale)
+                        .scaleY(pressedScale)
+                        .alpha(0.92f)
+                        .setDuration(90L)
+                        .setInterpolator(DecelerateInterpolator())
+                        .start()
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     v.animate().cancel()
-                    v.animate().scaleX(1f).scaleY(1f).setDuration(170).setInterpolator(EASE_OUT).start()
+                    v.animate()
+                        .scaleX(1f)
+                        .scaleY(1f)
+                        .alpha(1f)
+                        .setDuration(240L)
+                        .setInterpolator(springOvershoot)
+                        .start()
                 }
             }
             false
         }
     }
 
-    fun rippleRect(ctx: Context, fillColor: Int, rippleColor: Int, radiusDp: Float, strokeColor: Int = Color.TRANSPARENT, strokeWidthDp: Float = 0f): RippleDrawable {
-        val radiusPx = dpF(ctx, radiusDp)
+    fun hapticClick(view: View) {
+        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+    }
+
+    fun hapticConfirm(view: View) {
+        hapticSuccess(view)
+    }
+
+    fun hapticSuccess(view: View) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+        } else {
+            view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        }
+    }
+
+    /**
+     * Silk 液态玻璃卡片背景（浅色纯白微透高光折边，深色曜石磨砂折边）。
+     */
+    fun glassCardBackground(ctx: Context, radiusDp: Float = 22f): Drawable =
+        LiquidGlassDrawable(
+            fillColor = color(ctx, R.color.glass_tint),
+            topSheenColor = color(ctx, R.color.rim_top_sheen),
+            rimHi = color(ctx, R.color.rim_hi),
+            rimLo = color(ctx, R.color.rim_lo),
+            rimBack = color(ctx, R.color.rim_back),
+            outerStrokeColor = color(ctx, R.color.stroke),
+            cornerRadiusPx = dpF(ctx, radiusDp),
+            rimWidthPx = dpF(ctx, 1.5f),
+            outerStrokeWidthPx = maxOf(1f, dpF(ctx, 0.65f)),
+            isCircle = false
+        )
+
+    /**
+     * 深色相机界面上的半透液态玻璃卡片或胶囊。
+     */
+    fun darkGlassBackground(ctx: Context, radiusDp: Float = 22f, isCircle: Boolean = false): Drawable {
+        val fg = color(ctx, R.color.scan_fg)
+        return LiquidGlassDrawable(
+            fillColor = color(ctx, R.color.scan_surface),
+            topSheenColor = ColorUtils.setAlphaComponent(fg, 22),
+            rimHi = ColorUtils.setAlphaComponent(fg, 96),
+            rimLo = ColorUtils.setAlphaComponent(fg, 14),
+            rimBack = ColorUtils.setAlphaComponent(fg, 44),
+            outerStrokeColor = ColorUtils.setAlphaComponent(fg, 32),
+            cornerRadiusPx = dpF(ctx, radiusDp),
+            rimWidthPx = dpF(ctx, 1.2f),
+            outerStrokeWidthPx = maxOf(1f, dpF(ctx, 0.5f)),
+            isCircle = isCircle
+        )
+    }
+
+    fun pillBackground(ctx: Context, radiusDp: Float = 999f): Drawable =
+        LiquidGlassDrawable(
+            fillColor = color(ctx, R.color.surface_subtle),
+            topSheenColor = color(ctx, R.color.rim_top_sheen),
+            rimHi = color(ctx, R.color.rim_hi),
+            rimLo = color(ctx, R.color.rim_lo),
+            rimBack = color(ctx, R.color.rim_back),
+            outerStrokeColor = color(ctx, R.color.stroke),
+            cornerRadiusPx = dpF(ctx, radiusDp),
+            rimWidthPx = dpF(ctx, 1.1f),
+            outerStrokeWidthPx = maxOf(1f, dpF(ctx, 0.6f)),
+            isCircle = radiusDp >= 900f
+        )
+
+    fun rippleRect(
+        ctx: Context,
+        fillColor: Int,
+        rippleColor: Int,
+        radiusDp: Float,
+        strokeColor: Int? = null,
+        strokeWidthDp: Float = 1f
+    ): Drawable {
+        val radius = dpF(ctx, radiusDp)
         val content = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            cornerRadius = radiusPx
+            cornerRadius = radius
             setColor(fillColor)
-            if (strokeWidthDp > 0f && strokeColor != Color.TRANSPARENT) {
-                setStroke(dp(ctx, strokeWidthDp).coerceAtLeast(1), strokeColor)
+            if (strokeColor != null) {
+                setStroke(dp(ctx, strokeWidthDp), strokeColor)
             }
         }
         val mask = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            cornerRadius = radiusPx
-            setColor(Color.WHITE)
+            cornerRadius = radius
+            setColor(color(ctx, R.color.btn_fg))
         }
-        return RippleDrawable(ColorStateList.valueOf(rippleColor), content, mask)
+        return RippleDrawable(android.content.res.ColorStateList.valueOf(rippleColor), content, mask)
     }
 
-    fun glassCardBackground(ctx: Context, radiusDp: Float = 20f): GradientDrawable {
-        return GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = dpF(ctx, radiusDp)
-            setColor(color(ctx, R.color.surface_glass))
-            setStroke(dp(ctx, 1f).coerceAtLeast(1), color(ctx, R.color.stroke))
+    /**
+     * 圆形液态玻璃徽章容器（呼应 Silk 锁定/欢迎页的居中漂浮玻璃圆章）。
+     */
+    fun liquidCircleBadge(ctx: Context, sizeDp: Float = 72f, child: View): FrameLayout {
+        val size = dp(ctx, sizeDp)
+        val badge = FrameLayout(ctx).apply {
+            layoutParams = LinearLayout.LayoutParams(size, size)
+            background = LiquidGlassDrawable(
+                fillColor = color(ctx, R.color.glass_tint),
+                topSheenColor = color(ctx, R.color.rim_top_sheen),
+                rimHi = color(ctx, R.color.rim_hi),
+                rimLo = color(ctx, R.color.rim_lo),
+                rimBack = color(ctx, R.color.rim_back),
+                outerStrokeColor = color(ctx, R.color.stroke_strong),
+                rimWidthPx = dpF(ctx, 2f),
+                outerStrokeWidthPx = maxOf(1f, dpF(ctx, 0.65f)),
+                isCircle = true
+            )
+            elevation = dpF(ctx, 6f)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                outlineSpotShadowColor = color(ctx, R.color.accent_glow)
+                outlineAmbientShadowColor = color(ctx, R.color.stroke)
+            }
+            addView(child, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                Gravity.CENTER
+            ))
         }
+        return badge
     }
 
-    fun pillBackground(ctx: Context, fillRes: Int = R.color.surface_subtle, strokeRes: Int = R.color.stroke): GradientDrawable {
-        return GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = dpF(ctx, 999f)
-            setColor(color(ctx, fillRes))
-            setStroke(dp(ctx, 1f).coerceAtLeast(1), color(ctx, strokeRes))
+    /**
+     * Silk 分组卡片中的图标+文案行（参考 Silk 设置页，左为 36dp 柔和色块图标，右为标题与说明）。
+     */
+    fun settingRow(
+        ctx: Context,
+        iconRes: Int,
+        title: String,
+        subtitle: String,
+        isError: Boolean = false
+    ): LinearLayout {
+        val tint = color(ctx, if (isError) R.color.error else R.color.accent)
+        val badgeBgColor = color(ctx, if (isError) R.color.error_soft else R.color.accent_soft)
+        val iconBoxSize = dp(ctx, 36f)
+
+        val row = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(ctx, 16f), dp(ctx, 14f), dp(ctx, 16f), dp(ctx, 14f))
         }
+
+        val iconWrap = FrameLayout(ctx).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dpF(ctx, 11f)
+                setColor(badgeBgColor)
+            }
+        }
+        val iv = ImageView(ctx).apply {
+            setImageResource(iconRes)
+            setColorFilter(tint)
+        }
+        val iconSize = dp(ctx, 18f)
+        iconWrap.addView(iv, FrameLayout.LayoutParams(iconSize, iconSize, Gravity.CENTER))
+        row.addView(iconWrap, LinearLayout.LayoutParams(iconBoxSize, iconBoxSize).apply {
+            marginEnd = dp(ctx, 14f)
+        })
+
+        val textCol = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        textCol.addView(TextView(ctx).apply {
+            text = title
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            setTextColor(color(ctx, R.color.fg))
+        })
+        textCol.addView(TextView(ctx).apply {
+            text = subtitle
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setTextColor(color(ctx, R.color.muted))
+            setLineSpacing(dpF(ctx, 2f), 1f)
+            setPadding(0, dp(ctx, 2f), 0, 0)
+        })
+        row.addView(textCol, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        return row
     }
 
-    fun primaryButton(ctx: Context, label: String, iconRes: Int? = null, onClick: (View) -> Unit): View {
-        val labelView = TextView(ctx).apply {
-            text = label
-            gravity = Gravity.CENTER
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f)
-            setTextColor(color(ctx, R.color.btn_fg))
-            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-            isSingleLine = true
+    fun hairlineDivider(ctx: Context, startInsetDp: Float = 66f): View =
+        View(ctx).apply {
+            setBackgroundColor(color(ctx, R.color.stroke))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                maxOf(1, dp(ctx, 0.6f))
+            ).apply {
+                marginStart = dp(ctx, startInsetDp)
+                marginEnd = dp(ctx, 16f)
+            }
         }
-        return LinearLayout(ctx).apply {
+
+    /**
+     * Silk 主行动按钮：浅色墨黑实心、深色珍珠白实心，54dp 大胶囊 + 精致玻璃高光折边，不铺大蓝块。
+     */
+    fun primaryButton(
+        ctx: Context,
+        text: String,
+        iconRes: Int = 0,
+        onClick: (View) -> Unit = {}
+    ): LinearLayout {
+        val btnFg = color(ctx, R.color.btn_fg)
+        val btnBg = color(ctx, R.color.btn_bg)
+        val btn = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            minimumHeight = dp(ctx, 52f)
-            setPadding(dp(ctx, 20f), dp(ctx, 13f), dp(ctx, 20f), dp(ctx, 13f))
-            background = rippleRect(
-                ctx,
-                fillColor = color(ctx, R.color.accent),
-                rippleColor = color(ctx, R.color.ripple_on_accent),
-                radiusDp = 14f
+            minimumHeight = dp(ctx, 54f)
+            setPadding(dp(ctx, 24f), dp(ctx, 14f), dp(ctx, 24f), dp(ctx, 14f))
+            background = LiquidGlassDrawable(
+                fillColor = btnBg,
+                topSheenColor = ColorUtils.setAlphaComponent(btnFg, 20),
+                rimHi = ColorUtils.setAlphaComponent(btnFg, 55),
+                rimLo = ColorUtils.setAlphaComponent(btnFg, 8),
+                rimBack = ColorUtils.setAlphaComponent(btnFg, 24),
+                outerStrokeColor = Color.TRANSPARENT,
+                cornerRadiusPx = dpF(ctx, 27f),
+                rimWidthPx = dpF(ctx, 1.1f),
+                outerStrokeWidthPx = 0f,
+                isCircle = false
             )
-            if (iconRes != null) {
-                val icon = ImageView(ctx).apply {
-                    setImageResource(iconRes)
-                    setColorFilter(color(ctx, R.color.btn_fg))
-                }
-                val size = dp(ctx, 18f)
-                addView(icon, LinearLayout.LayoutParams(size, size).apply {
-                    rightMargin = dp(ctx, 8f)
-                })
+            elevation = dpF(ctx, 3f)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                outlineSpotShadowColor = color(ctx, R.color.stroke_strong)
+                outlineAmbientShadowColor = color(ctx, R.color.stroke)
             }
-            addView(labelView, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ))
-            contentDescription = label
-            elevation = dpF(ctx, 4f)
             isClickable = true
             isFocusable = true
-            attachPressScale(this)
-            setOnClickListener { v ->
-                hapticClick(v)
-                onClick(v)
-            }
         }
+        if (iconRes != 0) {
+            val iconView = ImageView(ctx).apply {
+                val raw = ContextCompat.getDrawable(ctx, iconRes)?.mutate()
+                if (raw != null) {
+                    DrawableCompat.setTint(raw, btnFg)
+                    setImageDrawable(raw)
+                }
+            }
+            val iconSize = dp(ctx, 19f)
+            btn.addView(iconView, LinearLayout.LayoutParams(iconSize, iconSize).apply {
+                marginEnd = dp(ctx, 9f)
+            })
+        }
+        val tv = TextView(ctx).apply {
+            this.text = text
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f)
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            letterSpacing = 0.01f
+            setTextColor(btnFg)
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+            gravity = Gravity.CENTER
+        }
+        btn.addView(tv)
+        attachPressScale(btn)
+        btn.setOnClickListener { v ->
+            hapticClick(v)
+            onClick(v)
+        }
+        return btn
     }
 
-    fun secondaryButton(ctx: Context, label: String, outlined: Boolean = true, onClick: (View) -> Unit): TextView {
-        return TextView(ctx).apply {
-            text = label
+    /**
+     * 次按钮（描边玻璃胶囊或纯文字）。
+     */
+    fun secondaryButton(
+        ctx: Context,
+        text: String,
+        outlined: Boolean = true,
+        onClick: (View) -> Unit = {}
+    ): TextView {
+        val tv = TextView(ctx).apply {
+            this.text = text
             gravity = Gravity.CENTER
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            setTextColor(color(ctx, if (outlined) R.color.fg else R.color.muted))
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            minHeight = dp(ctx, if (outlined) 52f else 44f)
-            setPadding(dp(ctx, 18f), dp(ctx, 11f), dp(ctx, 18f), dp(ctx, 11f))
-            background = rippleRect(
-                ctx,
-                fillColor = if (outlined) color(ctx, R.color.surface) else Color.TRANSPARENT,
-                rippleColor = color(ctx, R.color.ripple_light),
-                radiusDp = 14f,
-                strokeColor = if (outlined) color(ctx, R.color.stroke_strong) else Color.TRANSPARENT,
-                strokeWidthDp = if (outlined) 1f else 0f
-            )
             isClickable = true
             isFocusable = true
-            attachPressScale(this)
-            setOnClickListener { v ->
-                hapticClick(v)
-                onClick(v)
+            if (outlined) {
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                setTextColor(color(ctx, R.color.fg))
+                minimumHeight = dp(ctx, 50f)
+                setPadding(dp(ctx, 22f), dp(ctx, 13f), dp(ctx, 22f), dp(ctx, 13f))
+                background = LiquidGlassDrawable(
+                    fillColor = color(ctx, R.color.surface_subtle),
+                    topSheenColor = color(ctx, R.color.rim_top_sheen),
+                    rimHi = color(ctx, R.color.rim_hi),
+                    rimLo = color(ctx, R.color.rim_lo),
+                    rimBack = color(ctx, R.color.rim_back),
+                    outerStrokeColor = color(ctx, R.color.stroke_strong),
+                    cornerRadiusPx = dpF(ctx, 25f),
+                    rimWidthPx = dpF(ctx, 1.2f),
+                    outerStrokeWidthPx = maxOf(1f, dpF(ctx, 0.65f)),
+                    isCircle = false
+                )
+            } else {
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                setTextColor(color(ctx, R.color.muted))
+                minimumHeight = dp(ctx, 44f)
+                setPadding(dp(ctx, 16f), dp(ctx, 10f), dp(ctx, 16f), dp(ctx, 10f))
             }
         }
+        attachPressScale(tv, if (outlined) 0.96f else 0.95f)
+        tv.setOnClickListener { v ->
+            hapticClick(v)
+            onClick(v)
+        }
+        return tv
     }
 
     fun styledInput(ctx: Context, hintText: String): EditText {
+        val strokeRest = color(ctx, R.color.stroke_strong)
+        val strokeFocus = color(ctx, R.color.accent)
+        val fill = color(ctx, R.color.surface_subtle)
+        val radius = dpF(ctx, 16f)
+
+        fun makeBg(focused: Boolean) = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = radius
+            setColor(fill)
+            setStroke(dp(ctx, if (focused) 1.5f else 0.75f), if (focused) strokeFocus else strokeRest)
+        }
+
         return EditText(ctx).apply {
             hint = hintText
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            setTextColor(color(ctx, R.color.fg))
             setHintTextColor(color(ctx, R.color.muted))
+            setTextColor(color(ctx, R.color.fg))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            background = makeBg(false)
+            setPadding(dp(ctx, 16f), dp(ctx, 14f), dp(ctx, 16f), dp(ctx, 14f))
             minHeight = dp(ctx, 50f)
-            setPadding(dp(ctx, 16f), dp(ctx, 12f), dp(ctx, 16f), dp(ctx, 12f))
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dpF(ctx, 14f)
-                setColor(color(ctx, R.color.surface_subtle))
-                setStroke(dp(ctx, 1f).coerceAtLeast(1), color(ctx, R.color.stroke))
-            }
-            setOnFocusChangeListener { v, hasFocus ->
-                val bg = v.background as? GradientDrawable ?: return@setOnFocusChangeListener
-                if (hasFocus) {
-                    bg.setColor(color(ctx, R.color.surface))
-                    bg.setStroke(dp(ctx, 1.5f).coerceAtLeast(2), color(ctx, R.color.accent))
-                } else {
-                    bg.setColor(color(ctx, R.color.surface_subtle))
-                    bg.setStroke(dp(ctx, 1f).coerceAtLeast(1), color(ctx, R.color.stroke))
-                }
+            setOnFocusChangeListener { _, hasFocus ->
+                background = makeBg(hasFocus)
             }
         }
     }
 
-    fun space(ctx: Context, heightDp: Float): View = View(ctx).apply {
-        layoutParams = LinearLayout.LayoutParams(1, dp(ctx, heightDp))
-    }
-
-    /** 页面切换：淡入加上移 14dp（220ms，减速曲线），避免生硬替换。 */
-    fun animateEnter(view: View) {
+    fun animateEnter(view: View, startDelayMs: Long = 0L) {
         view.alpha = 0f
         view.translationY = dpF(view.context, 14f)
         view.animate()
             .alpha(1f)
             .translationY(0f)
-            .setDuration(220)
-            .setInterpolator(EASE_OUT)
+            .setStartDelay(startDelayMs)
+            .setDuration(250L)
+            .setInterpolator(silkEase)
             .start()
     }
 }
 
 /**
- * 顶部柔和极光光晕：贴合网页端 .orb 氛围与 Silk 浅净通透感，色值取自 colors.xml。
+ * 极克制的 Silk 顶部微光气氛层：仅在屏幕顶部 38% 区间弥散，向下无接缝彻底消散于纯白/曜石底。
  */
 class AuroraBackdropView(context: Context) : View(context) {
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private var softColor = SilkUi.color(context, R.color.accent_soft)
-    private var glowColor = SilkUi.color(context, R.color.accent_glow)
+    private val paint1 = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val paint2 = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var lastW = 0
+    private var lastH = 0
 
-    fun refreshThemeColors() {
-        softColor = SilkUi.color(context, R.color.accent_soft)
-        glowColor = SilkUi.color(context, R.color.accent_glow)
-        updateShader()
-        invalidate()
+    override fun onDraw(canvas: Canvas) {
+        val w = width.toFloat()
+        val h = height.toFloat()
+        if (w <= 0f || h <= 0f) return
+
+        if (width != lastW || height != lastH) {
+            lastW = width
+            lastH = height
+            val accent = SilkUi.color(context, R.color.accent)
+            val violet = SilkUi.color(context, R.color.accent_violet)
+            // 中心略下移并保证半径 < 距顶部距离，确保 y=0 处透明度严格为 0，与状态栏无缝衔接
+            val r1 = (h * 0.22f).coerceAtMost(w * 0.65f)
+            paint1.shader = RadialGradient(
+                w * 0.20f, h * 0.24f, r1,
+                intArrayOf(ColorUtils.setAlphaComponent(accent, 18), Color.TRANSPARENT),
+                floatArrayOf(0f, 1f),
+                Shader.TileMode.CLAMP
+            )
+            val r2 = (h * 0.24f).coerceAtMost(w * 0.65f)
+            paint2.shader = RadialGradient(
+                w * 0.84f, h * 0.30f, r2,
+                intArrayOf(ColorUtils.setAlphaComponent(violet, 15), Color.TRANSPARENT),
+                floatArrayOf(0f, 1f),
+                Shader.TileMode.CLAMP
+            )
+        }
+        canvas.drawRect(0f, 0f, w, h, paint1)
+        canvas.drawRect(0f, 0f, w, h, paint2)
+    }
+}
+
+/**
+ * 与新启动图标一致的非对称雕塑感极光气泡标志，镂空双四角星，支持斜向流光动画。
+ */
+class BrandMarkView(context: Context) : View(context) {
+    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val sheenPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val clearPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
+    }
+    private val sweepPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP)
     }
 
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        super.onSizeChanged(w, h, oldw, oldh)
-        updateShader()
+    private val bubblePath = Path()
+    private val starMainPath = Path()
+    private val starSubPath = Path()
+    private val rect = RectF()
+    private var sheenProgress = -1f
+    private var lastSize = 0f
+
+    init {
+        setLayerType(LAYER_TYPE_SOFTWARE, null)
     }
 
-    private fun updateShader() {
-        if (width <= 0 || height <= 0) return
-        val cx = width * 0.42f
-        val cy = height * 0.24f
-        val radius = (height * 0.23f).coerceAtLeast(1f)
-        paint.shader = RadialGradient(
-            cx, cy, radius,
-            intArrayOf(glowColor, softColor, Color.TRANSPARENT),
-            floatArrayOf(0f, 0.45f, 1f),
+    private fun addFourPointStar(out: Path, cx: Float, cy: Float, radius: Float) {
+        out.moveTo(cx, cy - radius)
+        out.quadTo(cx, cy, cx + radius, cy)
+        out.quadTo(cx, cy, cx, cy + radius)
+        out.quadTo(cx, cy, cx - radius, cy)
+        out.quadTo(cx, cy, cx, cy - radius)
+        out.close()
+    }
+
+    private fun ensureGeometry(size: Float) {
+        if (size == lastSize) return
+        lastSize = size
+
+        val indigo = SilkUi.color(context, R.color.accent_indigo)
+        val blue = SilkUi.color(context, R.color.accent)
+        val violet = SilkUi.color(context, R.color.accent_violet)
+        val rose = SilkUi.color(context, R.color.accent_rose)
+
+        fillPaint.shader = LinearGradient(
+            size * 0.14f, size * 0.14f, size * 0.88f, size * 0.88f,
+            intArrayOf(indigo, blue, violet, rose),
+            floatArrayOf(0f, 0.36f, 0.70f, 1f),
             Shader.TileMode.CLAMP
         )
+
+        sheenPaint.shader = LinearGradient(
+            0f, size * 0.12f, 0f, size * 0.56f,
+            intArrayOf(Color.argb(66, 255, 255, 255), Color.TRANSPARENT),
+            floatArrayOf(0f, 1f),
+            Shader.TileMode.CLAMP
+        )
+
+        // 与生成脚本 gen_icon.py 完全一致的比例（在 [0.16..0.84] 居中区域内）
+        val left = size * 0.16f
+        val top = size * 0.18f
+        val right = size * 0.84f
+        val bottom = size * 0.80f
+        rect.set(left, top, right, bottom)
+        val rBig = size * 0.275f
+        val rTail = size * 0.068f
+        bubblePath.reset()
+        bubblePath.addRoundRect(
+            rect,
+            floatArrayOf(rBig, rBig, rBig, rBig, rBig, rBig, rTail, rTail),
+            Path.Direction.CW
+        )
+
+        starMainPath.reset()
+        addFourPointStar(starMainPath, size * 0.43f, size * 0.50f, size * 0.135f)
+        starSubPath.reset()
+        addFourPointStar(starSubPath, size * 0.62f, size * 0.39f, size * 0.068f)
     }
 
     override fun onDraw(canvas: Canvas) {
-        if (paint.shader != null) {
-            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+        val size = min(width, height).toFloat()
+        if (size <= 0f) return
+        ensureGeometry(size)
+
+        val ox = (width - size) * 0.5f
+        val oy = (height - size) * 0.5f
+        canvas.save()
+        canvas.translate(ox, oy)
+
+        val layer = canvas.saveLayer(0f, 0f, size, size, null)
+        canvas.drawPath(bubblePath, fillPaint)
+        canvas.drawPath(bubblePath, sheenPaint)
+        canvas.drawPath(starMainPath, clearPaint)
+        canvas.drawPath(starSubPath, clearPaint)
+
+        if (sheenProgress in 0f..1f) {
+            val sx = -size * 0.5f + size * 2.0f * sheenProgress
+            val band = size * 0.45f
+            sweepPaint.shader = LinearGradient(
+                sx - band, 0f, sx + band, size,
+                intArrayOf(Color.TRANSPARENT, Color.argb(120, 255, 255, 255), Color.TRANSPARENT),
+                floatArrayOf(0f, 0.5f, 1f),
+                Shader.TileMode.CLAMP
+            )
+            canvas.drawRect(0f, 0f, size, size, sweepPaint)
+        }
+        canvas.restoreToCount(layer)
+        canvas.restore()
+    }
+
+    fun playColdStart(onFinished: () -> Unit) {
+        ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 520L
+            interpolator = SilkUi.silkEase
+            addUpdateListener {
+                sheenProgress = it.animatedValue as Float
+                invalidate()
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    sheenProgress = -1f
+                    invalidate()
+                    onFinished()
+                }
+            })
+            start()
         }
     }
 }
 
 /**
- * Aurabot 品牌标志：圆润徽章内的聊天气泡与两条流动波纹。
- * 冷启动时播放不超过 600ms 的波纹流动与光泽扫过动画，随后直接进入页面。
+ * 仿 Silk 钱包 Intro 的斜体衬线 "Aura" 品牌字标：冷启动时一道极光斜向流光扫过（<= 560ms）。
  */
-class BrandMarkView(context: Context) : View(context) {
-    private val badgePaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val bubblePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val wavePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
+class SilkIntroWordmarkView(context: Context) : View(context) {
+    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = SilkUi.color(context, R.color.fg)
+        typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC)
+        textSize = SilkUi.dpF(context, 42f)
+        letterSpacing = -0.02f
+        textAlign = Paint.Align.CENTER
     }
-    private val sheenPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val badgeRect = RectF()
-    private val clipPath = Path()
-    private val bubblePath = Path()
-    private val wave1Path = Path()
-    private val wave2Path = Path()
-
-    private var wavePhase = 0f
-    private var sheenProgress = -1f
-    private var coldAnimator: ValueAnimator? = null
+    private val sweepPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP)
+    }
+    private var progress = 0f
 
     init {
-        refreshThemeColors()
-    }
-
-    fun refreshThemeColors() {
-        val accent = SilkUi.color(context, R.color.accent)
-        val btnFg = SilkUi.color(context, R.color.btn_fg)
-        val glow = SilkUi.color(context, R.color.accent_glow)
-        badgePaint.color = accent
-        bubblePaint.color = btnFg
-        wavePaint.color = accent
-        glowPaint.color = glow
-        invalidate()
-    }
-
-    /** 播放冷启动波纹动画（总计 480ms，不超过 600ms），结束即回调。 */
-    fun playColdStart(onFinished: () -> Unit) {
-        coldAnimator?.cancel()
-        val anim = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 480L
-            interpolator = DecelerateInterpolator(1.4f)
-            addUpdateListener { va ->
-                val t = va.animatedValue as Float
-                wavePhase = t * (2f * PI.toFloat())
-                sheenProgress = t
-                invalidate()
-            }
-            addListener(object : android.animation.AnimatorListenerAdapter() {
-                private var cancelled = false
-                override fun onAnimationCancel(animation: android.animation.Animator) { cancelled = true }
-                override fun onAnimationEnd(animation: android.animation.Animator) {
-                    sheenProgress = -1f
-                    wavePhase = 0f
-                    invalidate()
-                    if (!cancelled) onFinished()
-                }
-            })
-        }
-        coldAnimator = anim
-        anim.start()
-    }
-
-    override fun onDetachedFromWindow() {
-        coldAnimator?.cancel()
-        coldAnimator = null
-        super.onDetachedFromWindow()
+        setLayerType(LAYER_TYPE_SOFTWARE, null)
     }
 
     override fun onDraw(canvas: Canvas) {
         val w = width.toFloat()
         val h = height.toFloat()
         if (w <= 0f || h <= 0f) return
-        val size = minOf(w, h)
-        val pad = size * 0.14f
-        val left = (w - size) / 2f + pad
-        val top = (h - size) / 2f + pad
-        val right = left + size - pad * 2f
-        val bottom = top + size - pad * 2f
-        val box = right - left
-        val corner = box * 0.28f
 
-        // 柔和底光
-        glowPaint.shader = RadialGradient(
-            w / 2f, h / 2f, size * 0.56f,
-            intArrayOf(SilkUi.color(context, R.color.accent_glow), Color.TRANSPARENT),
-            floatArrayOf(0.35f, 1f),
+        val fm = textPaint.fontMetrics
+        val baseline = h * 0.5f - (fm.ascent + fm.descent) * 0.5f
+
+        val layer = canvas.saveLayer(0f, 0f, w, h, null)
+        canvas.drawText("Aura", w * 0.5f, baseline, textPaint)
+
+        val sweepW = w * 0.45f
+        val x = -sweepW + (w + sweepW * 2f) * progress
+        val indigo = SilkUi.color(context, R.color.accent_indigo)
+        val blue = SilkUi.color(context, R.color.accent)
+        val violet = SilkUi.color(context, R.color.accent_violet)
+        val rose = SilkUi.color(context, R.color.accent_rose)
+        sweepPaint.shader = LinearGradient(
+            x - sweepW, 0f, x + sweepW, h,
+            intArrayOf(
+                Color.TRANSPARENT,
+                ColorUtils.setAlphaComponent(indigo, 190),
+                ColorUtils.setAlphaComponent(blue, 235),
+                ColorUtils.setAlphaComponent(violet, 220),
+                ColorUtils.setAlphaComponent(rose, 190),
+                Color.TRANSPARENT
+            ),
+            floatArrayOf(0f, 0.22f, 0.45f, 0.65f, 0.82f, 1f),
             Shader.TileMode.CLAMP
         )
-        canvas.drawCircle(w / 2f, h / 2f, size * 0.54f, glowPaint)
-
-        // 主徽章圆角矩形
-        badgeRect.set(left, top, right, bottom)
-        canvas.drawRoundRect(badgeRect, corner, corner, badgePaint)
-
-        // 气泡（按 108 坐标系等比缩放至徽章内）
-        val s = box / 72f
-        val ox = left + box * 0.5f - 54f * s
-        val oy = top + box * 0.5f - 53f * s
-        bubblePath.reset()
-        bubblePath.moveTo(ox + 38f * s, oy + 32f * s)
-        bubblePath.lineTo(ox + 70f * s, oy + 32f * s)
-        bubblePath.quadTo(ox + 78f * s, oy + 32f * s, ox + 78f * s, oy + 40f * s)
-        bubblePath.lineTo(ox + 78f * s, oy + 58f * s)
-        bubblePath.quadTo(ox + 78f * s, oy + 66f * s, ox + 70f * s, oy + 66f * s)
-        bubblePath.lineTo(ox + 50f * s, oy + 66f * s)
-        bubblePath.lineTo(ox + 40f * s, oy + 74f * s)
-        bubblePath.lineTo(ox + 40f * s, oy + 66f * s)
-        bubblePath.lineTo(ox + 38f * s, oy + 66f * s)
-        bubblePath.quadTo(ox + 30f * s, oy + 66f * s, ox + 30f * s, oy + 58f * s)
-        bubblePath.lineTo(ox + 30f * s, oy + 40f * s)
-        bubblePath.quadTo(ox + 30f * s, oy + 32f * s, ox + 38f * s, oy + 32f * s)
-        bubblePath.close()
-        canvas.drawPath(bubblePath, bubblePaint)
-
-        // 两条流动的声波
-        wavePaint.strokeWidth = 3.4f * s
-        drawWave(canvas, wave1Path, ox, oy, s, baseY = 45f, phaseOffset = 0f)
-        drawWave(canvas, wave2Path, ox, oy, s, baseY = 54f, phaseOffset = 1.0f)
-
-        // 流动高光掠过徽章
-        if (sheenProgress in 0f..1f) {
-            clipPath.reset()
-            clipPath.addRoundRect(badgeRect, corner, corner, Path.Direction.CW)
-            canvas.save()
-            canvas.clipPath(clipPath)
-            val sweepX = left - box * 0.6f + sheenProgress * (box * 2.2f)
-            val whiteTranslucent = ColorUtils.setAlphaComponent(SilkUi.color(context, R.color.btn_fg), 72)
-            sheenPaint.shader = LinearGradient(
-                sweepX - box * 0.35f, top,
-                sweepX + box * 0.35f, bottom,
-                intArrayOf(Color.TRANSPARENT, whiteTranslucent, Color.TRANSPARENT),
-                floatArrayOf(0f, 0.5f, 1f),
-                Shader.TileMode.CLAMP
-            )
-            canvas.drawRect(badgeRect, sheenPaint)
-            canvas.restore()
-        }
+        canvas.drawRect(0f, 0f, w, h, sweepPaint)
+        canvas.restoreToCount(layer)
     }
 
-    private fun drawWave(canvas: Canvas, path: Path, ox: Float, oy: Float, s: Float, baseY: Float, phaseOffset: Float) {
-        path.reset()
-        val steps = 20
-        val startX = 40f
-        val span = 28f
-        for (i in 0..steps) {
-            val u = i.toFloat() / steps
-            val x = ox + (startX + span * u) * s
-            val amp = 2.6f * sin(u * PI.toFloat())
-            val y = oy + (baseY - amp * sin(u * 2.6f * PI.toFloat() - wavePhase + phaseOffset)) * s
-            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+    fun playAuroraSweep(onDone: () -> Unit) {
+        scaleX = 0.96f
+        scaleY = 0.96f
+        alpha = 0f
+        animate()
+            .alpha(1f)
+            .scaleX(1f)
+            .scaleY(1f)
+            .setDuration(240L)
+            .setInterpolator(SilkUi.silkEase)
+            .start()
+
+        ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 540L
+            interpolator = SilkUi.silkEase
+            addUpdateListener {
+                progress = it.animatedValue as Float
+                invalidate()
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    onDone()
+                }
+            })
+            start()
         }
-        canvas.drawPath(path, wavePaint)
     }
 }
 
 /**
- * 顶部细线加载指示器（2.5dp 高，无转圈对话框）：平滑推进并在加载完成后淡出。
+ * 顶部 2.5dp 极细极光进度条（WebView 加载进度用）。
  */
 class SilkProgressBar(context: Context) : View(context) {
-    private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val shimmerPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private var displayProgress = 0f
-    private var targetProgress = 0f
-    private var shimmerPhase = 0f
-    private var progressAnim: ValueAnimator? = null
-    private var shimmerAnim: ValueAnimator? = null
-
-    init {
-        visibility = GONE
-        alpha = 0f
-        refreshThemeColors()
-    }
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val rect = RectF()
+    private var animProgress = 0f
+    private var fadeAnim: ObjectAnimator? = null
+    private var lastW = 0
 
     fun refreshThemeColors() {
-        val accent = SilkUi.color(context, R.color.accent)
-        trackPaint.color = ColorUtils.setAlphaComponent(accent, 28)
-        barPaint.color = accent
+        lastW = 0
         invalidate()
     }
 
     fun startLoading() {
-        visibility = VISIBLE
-        animate().cancel()
-        alpha = 1f
-        displayProgress = 0.08f
-        targetProgress = 0.15f
-        ensureShimmer()
-        invalidate()
+        setProgressPercent(12)
     }
 
-    fun setProgressValue(progress: Int) {
-        if (progress >= 100) {
-            finishLoading()
-            return
-        }
-        if (visibility != VISIBLE) startLoading()
-        val next = (progress / 100f).coerceIn(0.08f, 0.96f)
-        if (next <= targetProgress) return
-        targetProgress = next
-        progressAnim?.cancel()
-        progressAnim = ValueAnimator.ofFloat(displayProgress, targetProgress).apply {
-            duration = 180L
-            interpolator = SilkUi.EASE_OUT
-            addUpdateListener {
-                displayProgress = it.animatedValue as Float
-                invalidate()
-            }
-            start()
-        }
+    fun setProgressValue(percent: Int) {
+        setProgressPercent(percent)
     }
 
     fun finishLoading() {
-        if (visibility != VISIBLE) return
-        progressAnim?.cancel()
-        progressAnim = ValueAnimator.ofFloat(displayProgress, 1f).apply {
-            duration = 160L
-            interpolator = SilkUi.EASE_OUT
-            addUpdateListener {
-                displayProgress = it.animatedValue as Float
-                invalidate()
-            }
-            addListener(object : android.animation.AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: android.animation.Animator) {
-                    animate().alpha(0f).setDuration(200L).withEndAction {
-                        visibility = GONE
-                        stopShimmer()
-                        displayProgress = 0f
-                        targetProgress = 0f
-                    }.start()
-                }
-            })
-            start()
-        }
+        setProgressPercent(100)
     }
 
     fun hideImmediately() {
-        progressAnim?.cancel()
-        stopShimmer()
-        animate().cancel()
+        fadeAnim?.cancel()
         visibility = GONE
         alpha = 0f
-        displayProgress = 0f
-        targetProgress = 0f
+        animProgress = 0f
+        invalidate()
     }
 
-    private fun ensureShimmer() {
-        if (shimmerAnim?.isRunning == true) return
-        shimmerAnim = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 950L
-            repeatCount = ValueAnimator.INFINITE
-            interpolator = LinearInterpolator()
-            addUpdateListener {
-                shimmerPhase = it.animatedValue as Float
-                invalidate()
+    fun setProgressPercent(percent: Int) {
+        val clamped = percent.coerceIn(0, 100)
+        if (clamped < 100) {
+            fadeAnim?.cancel()
+            alpha = 1f
+            visibility = VISIBLE
+            ValueAnimator.ofFloat(animProgress, clamped / 100f).apply {
+                duration = 160L
+                addUpdateListener {
+                    animProgress = it.animatedValue as Float
+                    invalidate()
+                }
+                start()
             }
-            start()
+        } else {
+            ValueAnimator.ofFloat(animProgress, 1f).apply {
+                duration = 140L
+                addUpdateListener {
+                    animProgress = it.animatedValue as Float
+                    invalidate()
+                }
+                addListener(object : AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: Animator) {
+                        fadeAnim?.cancel()
+                        fadeAnim = ObjectAnimator.ofFloat(this@SilkProgressBar, ALPHA, 1f, 0f).apply {
+                            duration = 220L
+                            addListener(object : AnimatorListenerAdapter() {
+                                override fun onAnimationEnd(animation: Animator) {
+                                    visibility = GONE
+                                    animProgress = 0f
+                                }
+                            })
+                            start()
+                        }
+                    }
+                })
+                start()
+            }
         }
-    }
-
-    private fun stopShimmer() {
-        shimmerAnim?.cancel()
-        shimmerAnim = null
-    }
-
-    override fun onDetachedFromWindow() {
-        progressAnim?.cancel()
-        stopShimmer()
-        super.onDetachedFromWindow()
     }
 
     override fun onDraw(canvas: Canvas) {
         val w = width.toFloat()
         val h = height.toFloat()
-        if (w <= 0f || h <= 0f) return
-        canvas.drawRect(0f, 0f, w, h, trackPaint)
-        val fillW = w * displayProgress
-        if (fillW <= 0f) return
-        canvas.drawRect(0f, 0f, fillW, h, barPaint)
-        val bandW = w * 0.28f
-        val x = -bandW + shimmerPhase * (fillW + bandW * 2f)
-        val hi = ColorUtils.setAlphaComponent(SilkUi.color(context, R.color.btn_fg), 140)
-        shimmerPaint.shader = LinearGradient(
-            x, 0f, x + bandW, 0f,
-            intArrayOf(Color.TRANSPARENT, hi, Color.TRANSPARENT),
-            floatArrayOf(0f, 0.5f, 1f),
-            Shader.TileMode.CLAMP
-        )
-        canvas.save()
-        canvas.clipRect(0f, 0f, fillW, h)
-        canvas.drawRect(0f, 0f, fillW, h, shimmerPaint)
-        canvas.restore()
+        if (w <= 0f || h <= 0f || animProgress <= 0f) return
+        if (width != lastW) {
+            lastW = width
+            paint.shader = LinearGradient(
+                0f, 0f, w, 0f,
+                intArrayOf(
+                    SilkUi.color(context, R.color.accent_indigo),
+                    SilkUi.color(context, R.color.accent),
+                    SilkUi.color(context, R.color.accent_violet),
+                    SilkUi.color(context, R.color.accent_rose)
+                ),
+                null,
+                Shader.TileMode.CLAMP
+            )
+        }
+        rect.set(0f, 0f, w * animProgress, h)
+        canvas.drawRoundRect(rect, h * 0.5f, h * 0.5f, paint)
     }
 }

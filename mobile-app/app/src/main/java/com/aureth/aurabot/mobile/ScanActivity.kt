@@ -199,39 +199,29 @@ class ScanActivity : AppCompatActivity() {
         val tipCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(SilkUi.dp(ctx, 20f), SilkUi.dp(ctx, 16f), SilkUi.dp(ctx, 20f), SilkUi.dp(ctx, 16f))
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = SilkUi.dpF(ctx, 20f)
-                setColor(SilkUi.color(ctx, R.color.scan_surface))
-                setStroke(SilkUi.dp(ctx, 1f).coerceAtLeast(1), SilkUi.color(ctx, R.color.scan_pill))
-            }
+            background = SilkUi.darkGlassBackground(ctx, 22f)
         }
         tipCard.addView(TextView(ctx).apply {
             text = "在电脑上打开 Aurabot 面板的「手机端」，点「开启并生成二维码」，对准上方框内即可自动连接。"
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             setTextColor(SilkUi.color(ctx, R.color.scan_fg))
-            setLineSpacing(0f, 1.4f)
+            setLineSpacing(0f, 1.42f)
             gravity = Gravity.CENTER
         })
         bottomWrap.addView(tipCard, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         ))
-        bottomWrap.addView(SilkUi.space(ctx, 12f))
+        bottomWrap.addView(SilkUi.space(ctx, 14f))
         val manualBtn = TextView(ctx).apply {
             text = "改为粘贴二维码文字"
             gravity = Gravity.CENTER
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             setTextColor(SilkUi.color(ctx, R.color.scan_fg))
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            minHeight = SilkUi.dp(ctx, 44f)
-            setPadding(SilkUi.dp(ctx, 20f), SilkUi.dp(ctx, 10f), SilkUi.dp(ctx, 20f), SilkUi.dp(ctx, 10f))
-            background = SilkUi.rippleRect(
-                ctx,
-                fillColor = SilkUi.color(ctx, R.color.scan_pill),
-                rippleColor = SilkUi.color(ctx, R.color.ripple_on_accent),
-                radiusDp = 14f
-            )
+            minHeight = SilkUi.dp(ctx, 46f)
+            setPadding(SilkUi.dp(ctx, 22f), SilkUi.dp(ctx, 11f), SilkUi.dp(ctx, 22f), SilkUi.dp(ctx, 11f))
+            background = SilkUi.darkGlassBackground(ctx, 999f, isCircle = true)
             isClickable = true
             isFocusable = true
             SilkUi.attachPressScale(this)
@@ -317,13 +307,8 @@ class ScanActivity : AppCompatActivity() {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             setTextColor(SilkUi.color(ctx, R.color.scan_fg))
             minHeight = SilkUi.dp(ctx, 52f)
-            setPadding(SilkUi.dp(ctx, 18f), SilkUi.dp(ctx, 12f), SilkUi.dp(ctx, 18f), SilkUi.dp(ctx, 12f))
-            background = SilkUi.rippleRect(
-                ctx,
-                fillColor = SilkUi.color(ctx, R.color.scan_pill),
-                rippleColor = SilkUi.color(ctx, R.color.ripple_on_accent),
-                radiusDp = 14f
-            )
+            setPadding(SilkUi.dp(ctx, 20f), SilkUi.dp(ctx, 12f), SilkUi.dp(ctx, 20f), SilkUi.dp(ctx, 12f))
+            background = SilkUi.darkGlassBackground(ctx, 999f, isCircle = true)
             isClickable = true
             isFocusable = true
             SilkUi.attachPressScale(this)
@@ -345,23 +330,18 @@ class ScanActivity : AppCompatActivity() {
 
     private fun circleIconButton(iconRes: Int, description: String, onClick: (View) -> Unit): ImageView {
         val ctx = this
-        val size = SilkUi.dp(ctx, 44f)
-        val pad = SilkUi.dp(ctx, 11f)
+        val size = SilkUi.dp(ctx, 46f)
+        val pad = SilkUi.dp(ctx, 12f)
         return ImageView(ctx).apply {
             layoutParams = LinearLayout.LayoutParams(size, size)
             setPadding(pad, pad, pad, pad)
             setImageResource(iconRes)
             setColorFilter(SilkUi.color(ctx, R.color.scan_fg))
             contentDescription = description
-            background = SilkUi.rippleRect(
-                ctx,
-                fillColor = SilkUi.color(ctx, R.color.scan_pill),
-                rippleColor = SilkUi.color(ctx, R.color.ripple_on_accent),
-                radiusDp = 999f
-            )
+            background = SilkUi.darkGlassBackground(ctx, 999f, isCircle = true)
             isClickable = true
             isFocusable = true
-            SilkUi.attachPressScale(this)
+            SilkUi.attachPressScale(this, 0.88f)
             setOnClickListener { v ->
                 SilkUi.hapticClick(v)
                 onClick(v)
@@ -402,9 +382,12 @@ private class ScanFinderOverlay(context: android.content.Context) : View(context
         color = SilkUi.color(context, R.color.accent)
     }
     private val beamPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val beamLinePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val boxRect = RectF()
     private val beamRect = RectF()
     private var beamProgress = 0f
+    private var lastW = 0f
+    private var lastH = 0f
     private var animator: ValueAnimator? = null
 
     init {
@@ -442,25 +425,50 @@ private class ScanFinderOverlay(context: android.content.Context) : View(context
         val cx = w * 0.5f
         val cy = h * 0.44f
         val half = boxSize * 0.5f
-        val radius = SilkUi.dpF(context, 22f)
+        val radius = SilkUi.dpF(context, 24f)
         boxRect.set(cx - half, cy - half, cx + half, cy + half)
+
+        if (w != lastW || h != lastH) {
+            lastW = w
+            lastH = h
+            val indigo = SilkUi.color(context, R.color.accent_indigo)
+            val blue = SilkUi.color(context, R.color.accent)
+            val violet = SilkUi.color(context, R.color.accent_violet)
+            val rose = SilkUi.color(context, R.color.accent_rose)
+            cornerPaint.shader = LinearGradient(
+                boxRect.left, boxRect.top, boxRect.right, boxRect.bottom,
+                intArrayOf(blue, violet, rose, indigo),
+                floatArrayOf(0f, 0.38f, 0.72f, 1f),
+                Shader.TileMode.CLAMP
+            )
+            beamLinePaint.shader = LinearGradient(
+                boxRect.left, 0f, boxRect.right, 0f,
+                intArrayOf(Color.TRANSPARENT, blue, violet, rose, Color.TRANSPARENT),
+                floatArrayOf(0f, 0.22f, 0.55f, 0.8f, 1f),
+                Shader.TileMode.CLAMP
+            )
+            beamLinePaint.strokeWidth = SilkUi.dpF(context, 2f)
+        }
 
         canvas.drawRect(0f, 0f, w, h, maskPaint)
         canvas.drawRoundRect(boxRect, radius, radius, clearPaint)
         canvas.drawRoundRect(boxRect, radius, radius, borderPaint)
 
-        // 柔和扫描光带（仅在取景框内绘制）
-        val accent = SilkUi.color(context, R.color.accent)
-        val beamY = boxRect.top + SilkUi.dpF(context, 18f) + (boxRect.height() - SilkUi.dpF(context, 36f)) * beamProgress
-        val beamH = SilkUi.dpF(context, 22f)
-        beamRect.set(boxRect.left + SilkUi.dpF(context, 14f), beamY - beamH, boxRect.right - SilkUi.dpF(context, 14f), beamY)
+        // Silk 极光扫描光带与高光线（仅在取景框内绘制）
+        val violet = SilkUi.color(context, R.color.accent_violet)
+        val beamY = boxRect.top + SilkUi.dpF(context, 20f) + (boxRect.height() - SilkUi.dpF(context, 40f)) * beamProgress
+        val beamH = SilkUi.dpF(context, 28f)
+        val bxL = boxRect.left + SilkUi.dpF(context, 16f)
+        val bxR = boxRect.right - SilkUi.dpF(context, 16f)
+        beamRect.set(bxL, beamY - beamH, bxR, beamY)
         beamPaint.shader = LinearGradient(
             0f, beamRect.top, 0f, beamRect.bottom,
-            intArrayOf(Color.TRANSPARENT, ColorUtils.setAlphaComponent(accent, 110)),
+            intArrayOf(Color.TRANSPARENT, ColorUtils.setAlphaComponent(violet, 88)),
             floatArrayOf(0f, 1f),
             Shader.TileMode.CLAMP
         )
         canvas.drawRect(beamRect, beamPaint)
+        canvas.drawLine(bxL, beamY, bxR, beamY, beamLinePaint)
 
         // 四角圆润角标
         val cLen = SilkUi.dpF(context, 22f)

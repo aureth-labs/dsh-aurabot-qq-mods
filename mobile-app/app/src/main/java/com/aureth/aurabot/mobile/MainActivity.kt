@@ -20,6 +20,8 @@ import android.net.Uri
 import android.net.http.SslError
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.text.InputType
 import android.util.TypedValue
@@ -222,25 +224,47 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 冷启动品牌波纹动画（480ms < 600ms），不额外停留直接进入内容。 */
+    /** 冷启动品牌极光流光动画（520ms < 600ms），无停留直接进内容。 */
     private fun playColdStartSplash() {
         val splash = FrameLayout(this).apply {
             setBackgroundColor(SilkUi.color(context, R.color.bg))
             isClickable = true
             isFocusable = true
         }
+        splash.addView(AuroraBackdropView(this), FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        ))
+
+        val stack = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
         val mark = BrandMarkView(this)
-        val markSize = SilkUi.dp(this, 96f)
-        splash.addView(mark, FrameLayout.LayoutParams(markSize, markSize, Gravity.CENTER))
+        val badge = SilkUi.liquidCircleBadge(this, 76f, mark)
+        stack.addView(badge)
+        stack.addView(SilkUi.space(this, 16f))
+        val wordmark = SilkIntroWordmarkView(this)
+        stack.addView(wordmark, LinearLayout.LayoutParams(
+            SilkUi.dp(this, 180f),
+            SilkUi.dp(this, 56f)
+        ))
+
+        splash.addView(stack, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.CENTER
+        ))
         rootContainer.addView(splash, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         ))
+        wordmark.playAuroraSweep {}
         mark.playColdStart {
             if (isDestroyed || isFinishing) return@playColdStart
             splash.animate()
                 .alpha(0f)
-                .setDuration(180L)
+                .setDuration(160L)
                 .setInterpolator(SilkUi.EASE_OUT)
                 .withEndAction { rootContainer.removeView(splash) }
                 .start()
@@ -269,7 +293,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         server = target
-        prefs.edit().putString(KEY_SERVER, target.origin).apply()
+        prefs.edit().putString(KEY_SERVER, target.origin).putBoolean(KEY_HAD_WEB, true).apply()
         nativeScreen = NativeScreen.NONE
         offlineTarget = null
         val loadEpoch = ++activeLoadEpoch
@@ -288,6 +312,7 @@ class MainActivity : AppCompatActivity() {
             open(target, codeQuery(code))
             return
         }
+        val hadWeb = prefs.getBoolean(KEY_HAD_WEB, false) || web != null || old != null
         val epoch = ++switchEpoch
         activeLoadEpoch++
         server = null
@@ -297,16 +322,27 @@ class MainActivity : AppCompatActivity() {
         destroyWebView()
         Forwarder.stopAll()
 
+        if (!hadWeb) {
+            open(target, codeQuery(code))
+            return
+        }
+
+        var opened = false
+        fun proceed() {
+            if (opened || epoch != switchEpoch || isDestroyed || isFinishing) return
+            opened = true
+            prefs.edit().putBoolean(KEY_HAD_WEB, false).apply()
+            open(target, codeQuery(code))
+        }
+
         val cm = CookieManager.getInstance()
         cm.removeAllCookies { cm.flush() }
         val ws = WebStorage.getInstance()
         ws.deleteAllData()
-        // Chromium WebStorage.getOrigins 排队在 deleteAllData 之后，确保删除落盘后再加载新页面。
+        // Chromium WebStorage.getOrigins 排队在 deleteAllData 之后，确保删除落盘后再加载新页面；附带超时兜底避免冷启卡住。
+        Handler(Looper.getMainLooper()).postDelayed({ proceed() }, 1500L)
         ws.getOrigins {
-            runOnUiThread {
-                if (epoch != switchEpoch || isDestroyed || isFinishing) return@runOnUiThread
-                open(target, codeQuery(code))
-            }
+            runOnUiThread { proceed() }
         }
     }
 
@@ -366,44 +402,73 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 顶部留白与品牌徽章
-        val mark = BrandMarkView(ctx)
-        val markSize = SilkUi.dp(ctx, 68f)
-        inner.addView(mark, LinearLayout.LayoutParams(markSize, markSize).apply {
-            gravity = Gravity.START
-            leftMargin = -SilkUi.dp(ctx, 6f)
+        // 顶部液态玻璃圆章（呼应 Silk 欢迎/锁定页居中微光圆章）
+        val badgeWrap = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        badgeWrap.addView(SilkUi.liquidCircleBadge(ctx, 68f, BrandMarkView(ctx)))
+        badgeWrap.addView(TextView(ctx).apply {
+            text = "Aura"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+            typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC)
+            setTextColor(SilkUi.color(ctx, R.color.fg))
+            alpha = 0.86f
+            setPadding(SilkUi.dp(ctx, 14f), 0, 0, 0)
         })
-        inner.addView(SilkUi.space(ctx, 20f))
+        inner.addView(badgeWrap)
+        inner.addView(SilkUi.space(ctx, 24f))
 
-        // 大标题（28sp 粗体）
+        // 大标题（28sp 粗体 + 紧凑字距）
         inner.addView(TextView(ctx).apply {
             text = "连上电脑上的她"
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 28f)
             setTextColor(SilkUi.color(ctx, R.color.fg))
             typeface = Typeface.DEFAULT_BOLD
-            setLineSpacing(0f, 1.2f)
+            letterSpacing = -0.02f
+            setLineSpacing(0f, 1.18f)
         })
-        inner.addView(SilkUi.space(ctx, 12f))
+        inner.addView(SilkUi.space(ctx, 10f))
 
-        // 主说明（15sp）
+        // 精简引导语（15sp）
         inner.addView(TextView(ctx).apply {
-            text = "在电脑上打开 Aurabot 面板的「手机端」，点「开启并生成二维码」，然后扫一扫。"
+            text = "扫一下电脑面板里的配对二维码，手机就能随时和她聊天、听见她的回复。"
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             setTextColor(SilkUi.color(ctx, R.color.muted))
-            setLineSpacing(0f, 1.45f)
+            setLineSpacing(0f, 1.48f)
         })
-        inner.addView(SilkUi.space(ctx, 8f))
+        inner.addView(SilkUi.space(ctx, 24f))
 
-        // 补充说明（13sp 次要色）
-        inner.addView(TextView(ctx).apply {
-            text = "手机和电脑要在同一个网络里，或都在同一个 Tailscale 里。"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
-            setTextColor(SilkUi.color(ctx, R.color.muted))
-            setLineSpacing(0f, 1.4f)
-        })
-        inner.addView(SilkUi.space(ctx, 32f))
+        // Silk 风格分组说明卡（22dp 液态玻璃 + 36dp 柔和色块图标 + 发丝分割线）
+        val guideCard = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            background = SilkUi.glassCardBackground(ctx, 22f)
+            elevation = SilkUi.dpF(ctx, 2f)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                outlineSpotShadowColor = SilkUi.color(ctx, R.color.stroke)
+                outlineAmbientShadowColor = SilkUi.color(ctx, R.color.stroke)
+            }
+        }
+        guideCard.addView(SilkUi.settingRow(
+            ctx,
+            R.drawable.ic_desktop,
+            "电脑开启手机端",
+            "打开面板「手机端」，点击「开启并生成二维码」"
+        ))
+        guideCard.addView(SilkUi.hairlineDivider(ctx))
+        guideCard.addView(SilkUi.settingRow(
+            ctx,
+            R.drawable.ic_wifi,
+            "保持网络互通",
+            "手机和电脑连在同一局域网，或都在 Tailscale 中"
+        ))
+        inner.addView(guideCard, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
+        inner.addView(SilkUi.space(ctx, 28f))
 
-        // 主按钮：扫码配对（52dp 高、满宽、14dp 圆角）
+        // Silk 主按钮：浅色墨黑 / 深色珍珠白胶囊
         val scanBtn = SilkUi.primaryButton(ctx, "扫码配对", R.drawable.ic_qr) { startScan() }
         inner.addView(scanBtn, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -422,13 +487,13 @@ class MainActivity : AppCompatActivity() {
             ))
         }
 
-        inner.addView(SilkUi.space(ctx, 18f))
+        inner.addView(SilkUi.space(ctx, 14f))
 
         // 次要位置：折叠的粘贴入口
         val pasteCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(SilkUi.dp(ctx, 18f), SilkUi.dp(ctx, 18f), SilkUi.dp(ctx, 18f), SilkUi.dp(ctx, 18f))
-            background = SilkUi.glassCardBackground(ctx, 20f)
+            background = SilkUi.glassCardBackground(ctx, 22f)
             elevation = SilkUi.dpF(ctx, 2f)
             visibility = if (pasteExpanded) View.VISIBLE else View.GONE
         }
@@ -546,37 +611,35 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 状态图标圆章
-        val badgeSize = SilkUi.dp(ctx, 64f)
-        val iconPad = SilkUi.dp(ctx, 18f)
+        // Silk 液态玻璃离线图标圆章
         val statusIcon = ImageView(ctx).apply {
             setImageResource(R.drawable.ic_offline)
             setColorFilter(SilkUi.color(ctx, R.color.error))
-            setPadding(iconPad, iconPad, iconPad, iconPad)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(SilkUi.color(ctx, R.color.error_soft))
-                setStroke(SilkUi.dp(ctx, 1f).coerceAtLeast(1), SilkUi.color(ctx, R.color.stroke))
-            }
         }
-        inner.addView(statusIcon, LinearLayout.LayoutParams(badgeSize, badgeSize))
-        inner.addView(SilkUi.space(ctx, 20f))
+        val iconWrap = FrameLayout(ctx).apply {
+            val iconSize = SilkUi.dp(ctx, 28f)
+            addView(statusIcon, FrameLayout.LayoutParams(iconSize, iconSize, Gravity.CENTER))
+        }
+        inner.addView(SilkUi.liquidCircleBadge(ctx, 68f, iconWrap))
+        inner.addView(SilkUi.space(ctx, 22f))
 
         inner.addView(TextView(ctx).apply {
             text = title
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 28f)
             setTextColor(SilkUi.color(ctx, R.color.fg))
             typeface = Typeface.DEFAULT_BOLD
-            setLineSpacing(0f, 1.2f)
+            letterSpacing = -0.02f
+            setLineSpacing(0f, 1.18f)
         })
 
         if (target != null) {
-            inner.addView(SilkUi.space(ctx, 10f))
+            inner.addView(SilkUi.space(ctx, 12f))
             val originPill = TextView(ctx).apply {
                 text = target.origin
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
                 setTextColor(SilkUi.color(ctx, R.color.muted))
-                setPadding(SilkUi.dp(ctx, 12f), SilkUi.dp(ctx, 6f), SilkUi.dp(ctx, 12f), SilkUi.dp(ctx, 6f))
+                setPadding(SilkUi.dp(ctx, 14f), SilkUi.dp(ctx, 7f), SilkUi.dp(ctx, 14f), SilkUi.dp(ctx, 7f))
                 background = SilkUi.pillBackground(ctx)
                 maxLines = 2
             }
@@ -588,19 +651,23 @@ class MainActivity : AppCompatActivity() {
 
         inner.addView(SilkUi.space(ctx, 18f))
 
-        // 原因卡片（20dp 圆角）
+        // Silk 原因卡片（22dp 液态玻璃 + 分组行）
         val card = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(SilkUi.dp(ctx, 18f), SilkUi.dp(ctx, 16f), SilkUi.dp(ctx, 18f), SilkUi.dp(ctx, 16f))
-            background = SilkUi.glassCardBackground(ctx, 20f)
+            background = SilkUi.glassCardBackground(ctx, 22f)
             elevation = SilkUi.dpF(ctx, 2f)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                outlineSpotShadowColor = SilkUi.color(ctx, R.color.stroke)
+                outlineAmbientShadowColor = SilkUi.color(ctx, R.color.stroke)
+            }
         }
-        card.addView(TextView(ctx).apply {
-            text = reason
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14.5f)
-            setTextColor(SilkUi.color(ctx, R.color.muted))
-            setLineSpacing(0f, 1.48f)
-        })
+        card.addView(SilkUi.settingRow(
+            ctx,
+            R.drawable.ic_offline,
+            "连接中断原因",
+            reason,
+            isError = true
+        ))
         inner.addView(card, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
@@ -649,18 +716,15 @@ class MainActivity : AppCompatActivity() {
         val card = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(SilkUi.dp(ctx, 22f), SilkUi.dp(ctx, 22f), SilkUi.dp(ctx, 22f), SilkUi.dp(ctx, 20f))
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = SilkUi.dpF(ctx, 20f)
-                setColor(SilkUi.color(ctx, R.color.surface))
-                setStroke(SilkUi.dp(ctx, 1f).coerceAtLeast(1), SilkUi.color(ctx, R.color.stroke))
-            }
+            background = SilkUi.glassCardBackground(ctx, 24f)
+            elevation = SilkUi.dpF(ctx, 8f)
         }
         card.addView(TextView(ctx).apply {
             text = "粘贴配对内容"
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
             setTextColor(SilkUi.color(ctx, R.color.fg))
             typeface = Typeface.DEFAULT_BOLD
+            letterSpacing = -0.01f
         })
         card.addView(SilkUi.space(ctx, 8f))
         card.addView(TextView(ctx).apply {
@@ -1053,6 +1117,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val KEY_SERVER = "server"
+        private const val KEY_HAD_WEB = "hadWeb"
         private const val KEY_ASKED_NOTIFY = "askedNotify"
         private const val CHANNEL_MESSAGES = "messages"
         private val ALLOWED_EXTERNAL_SCHEMES = setOf("http", "https", "mailto", "tel")

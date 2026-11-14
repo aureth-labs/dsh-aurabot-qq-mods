@@ -1,25 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="bg">#F7F8FA</color>
+    <!-- 浅色：Silk 极净纯白底 + 墨黑主控 + 克制极光蓝点缀 -->
+    <color name="bg">#FFFFFF</color>
     <color name="surface">#FFFFFF</color>
-    <color name="surface_glass">#E8FFFFFF</color>
-    <color name="surface_subtle">#EEF1F6</color>
-    <color name="fg">#16181D</color>
-    <color name="muted">#6B7280</color>
+    <color name="surface_glass">#F4FFFFFF</color>
+    <color name="surface_subtle">#F5F5F7</color>
+    <color name="fg">#111114</color>
+    <color name="muted">#6B6D77</color>
+
+    <!-- 品牌极光色（仅用于点缀、微光与流光扫光，不铺大色块） -->
     <color name="accent">#4D6BFE</color>
-    <color name="accent_soft">#0B4D6BFE</color>
-    <color name="accent_glow">#1A4D6BFE</color>
+    <color name="accent_indigo">#2842EC</color>
+    <color name="accent_violet">#846CF8</color>
+    <color name="accent_rose">#DE8BA9</color>
+    <color name="accent_soft">#0D4D6BFE</color>
+    <color name="accent_glow">#1C4D6BFE</color>
+
+    <!-- Silk 主按钮：墨黑实心 + 纯白字 -->
+    <color name="btn_bg">#111114</color>
     <color name="btn_fg">#FFFFFF</color>
+
+    <!-- 液态玻璃折射描边与极细轮廓线 -->
     <color name="stroke">#12000000</color>
-    <color name="stroke_strong">#24000000</color>
-    <color name="error">#D94444</color>
-    <color name="error_soft">#14D94444</color>
-    <color name="ripple_light">#16000000</color>
-    <color name="ripple_on_accent">#33FFFFFF</color>
-    <color name="scan_overlay">#990D1017</color>
-    <color name="scan_surface">#DB16181D</color>
-    <color name="scan_fg">#F7F8FA</color>
-    <color name="scan_muted">#B8BEC9</color>
-    <color name="scan_pill">#26FFFFFF</color>
+    <color name="stroke_strong">#20000000</color>
+    <color name="rim_hi">#FFFFFFFF</color>
+    <color name="rim_lo">#47FFFFFF</color>
+    <color name="rim_back">#BFFFFFFF</color>
+    <color name="rim_top_sheen">#59FFFFFF</color>
+    <color name="glass_tint">#F2FFFFFF</color>
+
+    <color name="error">#D93A35</color>
+    <color name="error_soft">#12D93A35</color>
+    <color name="ripple_light">#12000000</color>
+    <color name="ripple_on_accent">#2EFFFFFF</color>
+
+    <!-- 扫码界面（深色磨砂液态玻璃覆盖在相机预览之上） -->
+    <color name="scan_overlay">#8809090C</color>
+    <color name="scan_surface">#CC16161B</color>
+    <color name="scan_fg">#F5F5F7</color>
+    <color name="scan_muted">#AEB0BA</color>
+    <color name="scan_pill">#24FFFFFF</color>
     <bool name="light_bars">true</bool>
 </resources>
