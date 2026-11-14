@@ -1461,7 +1461,7 @@
     {
       "id": "tieba-reader",
       "name": "逛贴吧（只读）",
-      "version": "1.5.2",
+      "version": "1.5.3",
       "description": "只读搜索和浏览贴吧，也可按兴趣向主人私聊分享。",
       "category": "platform",
       "tags": [
@@ -1482,13 +1482,13 @@
         "plugin-internals"
       ],
       "replacesBuiltin": false,
-      "tag": "tieba-reader-v1.5.2",
-      "file": "tieba-reader-v1.5.2.zip",
-      "path": "tieba-reader-v1.5.2/tieba-reader-v1.5.2.zip",
-      "size": 125979,
-      "sha256": "59d43e3fe5a3ab5c47b424f7eacb9eb9a55c3c7f506cd132f42e56e5199b81ff",
-      "commit": "bbaec667555e2c228400dbd6ef1fa8428214cf8d",
-      "publishedAt": "2026-11-06T12:25:21.237Z"
+      "tag": "tieba-reader-v1.5.3",
+      "file": "tieba-reader-v1.5.3.zip",
+      "path": "tieba-reader-v1.5.3/tieba-reader-v1.5.3.zip",
+      "size": 126798,
+      "sha256": "b258c204bc319c9447e752400e681bce5e01fee91fbdbb0f2af4cd823b1f486f",
+      "commit": "27031062ec9bb208936f24b99b9b31b5fe6700c0",
+      "publishedAt": "2026-11-14T07:18:07.768Z"
     },
     {
       "id": "token-budget",
@@ -1753,5 +1753,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-14T06:15:42.568Z"
+  "generatedAt": "2026-11-14T07:18:07.768Z"
 }
