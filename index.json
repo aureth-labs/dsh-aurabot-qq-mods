@@ -917,6 +917,35 @@
       "publishedAt": "2026-11-13T05:10:02.288Z"
     },
     {
+      "id": "minigame",
+      "name": "小游戏合集",
+      "version": "1.0.0",
+      "description": "她自己会玩 2048、贪吃蛇、扫雷：自己定时玩一局（间隔可调），输赢影响心情；面板里能实时看她下棋，也能回放上一局，还能点按钮叫她当场玩。",
+      "category": "desktop",
+      "tags": [
+        "小游戏",
+        "娱乐",
+        "自主"
+      ],
+      "author": "Ariz0324",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "minigame-v1.0.0",
+      "file": "minigame-v1.0.0.zip",
+      "path": "minigame-v1.0.0/minigame-v1.0.0.zip",
+      "size": 11730,
+      "sha256": "417091c62273c38a4435c8754e88a9a9aa7c44f2cc6b5c3059ff928f67ec4316",
+      "commit": "ee611e2f8bbe970872f7e6a7156b9369f2d838b5",
+      "publishedAt": "2026-11-14T03:38:06.241Z"
+    },
+    {
       "id": "moodboard",
       "name": "心情看板",
       "version": "1.0.0",
@@ -1723,5 +1752,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-14T03:06:25.989Z"
+  "generatedAt": "2026-11-14T03:38:06.241Z"
 }
