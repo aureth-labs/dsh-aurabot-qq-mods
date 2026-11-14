@@ -13,10 +13,95 @@ const TONES = [
   { id: 'rose', name: '陈玫', a: '#e57c90', b: '#a83349' },
 ]
 
+/**
+ * 配对二维码：QR Model 2 / 版本 6-L / 字节模式，最多 134 字节。
+ * 纯计算，不联网、不引依赖——面板里只画一个 <path>，靠 CSS 像素对齐就够清楚。
+ */
+function qrPath(text) {
+  const bytes = unescape(encodeURIComponent(text))          // UTF-8 字节
+  if (bytes.length > 134) throw new Error('太长')
+  const bits = []
+  const put = (n, width) => { for (let i = width - 1; i >= 0; i--) bits.push((n >>> i) & 1) }
+  put(4, 4); put(bytes.length, 8)
+  for (let i = 0; i < bytes.length; i++) put(bytes.charCodeAt(i), 8)
+  put(0, Math.min(4, 1088 - bits.length))
+  while (bits.length % 8) bits.push(0)
+  const data = []
+  for (let i = 0; i < bits.length; i += 8) data.push(bits.slice(i, i + 8).reduce((a, b) => a * 2 + b, 0))
+  for (let i = 0; data.length < 136; i++) data.push(i % 2 ? 0x11 : 0xec)
+  const mul = (a, b) => {
+    let r = 0
+    for (; b; b >>>= 1) { if (b & 1) r ^= a; a <<= 1; if (a & 0x100) a ^= 0x11d }
+    return r
+  }
+  let gen = [1], root = 1
+  for (let i = 0; i < 18; i++) {
+    const next = Array(gen.length + 1).fill(0)
+    gen.forEach((v, j) => { next[j] ^= v; next[j + 1] ^= mul(v, root) })
+    gen = next; root = mul(root, 2)
+  }
+  const blocks = [data.slice(0, 68), data.slice(68)]
+  const ecc = blocks.map((block) => {
+    const rem = Array(18).fill(0)
+    for (const b of block) {
+      const factor = b ^ rem.shift(); rem.push(0)
+      for (let j = 0; j < 18; j++) rem[j] ^= mul(gen[j + 1], factor)
+    }
+    return rem
+  })
+  const stream = []
+  for (let i = 0; i < 68; i++) for (const b of blocks) stream.push(b[i])
+  for (let i = 0; i < 18; i++) for (const b of ecc) stream.push(b[i])
+  const size = 41, grid = Array.from({ length: size }, () => Array(size).fill(false))
+  const fixed = grid.map((r) => r.slice())
+  const set = (x, y, v) => { if (x >= 0 && y >= 0 && x < size && y < size) { grid[y][x] = Boolean(v); fixed[y][x] = true } }
+  for (let i = 0; i < size; i++) { set(6, i, i % 2 === 0); set(i, 6, i % 2 === 0) }
+  for (const [cx, cy] of [[3, 3], [size - 4, 3], [3, size - 4]]) {
+    for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+      const d = Math.max(Math.abs(dx), Math.abs(dy)); set(cx + dx, cy + dy, d !== 2 && d !== 4)
+    }
+  }
+  for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) set(34 + dx, 34 + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1)
+  const format = 0x77c4 // 纠错等级 L、掩码 0（BCH 后异或 0x5412）
+  const f = (i) => (format >>> i) & 1
+  for (let i = 0; i <= 5; i++) set(8, i, f(i))
+  set(8, 7, f(6)); set(8, 8, f(7)); set(7, 8, f(8))
+  for (let i = 9; i < 15; i++) set(14 - i, 8, f(i))
+  for (let i = 0; i < 8; i++) set(size - 1 - i, 8, f(i))
+  for (let i = 8; i < 15; i++) set(8, size - 15 + i, f(i))
+  set(8, size - 8, true)
+  let bit = 0
+  for (let right = size - 1; right >= 1; right -= 2) {
+    if (right === 6) right = 5
+    for (let vert = 0; vert < size; vert++) {
+      const y = ((right + 1) & 2) === 0 ? size - 1 - vert : vert
+      for (let j = 0; j < 2; j++) {
+        const x = right - j
+        if (fixed[y][x]) continue
+        const value = bit < stream.length * 8 ? (stream[bit >>> 3] >>> (7 - (bit & 7))) & 1 : 0
+        grid[y][x] = Boolean(value ^ ((x + y) % 2 === 0 ? 1 : 0)); bit++
+      }
+    }
+  }
+  let path = ''
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) if (grid[y][x]) path += `M${x + 4},${y + 4}h1v1h-1z`
+  return path
+}
+
+/** 二维码画成 React 元素（不拼字符串，免得面板的 CSP 挡掉 data: 图片） */
+function qrBox(text, px) {
+  return h('svg', { viewBox: '0 0 49 49', width: px, height: px, shapeRendering: 'crispEdges', role: 'img', 'aria-label': '配对二维码' },
+    h('rect', { width: 49, height: 49, fill: '#ffffff' }),
+    h('path', { d: qrPath(text), fill: '#000000' }))
+}
+
 return function Panel({ settings, save, toast }) {
   const [net, setNet] = useState(null)
   const [tunBusy, setTunBusy] = useState(false)
   const [svcBusy, setSvcBusy] = useState(false)
+  const [tnToken, setTnToken] = useState('')
+  const [tnHost, setTnHost] = useState('')
+  const [cfBusy, setCfBusy] = useState(false)
   const tone = TONES.some((t) => t.id === settings?.tone) ? settings.tone : 'ocean'
   const token = String(settings?.token || '')
 
@@ -56,6 +141,19 @@ return function Panel({ settings, save, toast }) {
     (addrs.length ? addrs.map((a) => `局域网：http://${a}`).join('\n') : '') +
     (token ? `\n密钥：${token}` : '')
 
+  // 二维码：优先放完整配对链接；隧道域名太长塞不下时，退回「只带密钥」的短链（地址就是链接本身）
+  let qrLink = ''
+  let qrNote = ''
+  for (const v of [pairLink, pairBase && token ? `${pairBase}/#token=${encodeURIComponent(token)}` : '']) {
+    if (!v) continue
+    try {
+      qrPath(v)
+      qrLink = v
+      break
+    } catch (e) { /* 超过 134 字节，试下一条 */ }
+  }
+  if (!qrLink && pairBase && token) qrNote = '这条地址太长，塞不进二维码（超过 134 字节）——用上面「复制配对链接」发到手机里粘贴也一样。'
+
   // 给每个地址标一句「什么时候填它」，免得对着三个地址不知道抄哪个
   const addrLabel = (ip) => {
     const v4 = ip.replace(/^\[|\]$/g, '')
@@ -63,7 +161,7 @@ return function Panel({ settings, save, toast }) {
       if (/^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(v4)) return '家里 WiFi（和电脑连同一个路由器时用）'
       return '局域网 IPv4'
     }
-    if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(v4)) return 'Tailscale（装了才用）'
+    if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(v4)) return 'Tailscale（两端都要装；国内首次登录常连不上，直连失败会很慢）'
     if (v4.includes(':')) return '公网 IPv6（要求手机流量有 IPv6 + 光猫放行端口）'
     return ''
   }
@@ -98,8 +196,44 @@ return function Panel({ settings, save, toast }) {
     setTunBusy(false)
   }
 
+  // 固定域名隧道：token / 域名一起提交，模块内先存再启动，避免「保存了但启动读到的是旧值」
+  const saveNamed = async () => {
+    const tok = tnToken.trim()
+    const hostRaw = tnHost.trim()
+    if (!tok && !tun.tokenSet) return toast('先填隧道 token：Cloudflare 创建隧道时复制的那串 eyJ…')
+    if (!hostRaw && !tun.host) return toast('还要填域名，比如 pocket.example.com（在 Cloudflare 那条隧道里配的 Public Hostname）')
+    setTunBusy(true)
+    try {
+      const payload = { action: 'start' }
+      if (tok) payload.tunnelToken = tok
+      if (hostRaw) payload.tunnelHost = hostRaw
+      const r = await call('/tunnel', payload)
+      if (r && r.ok === false) toast(r.message || '启动失败')
+      else toast((r && r.message) || (r && r.url ? '已启动：' + r.url : '已启动'))
+      setTnToken('')
+    } catch (e) {
+      toast('启动失败：' + (e && e.message ? e.message : e))
+    }
+    await reload()
+    setTunBusy(false)
+  }
+
+  /** 一键下载 cloudflared：不让用户去 GitHub 找 releases 再配 PATH（十个人有八个做不下来） */
+  const installCf = async () => {
+    setCfBusy(true)
+    try {
+      const r = await call('/tunnel', { action: 'install' })
+      toast(r && r.message ? r.message : r && r.ok ? '下载好了' : '下载失败')
+    } catch (e) {
+      toast('下载失败：' + (e && e.message ? e.message : e))
+    }
+    await reload()
+    setCfBusy(false)
+  }
+
   const cell = { border: '1px solid rgba(128,128,128,.3)', borderRadius: 8, padding: '5px 10px', fontSize: 13, fontFamily: 'monospace', wordBreak: 'break-all' }
   const sw = { width: 34, height: 34, borderRadius: 10, border: '2px solid transparent', cursor: 'pointer', padding: 0 }
+  const inp = { flex: '1 1 180px', minWidth: 0, padding: '6px 8px', borderRadius: 6, border: '1px solid rgba(128,128,128,.35)', background: 'transparent', color: 'inherit', fontSize: 12.5 }
 
   return h(ui.Card, { title: '口袋aurabot' },
     h('p', { className: 'ab-note' },
@@ -128,6 +262,18 @@ return function Panel({ settings, save, toast }) {
         : null,
       h('span', { className: 'ab-small ab-muted', style: { color: svcDown ? '#c0392b' : undefined } }, svcText),
     ),
+
+    // 配对二维码：手机装好 app 后「扫一扫」就连上，不用手抄地址和密钥
+    qrLink
+      ? h('div', { style: { marginTop: 10, display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' } },
+          h('div', { style: { padding: 8, background: '#fff', borderRadius: 10, border: '1px solid rgba(128,128,128,.25)', lineHeight: 0 } }, qrBox(qrLink, 148)),
+          h('div', { style: { flex: '1 1 190px', minWidth: 0 } },
+            h('p', { className: 'ab-small', style: { margin: 0, fontWeight: 600 } }, '手机扫这个就连上'),
+            h('p', { className: 'ab-small ab-muted', style: { margin: '4px 0 0', lineHeight: 1.8 } },
+              '装好 app 后在配对页点「扫一扫电脑上的二维码」——地址和密钥都会自动填好。没装 app 用手机相机或微信扫也行，打开就是网页版（网页版录不了语音，要语音就装 app）。'),
+            qrNote ? h('p', { className: 'ab-small ab-muted', style: { margin: '4px 0 0', color: '#c0392b' } }, qrNote) : null,
+          ))
+      : null,
 
     // 服务没起来时把话说清楚：这是「127.0.0.1 也连不上」的那种情况，不是网络问题
     svcDown
@@ -162,8 +308,8 @@ return function Panel({ settings, save, toast }) {
     h('div', { style: { marginTop: 12 } },
       h('p', { className: 'ab-small', style: { fontWeight: 600 } }, '怎么用：'),
       h('ol', { className: 'ab-small ab-muted', style: { margin: '4px 0 0', paddingLeft: 20, lineHeight: 1.8 } },
-        h('li', null, '手机装好「口袋aurabot」app（或直接用手机浏览器开上面的地址也行）'),
-        h('li', null, 'app 配对页把地址填进去——在家填「家里 WiFi」那条；在外面填「公网 IPv6」或「隧道」地址；拿不准就把几条都填上，逗号隔开（中英文逗号都行）'),
+        h('li', null, '手机装好「口袋aurabot」app，配对页点「扫一扫电脑上的二维码」，扫上面这个码（或直接用手机浏览器开上面的地址）'),
+        h('li', null, '没相机 / 扫不动：app 配对页把地址填进去——在家填「家里 WiFi」那条；在外面填「公网 IPv6」或「隧道」地址；拿不准就把几条都填上，逗号隔开（中英文逗号都行）'),
         h('li', null, '密钥抄下面这条（或点上面的「复制配对链接」，手机浏览器打开就自动填好）'),
         h('li', null, '点「连上她」即可；换密钥后所有设备要重新配对'),
       ),
@@ -175,23 +321,75 @@ return function Panel({ settings, save, toast }) {
       h('ul', { className: 'ab-small ab-muted', style: { margin: '4px 0 0', paddingLeft: 20, lineHeight: 1.8 } },
         h('li', null, h('b', null, '公网 IPv6（上面带「公网 IPv6」标注的地址）'), '：地址固定、不用额外软件；但要求手机的流量有 IPv6（很多手机套餐没有），还要在光猫/路由器里放行 ' + port + ' 端口'),
         h('li', null, h('b', null, '隧道（下面按钮）'), '：手机任何网络都能连，不用公网 IP、不碰光猫；https 地址，手机浏览器打开网页也能直接录语音。代价：免费临时域名，电脑重启后要重新点一次「启动隧道」，把新地址填回 app'),
+        h('li', null, h('b', null, 'Tailscale（地址列表里 100.x.x.x 那种）'), '：两端都装、登同一账号，打洞成功时速度接近你家宽带上行。国内有三点要知道：① 它本身就是 VPN，手机上一开就占了系统唯一的 VPN 槽位，和代理/加速器不能同时开；② 控制面在境外，新设备首次登录（GitHub/Google 账号）经常连不上、要反复试；③ 官方中继没有大陆节点（最近在香港、东京），打洞失败会绕道境外，延迟 150–300ms 很慢。账号早就登好的人用它最省事，没装过就别折腾，直接用隧道'),
         h('li', null, h('b', null, '外面的 WiFi 本身也会拦'), '：公司、酒店、校园网常只放行 80/443，IPv6 直连的 ' + port + ' 就通不了；要网页登录的访客网络没登录前什么都连不上（app 会报 P30）。这种场合用隧道最省事，实在不行开自己手机热点。'),
       ),
       h('p', { className: 'ab-small ab-muted', style: { marginTop: 6 } },
         '走 IPv6 还有个前置条件：Windows 防火墙也要放行 ' + port + ' 入站。这步要管理员权限，模组没权限替你做——用管理员 PowerShell 跑一条 netsh 命令就行（群里有一键脚本，或看 README「在外面用」一节）。安全软件（360/火绒）的网络防护也会拦，需要在它里面单独放行。'),
 
       h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' } },
-        h(ui.Btn, { onClick: toggleTunnel, disabled: tunBusy }, tunBusy ? '处理中…（首次约 10 秒）' : tun.running ? '停止隧道' : '启动隧道'),
+        !tun.installed
+          ? h(ui.Btn, { onClick: installCf, disabled: cfBusy }, cfBusy ? '正在下载…（约 40MB）' : '一键下载 cloudflared')
+          : h(ui.Btn, { onClick: toggleTunnel, disabled: tunBusy }, tunBusy ? '处理中…（首次约 10 秒）' : tun.running ? '停止隧道' : '启动隧道'),
         tun.running && tunnelPair ? h('code', { style: cell }, tunnelPair) : null,
         tun.running && tunnelPair
           ? h(ui.Btn, { onClick: () => { navigator.clipboard?.writeText(tunnelPair).then(() => toast('隧道地址已复制，填进 app 或手机浏览器打开')) } }, '复制隧道地址')
           : null,
         h('span', { className: 'ab-small ab-muted' },
-          !tun.installed ? '未安装 cloudflared' : tun.running ? (tunnelPair ? '运行中' : '连接中…') : '未启动'),
+          !tun.installed
+            ? '还没装 cloudflared —— 点左边按钮自动下载，不用你找路径'
+            : tun.running
+              ? (tun.mode === 'named'
+                  ? '固定域名运行中'
+                  : tunnelPair
+                    ? '临时隧道运行中'
+                    : '连接中…') +
+                (tun.want
+                  ? `（有守护：进程退了会自动重启${tun.restarts ? `，已重启 ${tun.restarts} 次` : ''}）`
+                  : '')
+              : tun.want
+                ? '刚刚断了，守护正在重启（最多等一分钟，刷新看看）'
+                : '未启动'),
+      ),
+      // 固定域名隧道：临时隧道每次重启换域名，手机里存的地址就废了 —— 这才是「昨天能连今天不能」的主因
+      h('div', { style: { marginTop: 10, padding: '8px 10px', borderLeft: '3px solid rgba(84,168,230,.55)', background: 'rgba(84,168,230,.07)', borderRadius: 6 } },
+        h('p', { className: 'ab-small', style: { margin: 0, fontWeight: 600 } },
+          '固定域名隧道（进阶 · 可以不弄）',
+          tun.mode === 'named'
+            ? h('span', { className: 'ab-small ab-muted', style: { fontWeight: 400 } }, ' · 已启用')
+            : null),
+        h('p', { className: 'ab-small ab-muted', style: { margin: '4px 0 0', lineHeight: 1.85 } },
+          '不会弄就跳过这一步，不影响使用。新版 app 连上电脑时会自动记住最新的出门地址——临时隧道换了域名，你在家连一次 WiFi 它就自己更新，不用抄地址、也不用重新配对。什么时候值得配这个：电脑经常重启、想长期挂着、或者要把这个地址给别人用（地址永远不变）。'),
+        h('p', { className: 'ab-small ab-muted', style: { margin: '4px 0 0', lineHeight: 1.85 } },
+          '临时隧道（trycloudflare.com）每次重启都换一个新域名，手机里存的那条就失效了——这是「昨天还能连、今天连不上」最常见的原因，不是网络问题。有 Cloudflare 账号就换成固定域名：① dash.cloudflare.com → Zero Trust → Networks → Tunnels → Create a tunnel（Cloudflared），建好后复制那串 token；② 在这条隧道里 Add a public hostname，域名填你自己的（如 pocket.example.com），Service 填 http://localhost:' + port + '；③ 把 token 和域名填在下面，点「保存并启动」。以后重启电脑、重开模组，地址都不变。'),
+        h('div', { style: { display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' } },
+          h('input', {
+            type: 'password',
+            value: tnToken,
+            placeholder: tun.tokenSet ? '已保存 token（留空＝不改）' : '隧道 token（eyJ…）',
+            onInput: (e) => setTnToken(e.target.value),
+            style: inp,
+          }),
+          h('input', {
+            value: tnHost,
+            placeholder: tun.host || 'pocket.example.com',
+            onInput: (e) => setTnHost(e.target.value),
+            style: inp,
+          }),
+          h(ui.Btn, { onClick: saveNamed, disabled: tunBusy }, tunBusy ? '处理中…' : '保存并启动'),
+        ),
+        tun.mode === 'named'
+          ? h('p', { className: 'ab-small ab-muted', style: { margin: '6px 0 0' } },
+              tun.running && tun.url
+                ? '固定域名：' + tun.url + '（运行中，重启电脑也不会变）'
+                : tun.host
+                  ? '固定域名：https://' + tun.host + '（已配置，未启动）'
+                  : '已填 token，但还没填域名')
+          : null,
       ),
       !tun.installed
         ? h('p', { className: 'ab-small ab-muted', style: { marginTop: 6 } },
-            '隧道需要 cloudflared：到 https://github.com/cloudflare/cloudflared/releases/latest 下载 cloudflared-windows-amd64.exe，放到任意位置（如 C:\\Users\\你\\auratools\\bin\\），面板会自动找到；找不到就在模块设置里把完整路径填进「cloudflaredPath」。')
+            'cloudflared 是隧道用的一个独立小程序，装一次就行。点上面「一键下载 cloudflared」会自动下到模块目录，不需要管理员权限、也不改系统设置。下载的是**固定版本**，装好后会核对官方 SHA-256，对不上就拒绝使用（镜像被换过也进不来）。自己下也行：从 github.com/cloudflare/cloudflared/releases 拿 cloudflared-windows-amd64.exe 改名为 cloudflared.exe，然后启动隧道（面板会自动找到它）。')
         : null,
       tun.error ? h('p', { className: 'ab-small', style: { marginTop: 6, color: '#c0392b' } }, tun.error) : null,
     ),
