@@ -1,0 +1,14 @@
+{
+  "id": "wool-runner",
+  "name": "薅羊毛任务中心",
+  "version": "1.0.0",
+  "description": "参考青龙的订阅、环境变量、Cron 任务与日志管理，支持京东扫码获取 JD_COOKIE",
+  "category": "manage",
+  "tags": ["青龙", "京东", "什么值得买", "签到", "定时任务"],
+  "author": "Aurabot",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.3.0",
+  "requires": [],
+  "capabilities": ["network", "filesystem", "process", "plugin-internals"]
+}
