@@ -1,0 +1,8 @@
+{
+  "id": "mobile", "name": "手机端", "version": "1.0.0",
+  "description": "手机扫码连上她，在原来的会话里聊天、发图和语音，共用她的记忆，每台设备都能单独撤销。",
+  "category": "social", "tags": ["手机端", "聊天", "扫码", "PWA"],
+  "author": "Emotionana, Aurabot", "license": "MIT", "api": 1,
+  "minPluginVersion": "1.3.0", "requires": [],
+  "capabilities": ["network", "filesystem", "process", "plugin-config", "plugin-internals"]
+}
