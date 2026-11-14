@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 108dp 自适应图标前景：安全区内聊天气泡与两道声波，居中于 (54, 54) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M38,32h32a8,8 0,0 1,8 8v18a8,8 0,0 1,-8 8H50l-10,8v-8h-2a8,8 0,0 1,-8 -8V40a8,8 0,0 1,8 -8z" />
+    <path
+        android:strokeColor="@color/ic_bg"
+        android:strokeWidth="3.4"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M40,45C43.5,41.5 47,41.5 50.5,45C54,48.5 57.5,48.5 61,45C63.5,42.5 66,42.5 68,44.5" />
+    <path
+        android:strokeColor="@color/ic_bg"
+        android:strokeWidth="3.4"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M40,54C43.5,50.5 47,50.5 50.5,54C54,57.5 57.5,57.5 61,54C63.5,51.5 66,51.5 68,53.5" />
+</vector>

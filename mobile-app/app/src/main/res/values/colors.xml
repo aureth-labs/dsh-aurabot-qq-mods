@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#F7F8FA</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="surface_glass">#E8FFFFFF</color>
+    <color name="surface_subtle">#EEF1F6</color>
+    <color name="fg">#16181D</color>
+    <color name="muted">#6B7280</color>
+    <color name="accent">#4D6BFE</color>
+    <color name="accent_soft">#0B4D6BFE</color>
+    <color name="accent_glow">#1A4D6BFE</color>
+    <color name="btn_fg">#FFFFFF</color>
+    <color name="stroke">#12000000</color>
+    <color name="stroke_strong">#24000000</color>
+    <color name="error">#D94444</color>
+    <color name="error_soft">#14D94444</color>
+    <color name="ripple_light">#16000000</color>
+    <color name="ripple_on_accent">#33FFFFFF</color>
+    <color name="scan_overlay">#990D1017</color>
+    <color name="scan_surface">#DB16181D</color>
+    <color name="scan_fg">#F7F8FA</color>
+    <color name="scan_muted">#B8BEC9</color>
+    <color name="scan_pill">#26FFFFFF</color>
+    <bool name="light_bars">true</bool>
+</resources>
