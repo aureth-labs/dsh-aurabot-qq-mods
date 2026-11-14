@@ -13,6 +13,88 @@ const TONES = [
   { id: 'rose', name: '陈玫', a: '#e57c90', b: '#a83349' },
 ]
 
+/**
+ * 配对二维码：QR Model 2 / 版本 6-L / 字节模式，最多 134 字节。
+ * 纯计算，不联网、不引依赖——面板里只画一个 <path>，靠 CSS 像素对齐就够清楚。
+ */
+function qrPath(text) {
+  const bytes = unescape(encodeURIComponent(text))          // UTF-8 字节
+  if (bytes.length > 134) throw new Error('太长')
+  const bits = []
+  const put = (n, width) => { for (let i = width - 1; i >= 0; i--) bits.push((n >>> i) & 1) }
+  put(4, 4); put(bytes.length, 8)
+  for (let i = 0; i < bytes.length; i++) put(bytes.charCodeAt(i), 8)
+  put(0, Math.min(4, 1088 - bits.length))
+  while (bits.length % 8) bits.push(0)
+  const data = []
+  for (let i = 0; i < bits.length; i += 8) data.push(bits.slice(i, i + 8).reduce((a, b) => a * 2 + b, 0))
+  for (let i = 0; data.length < 136; i++) data.push(i % 2 ? 0x11 : 0xec)
+  const mul = (a, b) => {
+    let r = 0
+    for (; b; b >>>= 1) { if (b & 1) r ^= a; a <<= 1; if (a & 0x100) a ^= 0x11d }
+    return r
+  }
+  let gen = [1], root = 1
+  for (let i = 0; i < 18; i++) {
+    const next = Array(gen.length + 1).fill(0)
+    gen.forEach((v, j) => { next[j] ^= v; next[j + 1] ^= mul(v, root) })
+    gen = next; root = mul(root, 2)
+  }
+  const blocks = [data.slice(0, 68), data.slice(68)]
+  const ecc = blocks.map((block) => {
+    const rem = Array(18).fill(0)
+    for (const b of block) {
+      const factor = b ^ rem.shift(); rem.push(0)
+      for (let j = 0; j < 18; j++) rem[j] ^= mul(gen[j + 1], factor)
+    }
+    return rem
+  })
+  const stream = []
+  for (let i = 0; i < 68; i++) for (const b of blocks) stream.push(b[i])
+  for (let i = 0; i < 18; i++) for (const b of ecc) stream.push(b[i])
+  const size = 41, grid = Array.from({ length: size }, () => Array(size).fill(false))
+  const fixed = grid.map((r) => r.slice())
+  const set = (x, y, v) => { if (x >= 0 && y >= 0 && x < size && y < size) { grid[y][x] = Boolean(v); fixed[y][x] = true } }
+  for (let i = 0; i < size; i++) { set(6, i, i % 2 === 0); set(i, 6, i % 2 === 0) }
+  for (const [cx, cy] of [[3, 3], [size - 4, 3], [3, size - 4]]) {
+    for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+      const d = Math.max(Math.abs(dx), Math.abs(dy)); set(cx + dx, cy + dy, d !== 2 && d !== 4)
+    }
+  }
+  for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) set(34 + dx, 34 + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1)
+  const format = 0x77c4 // 纠错等级 L、掩码 0（BCH 后异或 0x5412）
+  const f = (i) => (format >>> i) & 1
+  for (let i = 0; i <= 5; i++) set(8, i, f(i))
+  set(8, 7, f(6)); set(8, 8, f(7)); set(7, 8, f(8))
+  for (let i = 9; i < 15; i++) set(14 - i, 8, f(i))
+  for (let i = 0; i < 8; i++) set(size - 1 - i, 8, f(i))
+  for (let i = 8; i < 15; i++) set(8, size - 15 + i, f(i))
+  set(8, size - 8, true)
+  let bit = 0
+  for (let right = size - 1; right >= 1; right -= 2) {
+    if (right === 6) right = 5
+    for (let vert = 0; vert < size; vert++) {
+      const y = ((right + 1) & 2) === 0 ? size - 1 - vert : vert
+      for (let j = 0; j < 2; j++) {
+        const x = right - j
+        if (fixed[y][x]) continue
+        const value = bit < stream.length * 8 ? (stream[bit >>> 3] >>> (7 - (bit & 7))) & 1 : 0
+        grid[y][x] = Boolean(value ^ ((x + y) % 2 === 0 ? 1 : 0)); bit++
+      }
+    }
+  }
+  let path = ''
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) if (grid[y][x]) path += `M${x + 4},${y + 4}h1v1h-1z`
+  return path
+}
+
+/** 二维码画成 React 元素（不拼字符串，免得面板的 CSP 挡掉 data: 图片） */
+function qrBox(text, px) {
+  return h('svg', { viewBox: '0 0 49 49', width: px, height: px, shapeRendering: 'crispEdges', role: 'img', 'aria-label': '配对二维码' },
+    h('rect', { width: 49, height: 49, fill: '#ffffff' }),
+    h('path', { d: qrPath(text), fill: '#000000' }))
+}
+
 return function Panel({ settings, save, toast }) {
   const [net, setNet] = useState(null)
   const [tunBusy, setTunBusy] = useState(false)
@@ -58,6 +140,19 @@ return function Panel({ settings, save, toast }) {
     (tunnelPair ? `隧道（外面用）：${tunnelPair}\n` : '') +
     (addrs.length ? addrs.map((a) => `局域网：http://${a}`).join('\n') : '') +
     (token ? `\n密钥：${token}` : '')
+
+  // 二维码：优先放完整配对链接；隧道域名太长塞不下时，退回「只带密钥」的短链（地址就是链接本身）
+  let qrLink = ''
+  let qrNote = ''
+  for (const v of [pairLink, pairBase && token ? `${pairBase}/#token=${encodeURIComponent(token)}` : '']) {
+    if (!v) continue
+    try {
+      qrPath(v)
+      qrLink = v
+      break
+    } catch (e) { /* 超过 134 字节，试下一条 */ }
+  }
+  if (!qrLink && pairBase && token) qrNote = '这条地址太长，塞不进二维码（超过 134 字节）——用上面「复制配对链接」发到手机里粘贴也一样。'
 
   // 给每个地址标一句「什么时候填它」，免得对着三个地址不知道抄哪个
   const addrLabel = (ip) => {
@@ -168,6 +263,18 @@ return function Panel({ settings, save, toast }) {
       h('span', { className: 'ab-small ab-muted', style: { color: svcDown ? '#c0392b' : undefined } }, svcText),
     ),
 
+    // 配对二维码：手机装好 app 后「扫一扫」就连上，不用手抄地址和密钥
+    qrLink
+      ? h('div', { style: { marginTop: 10, display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' } },
+          h('div', { style: { padding: 8, background: '#fff', borderRadius: 10, border: '1px solid rgba(128,128,128,.25)', lineHeight: 0 } }, qrBox(qrLink, 148)),
+          h('div', { style: { flex: '1 1 190px', minWidth: 0 } },
+            h('p', { className: 'ab-small', style: { margin: 0, fontWeight: 600 } }, '手机扫这个就连上'),
+            h('p', { className: 'ab-small ab-muted', style: { margin: '4px 0 0', lineHeight: 1.8 } },
+              '装好 app 后在配对页点「扫一扫电脑上的二维码」——地址和密钥都会自动填好。没装 app 用手机相机或微信扫也行，打开就是网页版（网页版录不了语音，要语音就装 app）。'),
+            qrNote ? h('p', { className: 'ab-small ab-muted', style: { margin: '4px 0 0', color: '#c0392b' } }, qrNote) : null,
+          ))
+      : null,
+
     // 服务没起来时把话说清楚：这是「127.0.0.1 也连不上」的那种情况，不是网络问题
     svcDown
       ? h('div', { style: { marginTop: 8, padding: '8px 10px', borderLeft: '3px solid #c0392b', background: 'rgba(192,57,43,.07)', borderRadius: 6 } },
@@ -201,8 +308,8 @@ return function Panel({ settings, save, toast }) {
     h('div', { style: { marginTop: 12 } },
       h('p', { className: 'ab-small', style: { fontWeight: 600 } }, '怎么用：'),
       h('ol', { className: 'ab-small ab-muted', style: { margin: '4px 0 0', paddingLeft: 20, lineHeight: 1.8 } },
-        h('li', null, '手机装好「口袋aurabot」app（或直接用手机浏览器开上面的地址也行）'),
-        h('li', null, 'app 配对页把地址填进去——在家填「家里 WiFi」那条；在外面填「公网 IPv6」或「隧道」地址；拿不准就把几条都填上，逗号隔开（中英文逗号都行）'),
+        h('li', null, '手机装好「口袋aurabot」app，配对页点「扫一扫电脑上的二维码」，扫上面这个码（或直接用手机浏览器开上面的地址）'),
+        h('li', null, '没相机 / 扫不动：app 配对页把地址填进去——在家填「家里 WiFi」那条；在外面填「公网 IPv6」或「隧道」地址；拿不准就把几条都填上，逗号隔开（中英文逗号都行）'),
         h('li', null, '密钥抄下面这条（或点上面的「复制配对链接」，手机浏览器打开就自动填好）'),
         h('li', null, '点「连上她」即可；换密钥后所有设备要重新配对'),
       ),
