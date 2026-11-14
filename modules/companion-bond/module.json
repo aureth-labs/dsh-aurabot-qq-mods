@@ -1,0 +1,15 @@
+{
+  "id": "companion-bond",
+  "name": "相伴养成",
+  "version": "1.0.0",
+  "description": "和正在聊天的她一起成长：聊天、投喂、玩耍积累亲密度，状态融入原本的人格回复。",
+  "category": "social",
+  "tags": ["养成", "陪伴", "亲密度", "互动"],
+  "platforms": ["qq"],
+  "author": "a777",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.1",
+  "requires": [],
+  "capabilities": ["filesystem"]
+}
