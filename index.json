@@ -946,6 +946,39 @@
       "publishedAt": "2026-11-14T03:38:06.241Z"
     },
     {
+      "id": "mobile",
+      "name": "手机端",
+      "version": "1.0.0",
+      "description": "手机扫码连上她，在原来的会话里聊天、发图和语音，共用她的记忆，每台设备都能单独撤销。",
+      "category": "social",
+      "tags": [
+        "手机端",
+        "聊天",
+        "扫码",
+        "PWA"
+      ],
+      "author": "Emotionana, Aurabot",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.3.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "process",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "mobile-v1.0.0",
+      "file": "mobile-v1.0.0.zip",
+      "path": "mobile-v1.0.0/mobile-v1.0.0.zip",
+      "size": 67153,
+      "sha256": "5cad2a9f22defec84eed6aa41be0e15d108e9c752133c7071cd2ef5a8aa3a995",
+      "commit": "59319537d53a578c3f6b4a1a81daff35d9194829",
+      "publishedAt": "2026-11-14T08:20:25.125Z"
+    },
+    {
       "id": "moodboard",
       "name": "心情看板",
       "version": "1.0.0",
@@ -1753,5 +1786,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-14T07:18:07.768Z"
+  "generatedAt": "2026-11-14T08:20:25.125Z"
 }
