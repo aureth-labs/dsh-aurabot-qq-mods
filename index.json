@@ -1719,7 +1719,7 @@
     {
       "id": "xiaoai-music",
       "name": "xiaoai music · 小爱音响接入",
-      "version": "0.15.1",
+      "version": "0.15.2",
       "description": "小爱音箱接入、歌曲与歌单播放、提醒及 AI 称呼同音词补足。",
       "category": "creative",
       "tags": [
@@ -1743,15 +1743,15 @@
         "plugin-internals"
       ],
       "replacesBuiltin": false,
-      "tag": "xiaoai-music-v0.15.1",
-      "file": "xiaoai-music-v0.15.1.zip",
-      "path": "xiaoai-music-v0.15.1/xiaoai-music-v0.15.1.zip",
-      "size": 129008,
-      "sha256": "595374db60ec0fe7420329202cfee0fd4ff18ba4dee6377a422e8fb0a31f9af7",
-      "commit": "34b540fb58d7f0ff18b5f0d04fd386e79613cfec",
-      "publishedAt": "2026-11-12T23:49:09.009Z"
+      "tag": "xiaoai-music-v0.15.2",
+      "file": "xiaoai-music-v0.15.2.zip",
+      "path": "xiaoai-music-v0.15.2/xiaoai-music-v0.15.2.zip",
+      "size": 132417,
+      "sha256": "3432c8ce6964ae8c4ced98624adf7a25b629d04ec406335785116bc3b8cdd28b",
+      "commit": "3158296e9568a39eef186236c125a00828e9bcb5",
+      "publishedAt": "2026-11-14T06:15:42.568Z"
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-14T04:39:56.307Z"
+  "generatedAt": "2026-11-14T06:15:42.568Z"
 }
