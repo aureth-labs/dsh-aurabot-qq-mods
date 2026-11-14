@@ -153,6 +153,52 @@ test('events 增量拉取：after 之前的不再给', () => {
   assert.equal(again.list.length, 0)
 })
 
+test('seq 游标：只给号不给事件体（app 启动时靠它跳过历史已画过的部分）', async () => {
+  const token = T.tokenOf()
+  const before = routes['/seq'](req(token, { url: '/seq' }), {})
+  assert.equal(before.ok, true)
+  assert.equal(before.list, undefined)
+  // 手机走的是自带服务的路由，两条路都得通
+  const hres = mockRes()
+  await T.handle(mockReq({ url: '/api/seq', headers: { 'x-pocket-token': token } }), hres)
+  assert.equal(hres.code, 200)
+  assert.equal(JSON.parse(hres.chunks.join('')).ok, true)
+  T.pushEvent('her', { text: '游标一' })
+  const after = routes['/seq'](req(token, { url: '/seq' }), {})
+  assert.equal(after.seq, before.seq + 1)
+})
+
+test('events 超过 200 条时 seq 停在批尾，不跳到全局（否则中间的事件会丢）', () => {
+  const token = T.tokenOf()
+  const from = routes['/seq'](req(token, { url: '/seq' }), {}).seq
+  for (let i = 0; i < 205; i++) T.pushEvent('her', { text: '批量' + i })
+  const first = routes['/events'](req(token, { url: `/events?after=${from}` }), {})
+  assert.equal(first.list.length, 200)
+  assert.equal(first.seq, from + 200)
+  const second = routes['/events'](req(token, { url: `/events?after=${first.seq}` }), {})
+  assert.equal(second.list.length, 5)
+  assert.equal(second.seq, from + 205)
+})
+
+test('同一批事件重复拉取时，客户端按 seq 去重后不会重画', () => {
+  // 手机弱网时几个请求带着同一个 after= 并发回来，都会拿到同一批；
+  // app 里判断 e.seq <= S.seq 就丢，这里模拟那个循环，确认只会画一遍
+  const token = T.tokenOf()
+  const from = routes['/seq'](req(token, { url: '/seq' }), {}).seq
+  T.pushEvent('her', { text: '重复测试' })
+  const batch = routes['/events'](req(token, { url: `/events?after=${from}` }), {}).list
+  let seq = from
+  const drawn = []
+  for (let round = 0; round < 3; round++) {
+    for (const e of batch) {
+      if (Number(e.seq) <= seq) continue
+      seq = Number(e.seq)
+      drawn.push(e.text)
+    }
+  }
+  assert.deepEqual(drawn, ['重复测试'])
+})
+
 test('投喂：数值上升、写入她的记忆、冷却与上限生效', async () => {
   const token = T.tokenOf()
   const r1 = await routes['/pet'](req(token, { body: { action: 'feed', food: 'rice' }, url: '/pet' }), {})

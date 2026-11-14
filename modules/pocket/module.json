@@ -1,7 +1,7 @@
 {
   "id": "pocket",
   "name": "口袋aurabot",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "description": "【手机 App】把她接进口袋：安卓 app 里直接聊天（发图、语音条、表情包双向），消息走她原生对话流，记忆/心情/其他模组全在，回复与主动搭话实时推到手机；自带局域网服务，家里 WiFi、公网 IPv6、隧道三种连法，记忆与 QQ 端共用同一套。",
   "category": "platform",
   "tags": [
