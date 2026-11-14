@@ -19,6 +19,7 @@ return function Panel({ settings, save, toast }) {
   const [svcBusy, setSvcBusy] = useState(false)
   const [tnToken, setTnToken] = useState('')
   const [tnHost, setTnHost] = useState('')
+  const [cfBusy, setCfBusy] = useState(false)
   const tone = TONES.some((t) => t.id === settings?.tone) ? settings.tone : 'ocean'
   const token = String(settings?.token || '')
 
@@ -122,6 +123,19 @@ return function Panel({ settings, save, toast }) {
     setTunBusy(false)
   }
 
+  /** 一键下载 cloudflared：不让用户去 GitHub 找 releases 再配 PATH（十个人有八个做不下来） */
+  const installCf = async () => {
+    setCfBusy(true)
+    try {
+      const r = await call('/tunnel', { action: 'install' })
+      toast(r && r.message ? r.message : r && r.ok ? '下载好了' : '下载失败')
+    } catch (e) {
+      toast('下载失败：' + (e && e.message ? e.message : e))
+    }
+    await reload()
+    setCfBusy(false)
+  }
+
   const cell = { border: '1px solid rgba(128,128,128,.3)', borderRadius: 8, padding: '5px 10px', fontSize: 13, fontFamily: 'monospace', wordBreak: 'break-all' }
   const sw = { width: 34, height: 34, borderRadius: 10, border: '2px solid transparent', cursor: 'pointer', padding: 0 }
   const inp = { flex: '1 1 180px', minWidth: 0, padding: '6px 8px', borderRadius: 6, border: '1px solid rgba(128,128,128,.35)', background: 'transparent', color: 'inherit', fontSize: 12.5 }
@@ -207,29 +221,38 @@ return function Panel({ settings, save, toast }) {
         '走 IPv6 还有个前置条件：Windows 防火墙也要放行 ' + port + ' 入站。这步要管理员权限，模组没权限替你做——用管理员 PowerShell 跑一条 netsh 命令就行（群里有一键脚本，或看 README「在外面用」一节）。安全软件（360/火绒）的网络防护也会拦，需要在它里面单独放行。'),
 
       h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' } },
-        h(ui.Btn, { onClick: toggleTunnel, disabled: tunBusy }, tunBusy ? '处理中…（首次约 10 秒）' : tun.running ? '停止隧道' : '启动隧道'),
+        !tun.installed
+          ? h(ui.Btn, { onClick: installCf, disabled: cfBusy }, cfBusy ? '正在下载…（约 40MB）' : '一键下载 cloudflared')
+          : h(ui.Btn, { onClick: toggleTunnel, disabled: tunBusy }, tunBusy ? '处理中…（首次约 10 秒）' : tun.running ? '停止隧道' : '启动隧道'),
         tun.running && tunnelPair ? h('code', { style: cell }, tunnelPair) : null,
         tun.running && tunnelPair
           ? h(ui.Btn, { onClick: () => { navigator.clipboard?.writeText(tunnelPair).then(() => toast('隧道地址已复制，填进 app 或手机浏览器打开')) } }, '复制隧道地址')
           : null,
         h('span', { className: 'ab-small ab-muted' },
           !tun.installed
-            ? '未安装 cloudflared'
+            ? '还没装 cloudflared —— 点左边按钮自动下载，不用你找路径'
             : tun.running
-              ? tun.mode === 'named'
-                ? '固定域名运行中'
-                : tunnelPair
-                  ? '临时隧道运行中'
-                  : '连接中…'
-              : '未启动'),
+              ? (tun.mode === 'named'
+                  ? '固定域名运行中'
+                  : tunnelPair
+                    ? '临时隧道运行中'
+                    : '连接中…') +
+                (tun.want
+                  ? `（有守护：进程退了会自动重启${tun.restarts ? `，已重启 ${tun.restarts} 次` : ''}）`
+                  : '')
+              : tun.want
+                ? '刚刚断了，守护正在重启（最多等一分钟，刷新看看）'
+                : '未启动'),
       ),
       // 固定域名隧道：临时隧道每次重启换域名，手机里存的地址就废了 —— 这才是「昨天能连今天不能」的主因
       h('div', { style: { marginTop: 10, padding: '8px 10px', borderLeft: '3px solid rgba(84,168,230,.55)', background: 'rgba(84,168,230,.07)', borderRadius: 6 } },
         h('p', { className: 'ab-small', style: { margin: 0, fontWeight: 600 } },
-          '固定域名隧道（长期用，地址不会变）',
+          '固定域名隧道（进阶 · 可以不弄）',
           tun.mode === 'named'
             ? h('span', { className: 'ab-small ab-muted', style: { fontWeight: 400 } }, ' · 已启用')
             : null),
+        h('p', { className: 'ab-small ab-muted', style: { margin: '4px 0 0', lineHeight: 1.85 } },
+          '不会弄就跳过这一步，不影响使用。新版 app 连上电脑时会自动记住最新的出门地址——临时隧道换了域名，你在家连一次 WiFi 它就自己更新，不用抄地址、也不用重新配对。什么时候值得配这个：电脑经常重启、想长期挂着、或者要把这个地址给别人用（地址永远不变）。'),
         h('p', { className: 'ab-small ab-muted', style: { margin: '4px 0 0', lineHeight: 1.85 } },
           '临时隧道（trycloudflare.com）每次重启都换一个新域名，手机里存的那条就失效了——这是「昨天还能连、今天连不上」最常见的原因，不是网络问题。有 Cloudflare 账号就换成固定域名：① dash.cloudflare.com → Zero Trust → Networks → Tunnels → Create a tunnel（Cloudflared），建好后复制那串 token；② 在这条隧道里 Add a public hostname，域名填你自己的（如 pocket.example.com），Service 填 http://localhost:' + port + '；③ 把 token 和域名填在下面，点「保存并启动」。以后重启电脑、重开模组，地址都不变。'),
         h('div', { style: { display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' } },
@@ -259,7 +282,7 @@ return function Panel({ settings, save, toast }) {
       ),
       !tun.installed
         ? h('p', { className: 'ab-small ab-muted', style: { marginTop: 6 } },
-            '隧道需要 cloudflared：到 https://github.com/cloudflare/cloudflared/releases/latest 下载 cloudflared-windows-amd64.exe，放到任意位置（如 C:\\Users\\你\\auratools\\bin\\），面板会自动找到；找不到就在模块设置里把完整路径填进「cloudflaredPath」。')
+            'cloudflared 是隧道用的一个独立小程序，装一次就行。点上面「一键下载 cloudflared」会自动下到模块目录，不需要管理员权限、也不改系统设置。自己下也行：从 github.com/cloudflare/cloudflared/releases 拿 cloudflared-windows-amd64.exe 改名为 cloudflared.exe，然后启动隧道（面板会自动找到它）。')
         : null,
       tun.error ? h('p', { className: 'ab-small', style: { marginTop: 6, color: '#c0392b' } }, tun.error) : null,
     ),

@@ -6,6 +6,7 @@ const LS = {
   token: 'pocket.token',
   tone: 'pocket.tone',
   toneLocal: 'pocket.tone.local',
+  tunnel: 'pocket.tunnel',
 }
 
 const S = {
@@ -107,6 +108,36 @@ function hostList(v) {
 /** S.host 存的是完整 origin，直接用 */
 const base = () => (S.host ? S.host.replace(/\/+$/, '') : location.origin)
 
+/**
+ * 电脑那边会主动告诉我们它现在的公网地址（/api/state 的 endpoints.tunnel）。
+ * 临时隧道每次重启都会换域名，让用户自己去抄新地址不现实 —— 所以只要手机连上过一次
+ * （在家连 WiFi 就够），就把新地址悄悄记进候选列表，出门直接用。
+ * 用户完全不需要知道「隧道域名」是什么东西。
+ */
+function syncEndpoints(st) {
+  const ep = st && st.endpoints
+  if (!ep || !ep.tunnel) return
+  const next = normalizeHost(ep.tunnel)
+  if (!next) return
+  const prev = localStorage.getItem(LS.tunnel) || ''
+  if (prev === next) return
+  // 旧隧道域名已经作废，从候选里摘掉，免得堆一串永远不通的地址
+  const rest = S.hosts.filter((h) => h !== prev && h !== next)
+  const lan = rest.filter((h) => !/^https:\/\//i.test(h))
+  const https = rest.filter((h) => /^https:\/\//i.test(h))
+  S.hosts = [...lan, next, ...https]
+  // 正在用的就是那条作废的旧域名时，切回第一条（通常是家里的局域网地址）
+  if (S.host === prev) S.host = S.hosts[0] || ''
+  localStorage.setItem(LS.host, S.hosts.join(','))
+  localStorage.setItem(LS.tunnel, next)
+  // 第一次记下来不打扰；之后地址真的变了才轻提示一下
+  if (prev && prev !== next) {
+    try {
+      toast('出门地址已更新')
+    } catch {}
+  }
+}
+
 /** 当前地址连不上时，挨个试其它候选，谁通用谁（家里 WiFi ↔ 外面 4G/5G 自动切换） */
 async function switchHost() {
   for (const cand of S.hosts) {
@@ -149,7 +180,7 @@ const CODES = {
     t: '隧道域名超时',
     side: '电脑 / 代理',
     why: '电脑上的隧道已经停了（重启电脑后最常见）；或代理把 trycloudflare 域名拦了',
-    fix: '面板看隧道是不是「运行中」，不是就点「启动隧道」；关掉代理；电脑重启后域名会变，要重新填进 app',
+    fix: '新版电脑端会自己把挂掉的隧道拉起来（一分钟内），稍等再试；还不行就回家连一次 WiFi，app 会自动换成新地址。手动的话：让电脑面板看隧道是否「运行中」，停了就点「启动隧道」',
   },
   P14: {
     t: '局域网地址不可达',
@@ -166,8 +197,8 @@ const CODES = {
   P16: {
     t: '隧道域名不可达',
     side: '电脑',
-    why: '隧道已停，或域名解析被代理带偏',
-    fix: '面板重启隧道，把新地址填回来；关掉代理',
+    why: '隧道重启过、域名已经换了（旧地址永久失效）；或域名解析被代理带偏',
+    fix: '回家连一次 WiFi，app 会自动把地址换成新的；人在外面就打不开电脑面板了，可以让家里电脑前的人把「复制隧道地址」发给你。关掉代理再试也有用',
   },
   P17: {
     t: '域名解析失败',
@@ -979,6 +1010,9 @@ function renderStatus(qqOnline) {
   $('#chat-status').textContent = parts.join(' · ')
   $('#set-qq').textContent = qqOnline ? '在线' : '离线'
   $('#set-host').textContent = S.host || location.host || '本机'
+  // 出门用的地址由电脑自动同步过来（隧道换域名时手机自己就更新了，不用人记）
+  const away = (st.endpoints && st.endpoints.tunnel) || localStorage.getItem(LS.tunnel) || ''
+  $('#set-away').textContent = away ? away.replace(/^https:\/\//, '') : '只在局域网'
   $('#set-token').textContent = S.token ? S.token.slice(0, 5) + '…' : '–'
   $('#set-mem').textContent = st.memoryCount != null ? st.memoryCount + ' 条' : '–'
   // 显示电脑端模块版本：界面和功能都跟着它走，apk 只是外壳（1.0.x）
@@ -1316,6 +1350,8 @@ async function boot() {
     if (!st || !st.ok) throw new Error((st && st.message) || '连不上')
     S.state = st
     S.seq = 0
+    // 顺手把电脑当前的公网地址记下来（隧道换了域名也不用用户管）
+    syncEndpoints(st)
     // 版本号（设置页显示「模块 x · App y」）：health 不需要密钥，失败也不影响主流程
     fetch(base() + '/api/health', { signal: AbortSignal.timeout(4000) })
       .then((r) => r.json())

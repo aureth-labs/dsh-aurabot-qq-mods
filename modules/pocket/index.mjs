@@ -10,14 +10,14 @@
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, statSync, unlinkSync, createWriteStream } from 'node:fs'
-import { join, extname, normalize, sep } from 'node:path'
+import { join, dirname, extname, normalize, sep } from 'node:path'
 import { homedir, networkInterfaces, tmpdir } from 'node:os'
 import { createServer } from 'node:http'
 import { spawn, execFileSync } from 'node:child_process'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 
 const RING_MAX = 500
-const VERSION = '1.4.9'
+const VERSION = '1.5.1'
 const DEFAULT_PORT = 7788
 const MAX_MEDIA_BYTES = 12 * 1024 * 1024
 
@@ -679,6 +679,16 @@ export default {
           moodLabel: String((ms?.label) || (m?.label ? m.label() : '')),
           memoryCount: api.use('memory')?.list?.()?.length ?? null,
           pet: petState(dir, api),
+          // 手机端拿它就够了：连上以后自动更新「出门用的地址」，用户不用记隧道域名
+          endpoints: (() => {
+            const t = tunnelInfo()
+            return {
+              tunnel: t.url || '',
+              tunnelMode: t.mode,
+              // lanAddresses 返回的 IPv6 已经带方括号了，直接拼端口
+              lan: lanAddresses().map((ip) => `http://${ip}:${port()}`),
+            }
+          })(),
         }
       },
       events: (after) => ({ ok: true, seq, list: ring.filter((e) => e.seq > Number(after || 0)).slice(0, 200) }),
@@ -834,6 +844,69 @@ export default {
     let tunnelErr = ''
     let cfPathCache = { path: '', at: 0 }
 
+    // ---- 隧道守护 ----
+    // cloudflared 会自己悄悄退出（实测：pid 还写着、进程已经没了、日志空着），用户只看到
+    // 「昨天还能连今天不行」。这里记一份「用户希望隧道开着」的意愿，进程没了就自动拉起来。
+    const wantFile = () => join(api.dataDir(), 'tunnel-want.json')
+    function readWant() {
+      try {
+        const j = JSON.parse(readFileSync(wantFile(), 'utf8'))
+        return j && typeof j === 'object' ? j : {}
+      } catch {
+        return {}
+      }
+    }
+    function writeWant(patch) {
+      const cur = { ...readWant(), ...patch, at: Date.now() }
+      try {
+        mkdirSync(api.dataDir(), { recursive: true })
+        writeFileSync(wantFile(), JSON.stringify(cur))
+      } catch {}
+      return cur
+    }
+    let guardTimer = null
+    let guardTry = 0
+    // 两个入口可能同时想启动隧道（服务起来的自动恢复 + 打开面板的顺手自愈），
+    // 不加锁就会启动两个 cloudflared、抢同一个端口、还各自注册一条隧道。实测过。
+    let tunnelStarting = false
+    let tunnelAutoTimer = null
+    // 每 60 秒看一眼：进程在不在；不在就重新拉起来。只做进程判活（不探公网），
+    // 因为 quick 隧道地址本来就会变，探旧地址必然失败，会把「正常」误判成「挂了」。
+    async function tunnelWatch() {
+      if (readWant().want !== true) return
+      if (cfRunning()) {
+        guardTry = 0
+        return
+      }
+      // 上一轮刚失败过就别连着打，退到 30 秒一次
+      if (guardTry >= 3) {
+        guardTry = 0
+        tunnelErr = '隧道反复起不来，已暂停自动重启（手动点一次「启动隧道」能看清报错）'
+        return
+      }
+      guardTry++
+      const w = readWant()
+      try {
+        const r = await tunnelStart({ silent: true })
+        if (r && r.ok) {
+          writeWant({ restarts: Number(w.restarts || 0) + 1, lastAt: Date.now() })
+          bootLog(`隧道守护：发现进程不在，已自动重启（第 ${Number(w.restarts || 0) + 1} 次）`)
+        } else if (r && r.message) {
+          tunnelErr = r.message
+        }
+      } catch (e) {
+        tunnelErr = String(e?.message || e)
+      }
+    }
+    function guardStart() {
+      if (guardTimer) clearInterval(guardTimer)
+      guardTimer = setInterval(() => {
+        tunnelWatch().catch(() => {})
+      }, 60000)
+      // 别让这个定时器把进程吊着不让退出
+      guardTimer.unref?.()
+    }
+
     function readTunnelFile() {
       try {
         const j = JSON.parse(readFileSync(tunnelFile(), 'utf8'))
@@ -854,11 +927,64 @@ export default {
       }
     }
 
+    // 「一键下载」装到模块数据目录里，不动系统 PATH、不需要管理员权限
+    const cloudflaredLocal = () => join(api.dataDir(), 'bin', 'cloudflared.exe')
+    /**
+     * 下载 cloudflared（普通用户最卡的一步：让人去 GitHub 找 releases、选对文件、再放 PATH，
+     * 十个人有八个做不下来）。下到模块数据目录，失败时把「下一步怎么办」写清楚。
+     */
+    async function installCloudflared() {
+      const dest = cloudflaredLocal()
+      if (existsSync(dest)) return { ok: true, path: dest, message: '已经有了，不用重复下载' }
+      const urls = [
+        'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe',
+        'https://ghfast.top/https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe',
+        'https://gh-proxy.com/https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe',
+      ]
+      let lastErr = ''
+      for (const u of urls) {
+        try {
+          const r = await fetch(u, { redirect: 'follow', signal: AbortSignal.timeout(180000) })
+          if (!r.ok) {
+            lastErr = `HTTP ${r.status}（${new URL(u).host}）`
+            continue
+          }
+          const buf = Buffer.from(await r.arrayBuffer())
+          // 正常是 40–80MB 的 PE 文件；太小说明下到的是错误页
+          if (buf.length < 5 * 1024 * 1024) {
+            lastErr = `下载内容不对（只有 ${Math.round(buf.length / 1024)}KB，${new URL(u).host}）`
+            continue
+          }
+          mkdirSync(dirname(dest), { recursive: true })
+          writeFileSync(dest, buf)
+          cfPathCache = { path: dest, at: Date.now() }
+          let ver = ''
+          try {
+            ver = String(execFileSync(dest, ['--version'], { encoding: 'utf8', windowsHide: true, timeout: 15000 })).trim()
+          } catch {}
+          return { ok: true, path: dest, size: buf.length, version: ver, message: '下载好了，可以直接启动隧道（' + Math.round(buf.length / 1024 / 1024) + 'MB）' }
+        } catch (e) {
+          lastErr = String(e?.message || e)
+        }
+      }
+      return {
+        ok: false,
+        message:
+          '自动下载没成功（' + (lastErr || '网络不通') + '）。可以手动下：打开 https://github.com/cloudflare/cloudflared/releases/latest 下载 cloudflared-windows-amd64.exe，重命名成 cloudflared.exe，放进这个目录：' + dirname(dest) + '，然后回面板点一次「启动隧道」。',
+      }
+    }
+
     function findCloudflared() {
       if (cfPathCache.path && Date.now() - cfPathCache.at < 60000) return cfPathCache.path
       let found = ''
       const custom = String((api.config().ext || {}).pocket?.cloudflaredPath || '').trim()
       if (custom && existsSync(custom)) found = custom
+      // 面板「一键下载」装的位置最先看：用户自己下过别的版本也优先用这个，免得两套并存
+      if (!found) {
+        for (const p of [cloudflaredLocal(), join(api.dataDir(), 'bin', 'cloudflared.exe')]) {
+          if (existsSync(p)) { found = p; break }
+        }
+      }
       if (!found) {
         try {
           // where.exe 很快，且结果缓存 60 秒
@@ -911,6 +1037,7 @@ export default {
         mode === 'named'
           ? !!tunnelProc || (alive && saved.mode === 'named' && saved.url === url)
           : !!tunnelProc || (alive && !!url)
+      const w = readWant()
       return {
         ok: true,
         installed: !!findCloudflared(),
@@ -923,6 +1050,10 @@ export default {
         mode,
         host,
         tokenSet: !!tok,
+        // 守护状态：用户点了启动就一直替他把进程看住（cloudflared 会自己悄悄退出）
+        want: w.want === true,
+        restarts: Number(w.restarts || 0),
+        lastRestartAt: Number(w.lastAt || 0),
       }
     }
 
@@ -951,15 +1082,41 @@ export default {
       }
     }
 
-    async function tunnelStart() {
+    async function tunnelStart(opts = {}) {
+      // 记下「希望隧道开着」，进程哪天自己退了，守护会替用户拉起来
+      writeWant({ want: true })
+      if (tunnelStarting) return { ok: true, message: '隧道正在启动，稍等几秒刷新面板' }
+      tunnelStarting = true
+      try {
+        return await tunnelStartInner(opts)
+      } finally {
+        tunnelStarting = false
+      }
+    }
+
+    async function tunnelStartInner(opts = {}) {
       const cur = tunnelInfo()
       if (cur.running) return { ok: true, url: cur.url, message: '隧道已经在跑' }
+      // 上一个模块实例（热重载前）拉起的进程还活着：能拿到地址就复用，别再起第二个
+      if (!tunnelProc && cfRunning()) {
+        const saved = readTunnelFile()
+        const savedUrl = String(saved.url || '')
+        if (savedUrl) {
+          tunnelUrl = savedUrl
+          return { ok: true, url: savedUrl, message: '隧道已经在跑（沿用了现有进程）', reused: true }
+        }
+        // 孤儿进程连地址都没留下，留着也没用，收掉再起一个干净的黑洞
+        try {
+          execFileSync('taskkill', ['/IM', 'cloudflared.exe', '/F'], { windowsHide: true, timeout: 8000 })
+        } catch {}
+      }
       const exe = findCloudflared()
       if (!exe) {
+        if (opts.silent) return { ok: false, installed: false, message: '没装 cloudflared' }
         return {
           ok: false,
           installed: false,
-          message: '没找到 cloudflared：去 https://github.com/cloudflare/cloudflared/releases/latest 下载 cloudflared-windows-amd64.exe，随便放个位置（比如 C:\\Users\\你\\auratools\\bin\\），然后在面板设置里把路径填进「cloudflaredPath」；或直接放进 PATH。',
+          message: '还没装 cloudflared。面板上有「一键下载」按钮（会自动下到模块目录，不用你找路径）；也可以手动下载 cloudflared-windows-amd64.exe 后点「一键下载」旁边的说明。',
         }
       }
       const tok = namedToken()
@@ -1071,6 +1228,8 @@ export default {
     }
 
     function tunnelStop() {
+      // 用户主动停的，守护别再把它拉起来
+      writeWant({ want: false, restarts: 0 })
       const saved = readTunnelFile()
       const targets = new Set([tunnelProc?.pid].filter(Boolean))
       if (saved.pid && pidAlive(saved.pid)) targets.add(saved.pid)
@@ -1100,6 +1259,8 @@ export default {
     api.route('/net-info', () => {
       // 打开面板就顺手自愈一次：开关开着但没在监听（热重载失败、端口被占后进程退出）时重新起
       if (on() && !server) start()
+      // 隧道也顺手看一眼：不用等 60 秒的定时器，打开面板就能看到它被拉起来
+      if (readWant().want === true) tunnelWatch().catch(() => {})
       return { ok: true, addresses: lanAddresses(), enabled: on(), port: port(), tone: tone(), tunnel: tunnelInfo(), service: svcInfo(), stale: staleInfo() }
     })
     api.route('/service', async (req) => {
@@ -1122,6 +1283,8 @@ export default {
         return tunnelStart()
       }
       if (b.action === 'stop') return tunnelStop()
+      // 一键下载 cloudflared（普通用户最卡的一步，别让人去 GitHub 找 releases 再配 PATH）
+      if (b.action === 'install') return await installCloudflared()
       return tunnelInfo()
     })
     api.route('/state', (req, res) => (guard(req, res) ? ops.state() : undefined))
@@ -1381,9 +1544,12 @@ export default {
           )
           if (p !== base) api.log.warn(`口袋：端口 ${base} 被占用，实际监听 ${p}——手机要填 ${p}`)
           bootLog(`监听成功 ${p}${ipv4Only ? '（仅 IPv4）' : ''}${p !== base ? `（${base} 被占用）` : ''}`)
-          // 开了「隧道自动启动」时，服务一起来就把外网通道也拉起来（DSH 重启后自动恢复）
-          if (s().tunnelAuto === true) {
-            setTimeout(() => {
+          // 服务一起来就把外网通道拉起来：开了「自动启动」，或上次用户是开着隧道的（want）。
+          // 电脑重启、DSH 重启之后手机不用等人去点按钮就能连。
+          if (s().tunnelAuto === true || readWant().want === true) {
+            if (tunnelAutoTimer) clearTimeout(tunnelAutoTimer)
+            tunnelAutoTimer = setTimeout(() => {
+              tunnelAutoTimer = null
               tunnelStart().catch((e) => api.log.warn('隧道自启失败：', String(e?.message || e)))
             }, 1500)
           }
@@ -1424,10 +1590,20 @@ export default {
 
     // 开关开着就起服务；前端文件缺失由 start() 内部置 listenErr（面板能看见，不再静默失败）
     if (on()) start()
+    // 隧道守护：cloudflared 会自己悄悄退出，不看着就只剩「昨天还能连」
+    guardStart()
     api.onDispose(() => {
       if (retryTimer) {
         clearTimeout(retryTimer)
         retryTimer = null
+      }
+      if (guardTimer) {
+        clearInterval(guardTimer)
+        guardTimer = null
+      }
+      if (tunnelAutoTimer) {
+        clearTimeout(tunnelAutoTimer)
+        tunnelAutoTimer = null
       }
       try {
         server?.close()
