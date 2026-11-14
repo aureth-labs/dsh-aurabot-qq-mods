@@ -7,11 +7,11 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { Script, createContext, runInContext } from 'node:vm'
 import { botIdOf, mobileTtsPort, mobileUploadDir } from '../lib/service.mjs'
-import { createMobileService, version } from './helpers.mjs'
+import { hostTest, createMobileService, version } from './helpers.mjs'
 
 const webFile = (name) => readFileSync(new URL('../assets/web/' + name, import.meta.url), 'utf8')
 
-test('App 设置协议：实际 TTS 端口、版本和 DSH 会话；退出仅撤销当前设备并落盘', async () => {
+hostTest('App 设置协议：实际 TTS 端口、版本和 DSH 会话；退出仅撤销当前设备并落盘', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'aurabot-parity-'))
   const token = 'phone-one', other = 'phone-two', owner = '10001'
   const devices = [token, other].map((value, i) => ({ id: 'device-' + i, tokenHash: createHash('sha256').update(value).digest('hex') }))
@@ -39,7 +39,7 @@ test('App 设置协议：实际 TTS 端口、版本和 DSH 会话；退出仅撤
   } finally { await service.dispose(); rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('证书错误不覆盖已有设置；关闭入口时脚本不可访问', async () => {
+hostTest('证书错误不覆盖已有设置；关闭入口时脚本不可访问', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'aurabot-parity-tls-'))
   const service = createMobileService({ dir, config: () => ({ ownerQQ: '1' }), use: () => null, hub: { sessions: () => ({}) } })
   try {

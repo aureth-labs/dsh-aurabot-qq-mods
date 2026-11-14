@@ -10,7 +10,7 @@ import { createAuth, networkAllowed, isLan } from '../lib/auth.mjs'
 import { botIdOf } from '../lib/service.mjs'
 import { qrSvg } from '../lib/qr.mjs'
 import { audioFormat } from '../lib/audio.mjs'
-import { createMobileService, createFakeDsh, startMockOneBot, buildWav, pluginSource, version, pause, until } from './helpers.mjs'
+import { hostTest, createMobileService, createFakeDsh, startMockOneBot, buildWav, pluginSource, version, pause, until } from './helpers.mjs'
 
 const OWNER = '10000001', BOT = '20000002', CHAT = `private:${OWNER}`
 async function freePort() {
@@ -104,7 +104,7 @@ test('远程默认关：实际 socket、IPv4/IPv6、伪造转发头、显式开�
   assert.equal(networkAllowed(req('203.0.113.8'), true), true)
 })
 
-test('网页版静态资源与跨天历史：类型、安全头、网络边界、分页和聊天隔离', { timeout: 15000 }, async () => {
+hostTest('网页版静态资源与跨天历史：类型、安全头、网络边界、分页和聊天隔离', { timeout: 15000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'aurabot-mobile-web-'))
   const port = await freePort(), base = `http://127.0.0.1:${port}`
   const md5 = '1234567890abcdef1234567890abcdef'
@@ -192,7 +192,7 @@ test('网页版静态资源与跨天历史：类型、安全头、网络边界�
   } finally { await service.dispose(); rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('社区模块通过真实 HTTP/WS 进入原 hub 会话，面板可撤销', { timeout: 45000 }, async (t) => {
+hostTest('社区模块通过真实 HTTP/WS 进入原 hub 会话，面板可撤销', { timeout: 45000 }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'aurabot-mobile-'))
   process.env.AURABOT_DATA_DIR = dir; process.env.AURABOT_WORKSPACE = join(dir, 'workspace')
   const port = await freePort(), base = `http://127.0.0.1:${port}`
