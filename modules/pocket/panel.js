@@ -17,6 +17,8 @@ return function Panel({ settings, save, toast }) {
   const [net, setNet] = useState(null)
   const [tunBusy, setTunBusy] = useState(false)
   const [svcBusy, setSvcBusy] = useState(false)
+  const [tnToken, setTnToken] = useState('')
+  const [tnHost, setTnHost] = useState('')
   const tone = TONES.some((t) => t.id === settings?.tone) ? settings.tone : 'ocean'
   const token = String(settings?.token || '')
 
@@ -98,8 +100,31 @@ return function Panel({ settings, save, toast }) {
     setTunBusy(false)
   }
 
+  // 固定域名隧道：token / 域名一起提交，模块内先存再启动，避免「保存了但启动读到的是旧值」
+  const saveNamed = async () => {
+    const tok = tnToken.trim()
+    const hostRaw = tnHost.trim()
+    if (!tok && !tun.tokenSet) return toast('先填隧道 token：Cloudflare 创建隧道时复制的那串 eyJ…')
+    if (!hostRaw && !tun.host) return toast('还要填域名，比如 pocket.example.com（在 Cloudflare 那条隧道里配的 Public Hostname）')
+    setTunBusy(true)
+    try {
+      const payload = { action: 'start' }
+      if (tok) payload.tunnelToken = tok
+      if (hostRaw) payload.tunnelHost = hostRaw
+      const r = await call('/tunnel', payload)
+      if (r && r.ok === false) toast(r.message || '启动失败')
+      else toast((r && r.message) || (r && r.url ? '已启动：' + r.url : '已启动'))
+      setTnToken('')
+    } catch (e) {
+      toast('启动失败：' + (e && e.message ? e.message : e))
+    }
+    await reload()
+    setTunBusy(false)
+  }
+
   const cell = { border: '1px solid rgba(128,128,128,.3)', borderRadius: 8, padding: '5px 10px', fontSize: 13, fontFamily: 'monospace', wordBreak: 'break-all' }
   const sw = { width: 34, height: 34, borderRadius: 10, border: '2px solid transparent', cursor: 'pointer', padding: 0 }
+  const inp = { flex: '1 1 180px', minWidth: 0, padding: '6px 8px', borderRadius: 6, border: '1px solid rgba(128,128,128,.35)', background: 'transparent', color: 'inherit', fontSize: 12.5 }
 
   return h(ui.Card, { title: '口袋aurabot' },
     h('p', { className: 'ab-note' },
@@ -188,7 +213,49 @@ return function Panel({ settings, save, toast }) {
           ? h(ui.Btn, { onClick: () => { navigator.clipboard?.writeText(tunnelPair).then(() => toast('隧道地址已复制，填进 app 或手机浏览器打开')) } }, '复制隧道地址')
           : null,
         h('span', { className: 'ab-small ab-muted' },
-          !tun.installed ? '未安装 cloudflared' : tun.running ? (tunnelPair ? '运行中' : '连接中…') : '未启动'),
+          !tun.installed
+            ? '未安装 cloudflared'
+            : tun.running
+              ? tun.mode === 'named'
+                ? '固定域名运行中'
+                : tunnelPair
+                  ? '临时隧道运行中'
+                  : '连接中…'
+              : '未启动'),
+      ),
+      // 固定域名隧道：临时隧道每次重启换域名，手机里存的地址就废了 —— 这才是「昨天能连今天不能」的主因
+      h('div', { style: { marginTop: 10, padding: '8px 10px', borderLeft: '3px solid rgba(84,168,230,.55)', background: 'rgba(84,168,230,.07)', borderRadius: 6 } },
+        h('p', { className: 'ab-small', style: { margin: 0, fontWeight: 600 } },
+          '固定域名隧道（长期用，地址不会变）',
+          tun.mode === 'named'
+            ? h('span', { className: 'ab-small ab-muted', style: { fontWeight: 400 } }, ' · 已启用')
+            : null),
+        h('p', { className: 'ab-small ab-muted', style: { margin: '4px 0 0', lineHeight: 1.85 } },
+          '临时隧道（trycloudflare.com）每次重启都换一个新域名，手机里存的那条就失效了——这是「昨天还能连、今天连不上」最常见的原因，不是网络问题。有 Cloudflare 账号就换成固定域名：① dash.cloudflare.com → Zero Trust → Networks → Tunnels → Create a tunnel（Cloudflared），建好后复制那串 token；② 在这条隧道里 Add a public hostname，域名填你自己的（如 pocket.example.com），Service 填 http://localhost:' + port + '；③ 把 token 和域名填在下面，点「保存并启动」。以后重启电脑、重开模组，地址都不变。'),
+        h('div', { style: { display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' } },
+          h('input', {
+            type: 'password',
+            value: tnToken,
+            placeholder: tun.tokenSet ? '已保存 token（留空＝不改）' : '隧道 token（eyJ…）',
+            onInput: (e) => setTnToken(e.target.value),
+            style: inp,
+          }),
+          h('input', {
+            value: tnHost,
+            placeholder: tun.host || 'pocket.example.com',
+            onInput: (e) => setTnHost(e.target.value),
+            style: inp,
+          }),
+          h(ui.Btn, { onClick: saveNamed, disabled: tunBusy }, tunBusy ? '处理中…' : '保存并启动'),
+        ),
+        tun.mode === 'named'
+          ? h('p', { className: 'ab-small ab-muted', style: { margin: '6px 0 0' } },
+              tun.running && tun.url
+                ? '固定域名：' + tun.url + '（运行中，重启电脑也不会变）'
+                : tun.host
+                  ? '固定域名：https://' + tun.host + '（已配置，未启动）'
+                  : '已填 token，但还没填域名')
+          : null,
       ),
       !tun.installed
         ? h('p', { className: 'ab-small ab-muted', style: { marginTop: 6 } },

@@ -9,7 +9,7 @@
 // 安全边界：接口全要配对密钥；消息只能注入主人私聊，不能发给别人、不能操作群。
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, statSync, unlinkSync } from 'node:fs'
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, statSync, unlinkSync, createWriteStream } from 'node:fs'
 import { join, extname, normalize, sep } from 'node:path'
 import { homedir, networkInterfaces, tmpdir } from 'node:os'
 import { createServer } from 'node:http'
@@ -17,7 +17,7 @@ import { spawn, execFileSync } from 'node:child_process'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 
 const RING_MAX = 500
-const VERSION = '1.4.8'
+const VERSION = '1.4.9'
 const DEFAULT_PORT = 7788
 const MAX_MEDIA_BYTES = 12 * 1024 * 1024
 
@@ -411,13 +411,15 @@ export default {
   minPluginVersion: '1.2.0',
   requires: [],
   capabilities: ['filesystem', 'plugin-config', 'plugin-internals', 'network', 'process'],
-  defaults: { enabled: false, token: '', port: DEFAULT_PORT, tone: 'ocean', tunnelAuto: false },
+  defaults: { enabled: false, token: '', port: DEFAULT_PORT, tone: 'ocean', tunnelAuto: false, tunnelToken: '', tunnelHost: '' },
   panel: 'panel.js',
   settings: [
     { key: 'enabled', label: '启用手机接口', type: 'switch', hint: '关掉后 app 连不上（QQ 端不受影响）' },
     { key: 'port', label: '服务端口', type: 'number', hint: `手机连的端口，默认 ${DEFAULT_PORT}；改了要重启插件` },
     { key: 'token', label: '配对密钥', type: 'string', hint: '留空自动生成；换掉之后所有设备要重新配对' },
     { key: 'tone', label: '图标色调', type: 'string', hint: '手机端配色：ocean/sakura/mint/grape/sunset/moon/abyss/rose' },
+    { key: 'tunnelToken', label: '固定隧道 Token（可选）', type: 'string', hint: 'Cloudflare Zero Trust 里创建隧道后复制的 token；填了就走固定域名，地址不再每次都变' },
+    { key: 'tunnelHost', label: '固定隧道域名（可选）', type: 'string', hint: '隧道里配的 Public Hostname，如 pocket.example.com（不要写 https://）' },
   ],
 
   setup(api) {
@@ -874,22 +876,53 @@ export default {
       return found
     }
 
+    // ---- 固定域名隧道（Cloudflare named tunnel）----
+    // 临时隧道（trycloudflare.com）每次重启都换域名，手机里存的那条就失效了 —— 这是
+    // 「昨天还能连、今天连不上」最常见的原因。填了 token + 域名就走 named tunnel，地址恒定。
+    const namedToken = () => String(s().tunnelToken || '').trim()
+    const namedHost = () =>
+      String(s().tunnelHost || '')
+        .trim()
+        .replace(/^https?:\/\//i, '')
+        .replace(/：/g, ':')
+        .replace(/\/+$/, '')
+        .replace(/\s+/g, '')
+        .toLowerCase()
+
     function tunnelInfo() {
       const saved = readTunnelFile()
       const alive = cfRunning()
-      // 地址来源优先级：本进程抓到的 → pid 存活时存盘的 → 外部启动时写进日志的
-      let url = tunnelUrl || ''
-      if (!url && saved.pid && pidAlive(saved.pid)) url = String(saved.url || '')
-      if (!url && alive) url = urlFromLog()
-      if (url) tunnelUrl = url
+      const tok = namedToken()
+      const host = namedHost()
+      const mode = tok ? 'named' : 'quick'
+      let url = ''
+      if (mode === 'named') {
+        // 固定域名：地址就是配好的域名，不用从日志里捞
+        url = host ? `https://${host}` : ''
+      } else {
+        // 地址来源优先级：本进程抓到的 → pid 存活时存盘的 → 外部启动时写进日志的
+        url = tunnelUrl || ''
+        if (!url && saved.pid && pidAlive(saved.pid)) url = String(saved.url || '')
+        if (!url && alive) url = urlFromLog()
+        if (url) tunnelUrl = url
+      }
+      // named 模式必须确认「现在跑的就是 named 那条」，否则会把上一条 quick 的遗留进程当成自己的
+      const running =
+        mode === 'named'
+          ? !!tunnelProc || (alive && saved.mode === 'named' && saved.url === url)
+          : !!tunnelProc || (alive && !!url)
       return {
         ok: true,
         installed: !!findCloudflared(),
-        running: !!tunnelProc || (alive && !!url),
-        url: alive ? url : '',
+        running,
+        // named 模式的地址由配置决定，跟是否在跑无关 —— 未启动时也给出来，面板才好显示「将使用哪个域名」
+        url: mode === 'named' ? url : running ? url : '',
         error: tunnelErr,
         pid: tunnelProc?.pid || saved.pid || 0,
         auto: s().tunnelAuto === true,
+        mode,
+        host,
+        tokenSet: !!tok,
       }
     }
 
@@ -929,8 +962,17 @@ export default {
           message: '没找到 cloudflared：去 https://github.com/cloudflare/cloudflared/releases/latest 下载 cloudflared-windows-amd64.exe，随便放个位置（比如 C:\\Users\\你\\auratools\\bin\\），然后在面板设置里把路径填进「cloudflaredPath」；或直接放进 PATH。',
         }
       }
+      const tok = namedToken()
+      const host = namedHost()
+      if (tok && !host) {
+        return {
+          ok: false,
+          message: `填了固定隧道 token，但没填域名：到 Cloudflare 该隧道里加一条 Public Hostname（域名 → http://localhost:${port()}），再把那个域名填进「固定隧道域名」。`,
+        }
+      }
       tunnelUrl = ''
       tunnelErr = ''
+      if (tok) return await startNamed(exe, tok, host)
       // detached + unref：DSH 退出/模组热重载都不带走隧道，重开面板照样能认出来
       const p = spawn(exe, ['tunnel', '--url', `http://127.0.0.1:${port()}`, '--no-autoupdate'], {
         windowsHide: true,
@@ -974,6 +1016,60 @@ export default {
       return { ok: false, message: tunnelErr || '隧道没能起来' }
     }
 
+    /**
+     * 固定域名隧道：token 走环境变量（不出现在命令行，任务管理器里看不到），
+     * 就绪判断不用日志（detached 后管道不可靠），而是直接拿公网域名探 /api/health ——
+     * 顺带验证了 DNS 已生效、CF 的 Public Hostname 指向了本机端口。
+     */
+    async function startNamed(exe, tok, host) {
+      const target = `https://${host}`
+      let out = null
+      try {
+        out = createWriteStream(join(api.dataDir(), 'tunnel.log'), { flags: 'a' })
+      } catch {}
+      const p = spawn(exe, ['tunnel', 'run', '--no-autoupdate'], {
+        windowsHide: true,
+        detached: true,
+        stdio: ['ignore', out || 'ignore', out || 'ignore'],
+        env: { ...process.env, TUNNEL_TOKEN: tok },
+      })
+      try {
+        p.unref()
+      } catch {}
+      tunnelProc = p
+      tunnelUrl = target
+      p.on('exit', (code) => {
+        if (tunnelProc === p) {
+          tunnelProc = null
+          tunnelErr = code ? `隧道进程退出了（code ${code}）` : ''
+        }
+      })
+      p.on('error', (e) => {
+        if (tunnelProc === p) {
+          tunnelProc = null
+          tunnelErr = '启动失败：' + (e?.message || e)
+        }
+      })
+      try {
+        writeFileSync(tunnelFile(), JSON.stringify({ url: target, pid: p.pid, at: Date.now(), mode: 'named' }))
+      } catch {}
+      for (let i = 0; i < 12; i++) {
+        await new Promise((r) => setTimeout(r, 2500))
+        if (tunnelProc !== p) return { ok: false, mode: 'named', message: tunnelErr || '隧道进程退出了，详情看面板上的报错或 tunnel.log' }
+        try {
+          const r = await fetch(`${target}/api/health`, { signal: AbortSignal.timeout(5000) })
+          if (r.ok) return { ok: true, mode: 'named', url: target, message: '固定域名隧道已连通：' + target }
+        } catch {}
+      }
+      return {
+        ok: true,
+        mode: 'named',
+        url: target,
+        message:
+          `隧道进程起来了，但 30 秒内没能从公网访问到 ${target}。两种常见原因：① 域名刚绑，解析还没生效（等 1–2 分钟再试）；② Cloudflare 里那条 Public Hostname 的 Service 没填 http://localhost:${port()}。`,
+      }
+    }
+
     function tunnelStop() {
       const saved = readTunnelFile()
       const targets = new Set([tunnelProc?.pid].filter(Boolean))
@@ -1013,7 +1109,18 @@ export default {
     })
     api.route('/tunnel', async (req) => {
       const b = await bodyOf(req).catch(() => ({}))
-      if (b.action === 'start') return tunnelStart()
+      if (b.action === 'start') {
+        // 面板连 token / 域名一起提交，省掉「先保存、再启动」的时序问题
+        const patch = {}
+        if (typeof b.tunnelToken === 'string') patch.tunnelToken = b.tunnelToken.trim()
+        if (typeof b.tunnelHost === 'string') patch.tunnelHost = b.tunnelHost.trim()
+        if (Object.keys(patch).length) {
+          api.saveSettings(patch)
+          // 换了配置先把在跑的收掉，否则 named 与 quick 会同时占着出口
+          if (cfRunning()) tunnelStop()
+        }
+        return tunnelStart()
+      }
       if (b.action === 'stop') return tunnelStop()
       return tunnelInfo()
     })
