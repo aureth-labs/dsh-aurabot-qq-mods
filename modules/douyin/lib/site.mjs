@@ -113,6 +113,25 @@ export const VERIFY_PROBE = `(() => {
   return t || '页面弹了验证码'
 })()`
 
+/**
+ * 私信分享接口的回执校验：HTTP 200 不等于成功。
+ * - 带 x-tt-verify-passport-decision：账号被要求验证；
+ * - 没有 status_code 或不是数字：发送结果不确定（不能当成功，也不能重试造成重复）；
+ * - status_code 明确为 0：成功；非 0：业务失败。
+ */
+export function checkShareReceipt(r) {
+  if (!r) throw new Error('点了分享，但没等到抖音私信的回应')
+  if (r.status !== 200) throw new Error(`抖音私信没发出去（HTTP ${r.status}）`)
+  const headers = Object.fromEntries(Object.entries(r.headers || {}).map(([k, v]) => [k.toLowerCase(), v]))
+  if (headers['x-tt-verify-passport-decision']) throw Object.assign(new Error('抖音拦下了分享并返回账号验证标记，请在手机抖音检查账号安全或实名状态'), { code: 'verify' })
+  const raw = r.json?.status_code
+  if (raw === undefined || raw === null) throw Object.assign(new Error('分享回执里没有 status_code，发送结果不确定'), { code: 'share_uncertain' })
+  const code = Number(raw)
+  if (!Number.isFinite(code)) throw Object.assign(new Error('分享回执的 status_code 不是数字，发送结果不确定'), { code: 'share_uncertain' })
+  if (code !== 0) throw Object.assign(new Error(r.json?.status_msg || `分享失败（${code}）`), { code })
+  return { ok: true }
+}
+
 export function createSite({ browser, log }) {
   const b = browser
 
@@ -188,7 +207,23 @@ export function createSite({ browser, log }) {
 
   // 弹层播放器里正在播的那个视频（带着视频 id），点赞 / 评论按钮都只在它里面找，不会点到别的视频上
   const scope = (id) => `[data-e2e="feed-active-video"][data-e2e-vid="${id}"]`
-  const EDITOR = '.comment-input-inner-container [contenteditable="true"]'
+  // 页面改版时这些结构会换 class：主选择器保持原样，后面几组是兜底（不会改变原本能用的路径）。
+  const LIKE_SELECTORS = [
+    '[data-e2e="video-player-digg"]',
+    '[data-e2e="feed-digg-icon"]',
+    '[class*="video-player-digg"]',
+    '[data-e2e*="digg"]',
+    'button[data-e2e*="like"]',
+    '[role="button"][aria-label*="赞"]',
+  ]
+  const COMMENT_BOX = '.comment-input-inner-container, [class*="comment-input-inner-container"], [data-e2e="comment-input"]'
+  const EDITOR = [
+    '.comment-input-inner-container [contenteditable="true"]',
+    '[class*="comment-input-inner-container"] [contenteditable="true"]',
+    '[data-e2e="comment-input"] [contenteditable="true"]',
+    '.comment-input-inner-container textarea',
+    '[data-e2e="comment-input"] textarea',
+  ].join(', ')
 
   /**
    * 用弹层播放器打开视频（和网页上点开一个视频一样；她真的在看，抖音那边也记成看过）。
@@ -213,9 +248,14 @@ export function createSite({ browser, log }) {
   /** 点赞：已经赞过就不点（再点会变成取消）；点完等接口确认。 */
   async function like(id) {
     await openVideo(id)
-    const sel = `${scope(id)} [data-e2e="video-player-digg"]`
-    const btn = await b.waitFor(sel, 10000)
-    if (!btn) throw new Error('页面上找不到点赞按钮')
+    // 主选择器先等 10 秒；没有再用页面改版后的兜底选择器各等一会儿
+    let sel = ''
+    let btn = null
+    for (let i = 0; i < LIKE_SELECTORS.length && !btn; i++) {
+      sel = `${scope(id)} ${LIKE_SELECTORS[i]}`
+      btn = await b.waitFor(sel, i === 0 ? 10000 : 1200)
+    }
+    if (!btn) throw Object.assign(new Error(`页面上找不到点赞按钮（试过 ${LIKE_SELECTORS.length} 种选择器）`), { code: 'selector' })
     if (/digged/.test(btn.state) && !/no-digged/.test(btn.state)) return { ok: true, already: true }
     const resp = b.waitResponse(/\/aweme\/v1\/web\/commit\/item\/digg\//, 10000)
     await b.press(sel)
@@ -232,13 +272,13 @@ export function createSite({ browser, log }) {
   async function focusEditor(id) {
     // 评论按钮是开 / 关切换：右边面板留在别的标签页时，第一下可能是把它关上，没出来就再点一下
     // （面板加载慢，等够了再点第二下，不然会把刚打开的又关上）
-    for (let i = 0; i < 2 && !(await b.evaluate(`Boolean(document.querySelector('.comment-input-inner-container'))`)); i++) {
+    for (let i = 0; i < 2 && !(await b.evaluate(`Boolean(document.querySelector(${JSON.stringify(COMMENT_BOX)}))`)); i++) {
       if (!(await b.press(`${scope(id)} [data-e2e="feed-comment-icon"]`))) throw new Error('页面上找不到评论按钮')
-      await b.waitFor('.comment-input-inner-container', 7000)
+      await b.waitFor(COMMENT_BOX, 7000)
     }
-    if (!(await b.evaluate(`Boolean(document.querySelector('.comment-input-inner-container'))`))) throw new Error('评论框没打开')
+    if (!(await b.evaluate(`Boolean(document.querySelector(${JSON.stringify(COMMENT_BOX)}))`))) throw new Error('评论框没打开')
     for (let i = 0; i < 4; i++) {
-      await b.press('.comment-input-inner-container')
+      await b.press(COMMENT_BOX)
       await sleep(300)
       const ok = await b.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(EDITOR)}); if (!e) return false; e.focus(); return document.activeElement === e })()`)
       if (ok) return
@@ -252,7 +292,7 @@ export function createSite({ browser, log }) {
    */
   async function mention(who) {
     await b.type('@' + who.nickname)
-    const want = JSON.stringify({ secUid: who.secUid, uid: who.uid })
+    const want = JSON.stringify({ secUid: who.secUid, uid: who.uid, nickname: who.nickname })
     let picked = null
     for (let i = 0; i < 12 && !picked?.ok; i++) {
       await sleep(500)
@@ -266,16 +306,29 @@ export function createSite({ browser, log }) {
           }
           return null
         }
-        const box = document.querySelector('.atBox-inner-container')
+        const box = document.querySelector('.atBox-inner-container, [class*="atBox-inner-container"]')
         if (!box) return { ok: false }
-        const hit = [...box.querySelectorAll('div')].reverse().find((n) => { const m = of(n); return m && ((want.secUid && m.sec === want.secUid) || (want.uid && m.uid === want.uid)) })
+        const visible = (n) => { const r = n.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+        // 首选按 React props 里的 sec_uid / uid 认人；页面改版拿不到 props 时按候选文字兜底。
+        const hit = [...box.querySelectorAll('div,li')].reverse().find((n) => {
+          if (!visible(n)) return false
+          const m = of(n)
+          if (m && ((want.secUid && m.sec === want.secUid) || (want.uid && m.uid === want.uid))) return true
+          const text = (n.innerText || '').replace(/\s+/g, ' ').replace(/\u00a0/g, ' ').trim()
+          const name = '@' + want.nickname
+          // 候选行后面常跟粉丝数 / 认证说明：允许后缀和空白，不能只认完全相等。
+          return text === name || text.startsWith(name + ' ') || text.startsWith(name + '·') || text.startsWith(name + '　')
+        })
         if (!hit) return { ok: false, listed: true }
-        for (const t of ['mouseover', 'mouseenter', 'mousedown', 'mouseup', 'click']) hit.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window, button: 0 }))
+        // 只做记号，点击交给 CDP 真鼠标：以前在页面里 dispatchEvent，平台改版后可能不认。
+        document.querySelectorAll('[data-aurabot="mention"]').forEach((n) => n.removeAttribute('data-aurabot'))
+        hit.setAttribute('data-aurabot', 'mention')
         return { ok: true }
       })()`).catch(() => null)
+      if (picked?.ok) await b.press('[data-aurabot="mention"]')
     }
     await sleep(400)
-    const tagged = await b.evaluate(`[...document.querySelectorAll(${JSON.stringify(EDITOR + ' .douyin_mention_word')})].some((n) => n.innerText.trim() === ${JSON.stringify('@' + who.nickname)})`).catch(() => false)
+    const tagged = await b.evaluate(`[...document.querySelectorAll('.douyin_mention_word')].some((n) => n.innerText.trim() === ${JSON.stringify('@' + who.nickname)})`).catch(() => false)
     if (picked?.ok && tagged) return true
     await clearEditor()
     throw Object.assign(new Error(picked?.listed ? '@ 候选里没找到主人（可能互相没关注）' : '@ 候选没弹出来'), { code: 'mention' })
@@ -294,10 +347,20 @@ export function createSite({ browser, log }) {
     await sleep(500 + Math.random() * 800)
     // 发送：点评论框右边的红色箭头（打了字才出现，是那一排图标里最右边的一个）。页面看不见时回车不管用，所以不靠回车
     const marked = await b.evaluate(`(() => {
-      let bar = document.querySelector('.comment-input-inner-container')
+      // 发送按钮只允许在当前评论框容器里找：页面上别处也有「发送」按钮（私信等），不能误点。
+      const root = document.querySelector(${JSON.stringify(COMMENT_BOX)})
+      if (!root) return false
+      const scope = root.closest(${JSON.stringify(COMMENT_BOX)}) || root
+      let bar = scope
       for (let i = 0; i < 3 && bar; i++) bar = bar.parentElement
-      const icons = bar ? [...bar.querySelectorAll('span')].filter((n) => n.querySelector('svg') && n.getBoundingClientRect().width > 10) : []
-      const send = icons.sort((x, y) => x.getBoundingClientRect().x - y.getBoundingClientRect().x).at(-1)
+      const usable = (n) => {
+        const r = n.getBoundingClientRect()
+        return r.width > 0 && r.height > 0 && !n.disabled && n.getAttribute('aria-disabled') !== 'true' && !n.closest('[disabled],[aria-disabled="true"]')
+      }
+      // 先找带明确标记 / aria 文案的发送按钮；没有再用原来的「输入框上方那排图标最右边」启发式。
+      const explicit = [...scope.querySelectorAll('[data-e2e="comment-submit"], [data-e2e="comment-post"], [data-e2e="comment-publish"], button[aria-label*="发送"], button[aria-label*="发布"], [role="button"][aria-label*="发送"]')].find(usable) || null
+      const icons = bar ? [...bar.querySelectorAll('span')].filter((n) => n.querySelector('svg') && usable(n)) : []
+      const send = explicit || icons.sort((x, y) => x.getBoundingClientRect().x - y.getBoundingClientRect().x).at(-1)
       if (send) send.setAttribute('data-aurabot', 'send')
       return Boolean(send)
     })()`).catch(() => false)
@@ -379,8 +442,7 @@ export function createSite({ browser, log }) {
       const resp = b.waitResponse(sent, 12000)
       await b.press('[data-aurabot="share-to"]')
       const r = await resp
-      if (!r) throw new Error('点了分享，但没等到抖音私信的回应')
-      if (r.status !== 200) throw new Error(`抖音私信没发出去（HTTP ${r.status}）`)
+      checkShareReceipt(r)
     }
     return { ok: true, already }
   }

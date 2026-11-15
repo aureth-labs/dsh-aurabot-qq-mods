@@ -4,13 +4,14 @@ const __lib = globalThis.aurabot.lib // 插件内部源码（复制出来后靠�
 
 import { createDouyin } from './lib/duty.mjs'
 import { SHARE_TEXT_DEFAULTS, SHARE_TEXT_SETTINGS } from './lib/share-settings.mjs'
+const VERSION = '2.3.9'
 const { defineTool, str } = __lib('tools/tools.js')
 const { profileToolVisible, profilePermits } = __lib('chat/access.js')
 
 export default {
   id: 'douyin',
   name: '刷抖音',
-  version: '2.3.7',
+  version: VERSION,
   api: 1,
   description: '用专用浏览器刷抖音：看推荐、点赞评论，把好玩的视频分享给主人，也能看别人发来的抖音链接。',
   tab: 'douyin',
@@ -21,7 +22,7 @@ export default {
     // 主人的抖音号只由「核对」写入（面板存配置时不能直接改 secUid）
     const setOwner = (owner) => api.setConfig((cur) => ({ ...cur, douyin: { ...cur.douyin, owner } }))
     // 出站治理面：旧主仓没有 api.proactive 时为 undefined，duty 内部可选链降级回 hub.sendText。
-    const dy = createDouyin({ getConfig: api.config, getSettings: api.settings, setOwner, hub, memory: api.lazy('memory'), log: api.log, proactive: api.proactive })
+    const dy = createDouyin({ getConfig: api.config, getSettings: api.settings, setOwner, hub, memory: api.lazy('memory'), log: api.log, proactive: api.proactive, version: VERSION })
     api.every(60_000, () => dy.tick(), '刷抖音')
     api.onDispose(() => dy.dispose())
 

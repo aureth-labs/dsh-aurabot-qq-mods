@@ -10,6 +10,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { createBrowser } from './browser.mjs'
 import { createSite, findAwemeId, resolveShort, digestOf, videoLink } from './site.mjs'
 import { normalizeShareTextOptions } from './share-settings.mjs'
+import { describeFailure } from './failure.mjs'
 
 const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 const between = (lo, hi) => Math.floor(lo + Math.random() * (Math.max(lo, hi) - lo + 1))
@@ -38,10 +39,12 @@ const emptyState = () => ({
   dmSeen: [], dmInit: false, lastDmCheck: 0, // 主人抖音私信：看过的消息 id；第一次看时旧消息只记下不回
 })
 
-export function createDouyin({ getConfig, getSettings, setOwner, hub, memory, log, site: injected, browser: injectedBrowser, proactive, now = Date.now, wait } = {}) {
+export function createDouyin({ getConfig, getSettings, setOwner, hub, memory, log, site: injected, browser: injectedBrowser, proactive, version = '', now = Date.now, wait } = {}) {
   const cfg = () => getConfig().douyin
   // 模块自己的设置（config.ext.douyin）：面板自动表单存的就是这里。旧宿主没有 api.settings 时返回默认值。
   const shareTextOptions = () => normalizeShareTextOptions(getSettings?.() || {})
+  // 用户报失败时日志里要能看出模块版本（面板 / 市场里的版本号可能不是最新的）
+  const logTag = () => `[douyin${version ? ' v' + version : ''}]`
   const sleep = wait || ((ms) => new Promise((r) => setTimeout(r, ms)))
   const source = new AsyncLocalStorage()
   const browser = injectedBrowser || (injected ? null : createBrowser({ profileDir: dataDir('douyin', 'edge-profile'), browserPath: () => cfg().browserPath, log, now, useEgo: () => getConfig().browser?.useDshSidebar === true }))
@@ -73,7 +76,7 @@ export function createDouyin({ getConfig, getSettings, setOwner, hub, memory, lo
    * 档位回 unsupported 或没给投递单号时，退回旧的 hub.sendText 直发。
    * 返回「确认发出」的真假，语义与旧 sendText 真值判断一致（被拦/失败是 null → 假）。
    */
-  async function sendOwnerQQ(to, text, itemId, logTag) {
+  async function sendOwnerQQ(to, text, itemId, tag) {
     // 试运行只记日志：别把「本来要发」的东西真的提交进宿主账本（账本可能会真投递）
     if (!getConfig().dryRun && proactive?.submit) {
       try {
@@ -83,13 +86,13 @@ export function createDouyin({ getConfig, getSettings, setOwner, hub, memory, lo
           return ['sent', 'sending', 'pending'].includes(String(r.state || ''))
         }
       } catch (error) {
-        log.warn(`${logTag}经 api.proactive 提交失败，回退直发：`, error.message)
+        log.warn(`${tag}经 api.proactive 提交失败，回退直发：`, error.message)
       }
     }
     try {
       return Boolean(await hub.sendText?.(to, text))
     } catch (error) {
-      log.warn(`${logTag}直发失败：`, error.message)
+      log.warn(`${tag}直发失败：`, error.message)
       return false
     }
   }
@@ -163,8 +166,9 @@ export function createDouyin({ getConfig, getSettings, setOwner, hub, memory, lo
       record(s, { kind, ...meta, ...(r?.atOwner ? { atOwner: true } : {}) })
       return { ok: true, already: Boolean(r?.already), atOwner: Boolean(r?.atOwner) }
     } catch (error) {
-      log.warn(`抖音${NAME[kind]}失败：`, error.message)
-      record(s, { kind: 'error', ...meta, text: `${NAME[kind]}没成功：${error.message}` })
+      const f = describeFailure(`抖音${NAME[kind]}`, error, meta)
+      log.warn(`${logTag()} ${f.text}`)
+      record(s, { kind: 'error', ...meta, text: `${NAME[kind]}没成功[${f.kind}]：${error.message}` })
       if (error.code === 'verify' || error.code === 'login' || STOP_RE.test(error.message)) pauseAll(s, error.message)
       return { ok: false, message: error.message }
     }
@@ -286,8 +290,9 @@ export function createDouyin({ getConfig, getSettings, setOwner, hub, memory, lo
           // 卡片真的发出去了才补话；already = 这个视频之前就分享过，不再重复补。
           if (!card?.already) await sendShareText(s, v, text, who)
         } catch (error) {
-          log.warn('抖音里分享给主人失败：', error.message)
-          record(s, { kind: 'error', awemeId: v.awemeId, title: v.title, author: v.author, text: `抖音里分享没成功：${error.message}${g.ownerQQ ? '，改发 QQ' : ''}` })
+          const f = describeFailure('抖音里分享给主人', error, { awemeId: v.awemeId })
+          log.warn(`${logTag()} ${f.text}`)
+          record(s, { kind: 'error', awemeId: v.awemeId, title: v.title, author: v.author, text: `抖音里分享没成功[${f.kind}]：${error.message}${g.ownerQQ ? '，改发 QQ' : ''}` })
           if (error.code === 'verify' || STOP_RE.test(error.message)) pauseAll(s, error.message)
         }
       }
@@ -568,8 +573,9 @@ export function createDouyin({ getConfig, getSettings, setOwner, hub, memory, lo
       memory?.addEvent?.({ text: `在抖音给${u.nickname}发了私信：${say.slice(0, 50)}`, tags: ['抖音'], importance: 0.4 })
       return { ok: true, message: `发给「${u.nickname}」了`, nickname: u.nickname }
     } catch (error) {
-      log.warn('主动发抖音私信没成：', error.message)
-      record(s, { kind: 'error', text: '主动私信没发成：' + error.message })
+      const f = describeFailure('主动发抖音私信', error)
+      log.warn(`${logTag()} ${f.text}`)
+      record(s, { kind: 'error', text: `主动私信没发成[${f.kind}]：` + error.message })
       return { ok: false, message: '没发成：' + error.message }
     } finally {
       save(s)
@@ -723,8 +729,9 @@ export function createDouyin({ getConfig, getSettings, setOwner, hub, memory, lo
     } catch (error) {
       // 发过一部分或发送状态不确定时不整轮重试，避免前半句或整句重复。
       if (sent > 0 || error.code === 'dm_uncertain') await done()
-      log.warn('看 / 回主人抖音私信出错：', error.message)
-      record(s, { kind: 'error', text: '私信没回成：' + error.message })
+      const f = describeFailure('看 / 回主人抖音私信', error)
+      log.warn(`${logTag()} ${f.text}`)
+      record(s, { kind: 'error', text: `私信没回成[${f.kind}]：` + error.message })
       return { ok: false, message: error.message }
     } finally {
       save(s)
@@ -845,6 +852,7 @@ export function createDouyin({ getConfig, getSettings, setOwner, hub, memory, lo
     const s = load()
     const c = cfg()
     return {
+      version,
       runs: s.runs, watched: s.watched, like: s.like, comment: s.comment, share: s.share, writes: s.writes,
       atOwner: s.atOwner, owner: ownerDy() ? { nickname: ownerDy().nickname } : null,
       caps: { like: capOf(s, 'like'), comment: capOf(s, 'comment'), share: capOf(s, 'share'), atOwner: capOf(s, 'atOwner'), writes: isNew(s) ? Math.floor(c.gate.maxWritesPerDay / 2) : c.gate.maxWritesPerDay },
