@@ -1,75 +1,72 @@
-# dsh-aurabot-qq-mods
+# 真实定位卡片（real-loc）
 
-Aurabot 插件（[dsh-aurabot-qq](https://github.com/accomplish07zrh-eng/dsh-aurabot-qq)）的**模块市场**：面板「模块市场」里能装的模块都在这里。
+把「人在哪儿」发成一条**能点开地图的真实位置卡片**，而不是一段文字、一张截图。
 
-- 想用模块：在 Aurabot 面板打开「模块市场」，点安装。插件 1.2.0 起支持。
-- 想看有哪些：[模块目录](modules/README.md)。
-- 想写一个：[提交教程](docs/TUTORIAL.md)。
+她需要发定位时，这个模块给她一个工具 `loc_send`：按地名、按门牌、或按坐标，拼出 QQ 能正常显示的定位卡。坐标走的不是猜的：WGS84 的原始点位经 GCJ02 纠偏后再落卡，成都市区的偏移量约 −0.0024 纬度 / +0.0025 经度，落在图上就是那条街，不是隔壁那条。
 
-```
-modules/<id>/         模块，一个模块一个文件夹，不按分类分层
-modules/README.md     模块目录，按分类排列，自动生成
-pet-pack/             桌宠默认素材包
-docs/TUTORIAL.md      第一次提交模块的教程
-docs/MODULE_SPEC.md   模块格式、分类、发布流程和索引格式
-scripts/              校验、打包、生成索引
-revoked.json          撤回的模块版本
-```
+## 怎么用
 
-- 想提交模块：看 [贡献指南](CONTRIBUTING.md)。
-- 模块经审核合并后，CI 自动打包发布到 Releases，索引在 `registry` 分支的 `index.json`。
+装好后不用配置也能用——内置 16 个成都真实点位（家、巷子、花园、便利店、菜市场、超市、咖啡馆、书店、商场、合江亭河边、公园、电影院、夜市、湖边、山里、海边），她会像「就在这附近」一样自然地说出来。
 
-## 许可范围
+- 私聊里让她发定位即可，她会自己调 `loc_send`。
+- 手动发卡：`/loc?spot=river`、`/loc?lat=30.6487&lon=104.0866`
+- 查地点：`/lookup?name=宋河东路122号`
+- 按名字出卡（全国任意地名）：`/here?name=温州宋河东路122号`
 
-本仓库内容的许可各不相同：
+## 需要两把 key 才查全国地名（可选）
 
-| 内容 | 许可 |
-|---|---|
-| `pet-pack/` | CC BY-NC-SA 4.0，见根目录 [LICENSE](LICENSE) 和下面的「署名与许可」 |
-| `modules/<id>/` | 各模块文件夹里自己的 `LICENSE` |
-| `scripts/`、`test/`、`docs/`、`.github/` 和仓库说明文档 | MIT，见 [scripts/LICENSE](scripts/LICENSE) |
+内置点位不需要 key。**要让「温州宋河东路122号」这种全国任意地名也能出卡，得配 key**：
 
-## 桌宠素材
+| 槽位 | 去哪申请 | 说明 |
+|---|---|---|
+| 高德 Key（主接口） | https://console.amap.com → 应用管理 → 新建应用 → 服务平台勾 **Web服务** → 拿到 Key | 主用，门牌号精度最好 |
+| 高德 Key（备用接口） | 同上，再建一把 | 主 key 失效（无效/超额/限流）时自动顶上 |
+| 天地图 tk | https://console.tianditu.gov.cn → 应用管理 → 新建 **服务端** 类型应用 → 拿 tk | 高德全挂时的兜底，只到道路级 |
 
-「Aurabot 桌宠」模块用的形象与动画素材。插件在启动时发现默认素材包缺失，
-会自动从本仓库下载 zip 并落位到本地数据目录，用户无需手动操作。
+配法：面板「已安装」页打开本模块，最上面三行就是。左标题右输入框，**已经填过的显示「已保存（不改就留空）」，留空不会覆盖**，所以换一把只改一行就行。每行右边有「清空」（带二次确认），下面「保存」和「三把一起自检」。
 
-## 目录结构
+也可以命令行配（等价于面板）：
 
 ```
-pet-pack/
-├── default-config.json          # 形象包配置（动画池、权重、物理参数）
-├── default-manifest.json        # 动画名 ↔ 文件编号对照表
-└── default-animation/
-    ├── anim-001.webm
-    ├── anim-002.webm
-    └── ...                      # 共 106 个 webm（VP9 + alpha，约 640×360）
+/key?slot=primary&value=你的高德key
+/key?slot=backup&value=备用高德key
+/key?slot=tdt&value=天地图tk
+/key?slot=primary&clear=1     ← 清空
+/selfcheck                     ← 三把分别打一次固定词，只报通不通/条数/精度，不发消息
 ```
 
-- 素材必须放在**文件夹里**（如 `pet-pack/`），不要摊在仓库根目录。
-- 插件按「哪一层里有 `default-animation/`」来定位包根，所以文件夹名可改（`pet-pack/`、`default/` 等均可），
-  但 `default-config.json`、`default-manifest.json`、`default-animation/` 三者必须同级。
-- 换了目录名或改了下载地址后，在插件面板「桌宠 → 素材包下载地址」填本仓库的 archive 直链即可：
-  `https://github.com/accomplish07zrh-eng/dsh-aurabot-qq-mods/archive/refs/heads/main.zip`
-  （国内网络可换成 Gitee 等镜像直链；也可调 `POST /packs/fetch-default` 手动重下。）
+key 只存在你这台机器上（模块设置里），不外发、不进日志、接口只回后四位。
 
-## 署名与许可
+## 会访问哪些网址
 
-- 形象与动画素材来源：**dsh-pet** 的 pet pack（作者 **PC2005-cloud**）。
-- 许可：**CC BY-NC-SA 4.0**（署名 · 非商业 · 相同方式共享）
-  <https://creativecommons.org/licenses/by-nc-sa/4.0/deed.zh-hans>
-- 作者声明原文：「大肥鱼是遵守 CC BY-NC-SA 4.0 协议的形象，不可以以任何形式商业化。」
+- `https://restapi.amap.com/v3/geocode/*`、`/v3/place/text`、`/v3/place/around`、`/v3/geocode/regeo` —— 地名转坐标、坐标转地址、门牌号插值（高德）
+- `http://api.tianditu.gov.cn/geocoder`、`/v2/search` —— 上面几个打不通时的兜底（天地图）
+- 除此之外不联任何第三方。
 
-因此：
+**注意**：查地名时，你输入的地名、或要反查的坐标会发给上面这两个服务（都是国内地图服务商）。内置 16 个点位不需要联网。
 
-- **可以**在署名、非商业、相同方式共享的前提下分发与修改（含本仓库、含随插件自动下载）。
-- **不可以**任何形式的商业化使用（含付费打包、付费分发、商业产品内置）。
-- 再分发（含镜像本仓库）必须保留上述署名与本许可声明，并以相同许可共享。
+另外本模块不发图片、不上传文件、不启动任何外部程序。
 
-完整许可条款见 [LICENSE](LICENSE)。插件侧的第三方声明见上游仓库的
-[THIRD-PARTY-NOTICES.md](https://github.com/accomplish07zrh-eng/dsh-aurabot-qq/blob/main/THIRD-PARTY-NOTICES.md)。
+## 文件
 
-## 说明
+```
+modules/real-loc/
+├── module.json          清单
+├── index.mjs            模块本体（载入即自校验署名）
+├── panel.js             控制面板（三个 key 槽位 + 自检）
+├── license.qfl          加密署名（必须和 index.mjs 同目录，删了就拒绝启动）
+├── README.md
+├── LICENSE              专有许可
+└── assets/
+    └── places.local.example.json   自定义点位的示例
+```
 
-- 本仓库采用「素材不进插件 git」的方式分发：素材体积约 53MB，放独立仓库可避免撑大插件仓库与 PR。
-- 素材文件为二进制 `.webm`，已在 `.gitattributes` 中标记为 binary，避免跨平台换行或 diff 噪音。
+`license.qfl` 是新作者署名文件，市场检查会给一条「建议放进 lib/」的提示——**它必须留在根目录**，模块载入时要按文件名读它，挪进子目录就校验失败。
+
+## 自定义点位（不动代码）
+
+`index.mjs` 里的点位表被署名摘要锁着，改代码会让授权校验失效、模块拒绝启动。要改成你自己的城市，用不锁的外挂文件：把 `assets/places.local.example.json` 复制到模块目录，改名 `places.local.json`，按 id 覆盖名字/坐标/门牌即可。
+
+## 许可
+
+著作权归「默默相伴澜」专有，详见同目录 `LICENSE`。允许通过模块市场安装并在这台机器上使用；禁止转售、改写后二次发行、或去除署名。
