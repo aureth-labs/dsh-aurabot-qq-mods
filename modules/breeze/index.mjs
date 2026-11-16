@@ -1,3 +1,4 @@
+import { createSynthQueue, fetchBreeze } from './lib/resilience.mjs'
 // Breeze Blue 在线语音：设置放在面板「语音」页最下面。
 // 不改插件核心：自己在 127.0.0.1 起一个小的 HTTP 语音服务，再把面板「语音」页的引擎
 // 设成插件本来就支持的「通用 HTTP」，地址指过来 —— 这样任何人都能直接用。
@@ -11,7 +12,7 @@ import { checkinAction, describeClaim, formatDate, looksLoggedIn, msUntil, nowMi
 export default {
   id: 'breeze',
   name: 'Breeze 语音',
-  version: '1.3.3',
+  version: '1.3.4',
   api: 1,
   description: 'Breeze Blue 在线文字转语音 + 每日自动签到领积分',
   tab: 'voice',
@@ -35,6 +36,7 @@ export default {
     const BRIDGE_PORT = 47653
     const BRIDGE_PORT_TRIES = 4
     let bridgeServer = null
+    let bridgeAbort = null
     let bridgePort = 0
     let restoreVoice = null
     // listen 是异步的：回调可能在模块被停掉之后才到。用「代际」判断这次回调还算不算数，
@@ -45,14 +47,16 @@ export default {
     /** 这份设置够不够开服务：要开、有 key、有音色 */
     const bridgeWanted = (s) => Boolean(s && s.on && String(s.apiKey || '').trim() && String(s.voiceId || '').trim())
 
+    const synthQueue = createSynthQueue()
+
     /** 调 Breeze 合成一段，返回 mp3 字节 */
-    async function synthMp3(text) {
+    async function synthMp3(text, signal) {
       const s = api.settings() || {}
       const apiKey = String(s.apiKey || '').trim()
       const voiceId = String(s.voiceId || '').trim()
       if (!apiKey || !voiceId) throw new Error('还没填 API Key 或音色 ID')
       const url = `${BREEZE_URL}/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=${OUTPUT_FORMAT}`
-      const res = await fetch(url, {
+      const res = await fetchBreeze(url, {
         method: 'POST',
         headers: { 'xi-api-key': apiKey, 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -61,12 +65,7 @@ export default {
           language_code: String(s.language || 'zh').trim() || 'zh',
           instructions: String(s.instructions || ''),
         }),
-        signal: AbortSignal.timeout(60000),
-      })
-      if (!res.ok) {
-        const t = await res.text().catch(() => '')
-        throw new Error(`Breeze HTTP ${res.status}：${t.slice(0, 160)}`)
-      }
+      }, { signal, log: api.log })
       const buf = Buffer.from(await res.arrayBuffer())
       if (buf.length < 400) throw new Error('Breeze 返回的音频太短')
       return buf
@@ -77,6 +76,8 @@ export default {
       const s = settings || api.settings() || {}
       if (bridgeServer || !bridgeWanted(s)) return
       const gen = ++bridgeGen
+      const lifetime = new AbortController()
+      bridgeAbort = lifetime
       const srv = http.createServer(async (req, res) => {
         const u = new URL(req.url || '/', 'http://127.0.0.1')
         const text = u.searchParams.get('text') || ''
@@ -86,7 +87,9 @@ export default {
           return
         }
         try {
-          const buf = await synthMp3(text)
+          const cancel = new AbortController()
+          res.on('close', () => { if (!res.writableEnded) cancel.abort(new Error('语音调用方已断开')) })
+          const buf = await synthQueue(signal => synthMp3(text, signal), AbortSignal.any([cancel.signal, lifetime.signal]))
           res.writeHead(200, { 'content-type': 'audio/mpeg', 'content-length': buf.length })
           res.end(buf)
         } catch (error) {
@@ -137,7 +140,7 @@ export default {
             voice: {
               enabled: true,
               engine: 'http',
-              http: { ...(v.http || {}), urlTemplate: `http://127.0.0.1:${port}/?text={text}`, method: 'GET', sampleRate: 24000 },
+              http: { ...(v.http || {}), urlTemplate: `http://127.0.0.1:${port}/?text={text}`, method: 'GET', sampleRate: 24000, fallback: 'edge' },
             },
           })
         } catch (error) {
@@ -150,6 +153,8 @@ export default {
     /** 关掉本地服务，并把引擎还原成开之前的（只还原成我们自己写的那种，别覆盖别人后改的设置） */
     function stopBridge() {
       bridgeGen++
+      bridgeAbort?.abort(new Error('Breeze 语音桥已停用'))
+      bridgeAbort = null
       if (bridgeServer) {
         try {
           bridgeServer.close()
