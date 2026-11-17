@@ -341,7 +341,8 @@ export default {
         const [closing, strength, word] = isClosing(msg.text, {})
         if (closing) {
           const wantSleep = strength === 'strong' || (cfg.closeSleepStrength === 'medium' && strength === 'medium')
-          if (wantSleep && cfg.allowSleep) {
+          // 白天看到「晚安/睡了」不能直接睡到次日：只有本来就处在疲劳时段才允许由收线触发睡眠。
+          if (wantSleep && cfg.allowSleep && energy.inFatigue(cfg)) {
             service.requestSleep('talk', ['午', '眯', '盹', '躺'].some((m) => word.includes(m)) ? 'noon' : 'night', msg.chatId)
           } else if (!ownerPrivate && strength !== 'weak') {
             // 「嗯 / 好 / 收到」这种短答不是收线，别拿它当理由闭嘴；

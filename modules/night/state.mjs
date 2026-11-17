@@ -247,6 +247,9 @@ export class NightService {
     if (target == null) return false
     const minute = energy.nowMinute(now)
     if (minute < target) return false
+    // 起床点已经过了就不再触发「最晚睡觉」兜底；否则 05:00/06:00 起床会被立刻按回去。
+    const wake = energy.parseHHMM(this.cfg.wakeTime || '08:00')
+    if (wake != null && minute >= wake) return false
     return minute - target <= 240
   }
 
