@@ -14,13 +14,25 @@ modules/<id>/
 ├── lib/            # 可选：实现文件，入口只放定义和接线
 ├── assets/         # 可选：模块自带的数据文件
 ├── docs/           # 可选：更长的说明
-├── test/           # 可选：测试，不进发布包
+├── test/           # 新模块必填：测试，不进发布包
 └── package.json    # 可选：有 npm 依赖、构建或测试时才要
 ```
 
 文件夹不按分类分层：永远是 `modules/<id>/`，分类写在 `module.json` 里。换分类不用搬目录，发布 tag 和安装路径也不变。
 
 文件夹名就是模块 id。`_` 和 `.` 开头的文件夹不发布。测试文件（`*.test.*`、`test/`、`tests/`、`fixtures/`）、`node_modules` 和 `package-lock.json` 不进发布包。
+
+### 测试
+
+新提交的模块要带 `test/` 目录和至少一个 `*.test.mjs`，`npm run check` 会检查（`--base` 判断「这次新增了哪些模块」，只对新增的强制）。搬过来的老模块不追溯。
+
+测试跑法：
+
+```sh
+node --test "modules/<id>/test/*.test.mjs"
+```
+
+测试要能在没有网络、没有用户真实数据的机器上跑：外部请求用假替身，数据目录用临时目录（`mkdtempSync`），别读 `~/.dsh` 下的真东西。CI 会把每个模块的 `test/` 都跑一遍。
 
 ## module.json
 
