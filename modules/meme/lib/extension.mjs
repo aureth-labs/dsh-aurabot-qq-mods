@@ -17,8 +17,8 @@ export function cachedExtension(dir) {
   } catch { return false; }
 }
 export class ExtensionManager {
-  constructor({ dir, runtimeDir = dir, engine, onCatalog, save, log, prepare, check=checkEnvironment }) {
-    Object.assign(this, { dir, runtimeDir, engine, onCatalog, save, log, check });
+  constructor({ dir, runtimeDir = dir, engine, onCatalog, save, log, prepare, check=checkEnvironment, downloadEnv=()=>({}) }) {
+    Object.assign(this, { dir, runtimeDir, engine, onCatalog, save, log, check, downloadEnv });
     this.installed=false; this.count=0; this.busy=false; this.error='';this.help=''; this.disposed=false; this.child=null; this.message='';this.received=0;this.operation='';
     this.prepare = prepare || (() => this.prepareFiles());
   }
@@ -63,7 +63,7 @@ export class ExtensionManager {
     await new Promise((resolve,reject)=>{
       const child=spawn(process.execPath,[join(this.dir,'scripts','prepare-python.mjs'),this.runtimeDir],{
         windowsHide:true, detached:process.platform!=='win32', stdio:['ignore','pipe','pipe'],
-        env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}
+        env:{...process.env,ELECTRON_RUN_AS_NODE:'1',...this.downloadEnv()}
       });
       this.child=child;
       let tail='';const output=b=>{tail=(tail+b).slice(-4000);};child.stderr.on('data',output);

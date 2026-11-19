@@ -1,0 +1,37 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { curlDownloadArgs, downloadEnv, downloadOptionsFromEnv, normalizeDownloadOptions, redactProxy } from '../scripts/download-options.mjs';
+
+test('下载超时默认 60 分钟，代理默认关闭', () => {
+  const options = normalizeDownloadOptions({});
+  assert.equal(options.timeoutSec, 3600);
+  assert.equal(options.proxy, '');
+  assert.equal(normalizeDownloadOptions({ timeoutMinutes: 0 }).timeoutSec, 3600);
+  assert.equal(normalizeDownloadOptions({ timeoutMinutes: 361 }).timeoutSec, 3600);
+  assert.equal(normalizeDownloadOptions({ timeoutMinutes: 15 }).timeoutSec, 900);
+  const args = curlDownloadArgs({ url: 'https://example.test/a.tar.gz', ...options });
+  assert.equal(args[args.indexOf('--max-time') + 1], '3600');
+  assert.equal(args.includes('--proxy'), false);
+  assert.equal(args.includes('-C'), false);
+  assert.ok(args.includes('--noproxy'));
+  const ignored = normalizeDownloadOptions({ proxyEnabled: false, proxy: 'http://127.0.0.1:7890' });
+  assert.equal(ignored.proxy, '');
+  assert.equal(normalizeDownloadOptions({ proxyEnabled: true, proxy: 'http://127.0.0.1:7890' }).proxy, 'http://127.0.0.1:7890');
+  assert.equal(normalizeDownloadOptions({ proxyEnabled: true, proxy: 'socks5h://127.0.0.1:7890' }).proxy, 'socks5h://127.0.0.1:7890');
+  assert.throws(() => normalizeDownloadOptions({ proxyEnabled: true, proxy: 'ftp://user:secret@127.0.0.1:9' }), error => {
+    assert.match(error.message, /http:\/\/|socks5:\/\//);
+    assert.equal(error.message.includes('secret'), false);
+    return true;
+  });
+  const env = downloadEnv({ downloadTimeoutMinutes: 12, downloadProxyEnabled: true, downloadProxy: 'socks5://127.0.0.1:7891' });
+  assert.equal(env.MEME_DOWNLOAD_TIMEOUT_MINUTES, '12');
+  assert.equal(env.MEME_DOWNLOAD_PROXY_ENABLED, '1');
+  assert.equal(env.MEME_DOWNLOAD_PROXY, 'socks5://127.0.0.1:7891');
+  assert.deepEqual(downloadOptionsFromEnv({}), { timeoutSec: 3600, proxy: '' });
+  const proxied = curlDownloadArgs({ url: 'https://example.test/a', output: 'a.part', timeoutSec: 120, proxy: 'http://127.0.0.1:7890' });
+  assert.equal(proxied[proxied.indexOf('--proxy') + 1], 'http://127.0.0.1:7890');
+  assert.equal(proxied.includes('--noproxy'), false);
+  const hidden = redactProxy('curl --proxy http://user:secret@127.0.0.1:7890 failed secret', 'http://user:secret@127.0.0.1:7890');
+  assert.equal(hidden.includes('secret'), false);
+  assert.equal(hidden.includes('user'), false);
+});
