@@ -9,12 +9,11 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { spawn, execFileSync } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
-import { ensureHost, startHost, hostDir, hostPidFile, needsSync } from './lib/host.mjs'
+import { spawn } from 'node:child_process'
+import { ensureHost, startHost, hostDir, hostPidFile, needsSync, killGame, waitBridge, isGameRunning, PATCHES } from './lib/host.mjs'
 import { createBridge } from './lib/bridge.mjs'
 import { loadSpecs, CORE } from './lib/tools.mjs'
-import { exePath, exeName, assertKillable } from './lib/exe.mjs'
+import { exePath, configPath, exeMissingText } from './lib/exe.mjs'
 import { resolvePlace, PLACE_LIST } from './lib/places.mjs'
 import { createInstaller } from './lib/install.mjs'
 import { setGameWindow, hideGameWindow } from './lib/gamewin.mjs'
@@ -22,25 +21,41 @@ import { bridgeConfigInfo, writeBridgeConfig, bridgeDataDir, restartBridge } fro
 import { personaName, qqNickname } from './lib/names.mjs'
 import { clip, bagText, briefStatus, briefLook, briefTask, briefProcess, briefCatalog, briefRaw } from './lib/brief.mjs'
 
-const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url))
 // 游戏装在模块数据目录（api.dataDir()，即 modules-data/cabinworld）：不进发布包，卸载时可随模块一起清。
-const PATCHES = path.join(MODULE_DIR, 'lib', 'patches', 'apply.mjs')
 const DEFAULT_WAIT_MS = 30000
-// 自动生活的后台会话名：每次启动随机，别人撞不到这个 chatId。
+// 自动生活的后台会话名，固定值；按 chatId 与私聊隔离。
 const AUTO_SESSION = 'system:cabin-life'
+// 自动生活一轮的判活阈值：runSystemTurn 上限 120 秒 + 收尾那三个 await（查最近任务、拉状态、私聊汇报）。
+// 阈值必须比这些加起来更宽，否则到了边界会误判僵死、开第二轮并发跑。
+// 放在模块顶部而不是 setup 后半段：loadAuto() 在 setup 里同步执行，复位逻辑就要读它。
+const AUTO_STALE_MS = 300000
 // 错误消息兜底：Error 取 message，字符串或其它原样返回（拼进文案时会自己 toString）。
 const errText = function (e) { return (e && e.message) || e }
+// 「没做成」的原因：failed 给 error，done 但 result.ok:false 给 outcome/error（兜底句由调用方给）。
+const failReason = function (b, doneFallback) {
+  if (!b) return ''
+  if (b.status === 'failed') return b.error || '游戏没有完成这个动作'
+  return b.status === 'done' && b.result && b.result.ok === false ? (b.result.outcome || b.result.error || doneFallback) : ''
+}
+// 结果里「真实发生了什么」的第一条：自动生活汇报和 /小屋 最近 都只取这一条。
+const firstHappened = function (result) { return result && result.happened && result.happened[0] }
+// 四个只读工具的结果各有专用格式化；查表比四条 if 更省地方，也不会漏掉某一支。
+const BRIEF_BY_NAME = new Map([['cabin_status', briefStatus], ['cabin_look', briefLook], ['cabin_catalog', briefCatalog], ['cabin_process', briefProcess]])
 
 const RULE = [
   '你在「小屋世界」（Cabin World）里有一个真实的身体，只能通过工具做事。',
   '- 工具：cabin_status 看自己、cabin_look 看身边、cabin_go 去处、cabin_use 用东西、cabin_buy 买东西、cabin_eat 吃小卖部买的东西、cabin_stop 停下、cabin_task 查进度。',
-  '- 高级：cabin_restaurant 餐厅点菜/做菜/吃（餐厅买的菜只能用它的 eat，cabin_eat 认不出）、cabin_sleep 睡觉起床（action:"sleep" 真的睡、action:"wake" 起）、cabin_toolpose 换姿势（打字、画画）；电玩城用 cabin_use（机台 id 来自 cabin_look）。',
+  // 每行只讲一个工具：ruleText() 按行过滤，一行挤多个工具会连带删掉仍然可用的说明。
+  '- 高级：cabin_restaurant 餐厅点菜/做菜/吃（餐厅买的菜只能用它的 eat，cabin_eat 认不出）。',
+  '- cabin_sleep 睡觉起床（action:"sleep" 真的睡、action:"wake" 起）。',
+  '- cabin_toolpose 换姿势（打字、画画）。',
+  '- 电玩城用 cabin_use（机台 id 来自 cabin_look）。',
   '- 以工具返回为准，不要编；status:"running" 不算做完，只有 "done" 才算真的发生过。',
   '- 收到 "running" 就用 cabin_task 查，或 cabin_stop 停下；不知道身边能做什么就先 cabin_look。',
   '- 一次只做一件事，正在做事时先 cabin_stop。',
   '- 地方：xjhome 家、park 公园、shop 小卖部、onsen 汤屋（经小卖部）、arcade 电玩城、restaurant 餐厅。',
   '- 想睡觉就用 cabin_sleep，别用 cabin_use 的 whale_bed nap —— 那只睡 40 秒，不是过夜。',
-        '- happened 是真实经历，照实说，也会记进记忆；只有主人私聊才有这些工具。',
+  '- happened 是真实经历，照实说，也会记进记忆；只有主人私聊才有这些工具。',
 ].join('\n')
 
 const HELP = [
@@ -62,7 +77,7 @@ const HELP = [
 export default {
   id: 'cabinworld',
   name: '小屋世界',
-  version: '0.4.3',
+  version: '0.4.4',
   api: 1,
   description: '给大肥鱼一个会走路的身体：Cabin World 像素小世界。去公园、荡秋千、钓鱼、买零食、餐厅点菜、回家睡觉、电玩城玩一局，动作由游戏判定，结果记进记忆；支持一键下载安装。',
   defaults: {
@@ -76,7 +91,6 @@ export default {
     displayName: '',
     hostName: '',
     port: 18790,
-    launchGame: true,
     weatherMode: 'virtual',
     autoLife: false,
     autoLifeMinutes: 45,
@@ -105,6 +119,18 @@ export default {
       log: api.log,
     })
 
+    // 两处「开始安装」（/小屋 安装 和面板按钮）：正在装就报进度，否则起一次；异常只记日志。
+    function beginInstall(onDone) {
+      // 上次装到一半关掉 DSH 会在游戏目录留下安装锁：这时点安装必须先说清原因，
+      // 否则面板显示「开始下载」然后空等到超时。
+      const why = installer.precheck()
+      if (why) return { ok: false, percent: 0, message: why }
+      const st = installer.getState()
+      if (st.running) return { ok: false, percent: st.percent || 0, message: st.message || '' }
+      installer.install().then(onDone).catch(function (e) { api.log.warn('小屋世界安装异常：' + errText(e)) })
+      return { ok: true }
+    }
+
     const lastHealth = { at: 0, body: null, error: '' }
     const lastStatus = { at: 0, body: null, error: '' }
 
@@ -117,7 +143,7 @@ export default {
         try { if (fs.existsSync(exePath(configured))) return configured } catch (e) { /* 路径不可用就用默认 */ }
       }
       // api.dataDir() 本身就是 modules-data/cabinworld，不要再套一层子目录
-    return api.dataDir()
+      return api.dataDir()
     }
 
     // 工具定义跟着桥走：参数来自桥发布的 openai-tools.json（含我们把睡觉/姿势加进去的两个），
@@ -129,11 +155,25 @@ export default {
       const list = loadSpecs({
         hostDir: hostDir(dir),
         bridgeDir: path.join(dir, 'bridge'),
-        all: false,   // 桥清单 20 多个工具（副本 24、官方 22）只暴露常用的那几个（面板里还没有「全部工具」开关）
         log: api.log,
       })
       specsCache = { at: Date.now(), list: list }
       return list
+    }
+
+    // 提示词不能宣传没挂载的工具：桥补丁没打上时没有 cabin_sleep / cabin_toolpose，
+    // 照着 RULE 去调只会拿到「工具不可用」。
+    function hasTool(name) {
+      return toolSpecsNow().some(function (s) { return s.name === name })
+    }
+    function ruleText() {
+      const hasSleep = hasTool('cabin_sleep')
+      const hasPose = hasTool('cabin_toolpose')
+      return RULE.split('\n').filter(function (line) {
+        if (!hasSleep && (line.indexOf('cabin_sleep') >= 0 || line.indexOf('whale_bed nap') >= 0)) return false
+        if (!hasPose && line.indexOf('cabin_toolpose') >= 0) return false
+        return true
+      }).join('\n')
     }
 
     // 现在这座桥是不是我们自己的副本桥（官方 start.cmd 起的桥不算）。
@@ -164,6 +204,11 @@ export default {
         res.setHeader('content-type', 'application/json')
         res.end(JSON.stringify({ ok: false, message: message }))
       } catch { /* 连 res 都不可用，只能放弃 */ }
+    }
+
+    // 三个写路由都要先读 JSON 请求体：解析失败一律 400 并收尾。
+    async function readBody(req, res) {
+      try { return { ok: true, body: await api.core.http.body(req) } } catch (e) { deny(res, 400, '请求体解析失败'); return { ok: false } }
     }
 
     // 面板接口只给本机用：回环 socket，且 origin/referer（有的话）必须是本机地址。
@@ -232,16 +277,24 @@ export default {
         if (!Array.isArray(list)) list = []
         list.push({ at: Date.now(), label: Array.from(String(label || '')).slice(0, 40).join(''), text: Array.from(String(text || '')).slice(0, 400).join('') })
         while (list.length > 60) list.shift()
-        fs.writeFileSync(file, JSON.stringify(list, null, 1), 'utf8')
+        // 原子替换：直接覆盖时进程被杀会留下半截 JSON，下次 parse 失败就当空数组，
+        // 再下一次写入把空数组写回去——整份日志就这么没了。
+        const tmp = file + '.tmp-' + process.pid
+        fs.writeFileSync(tmp, JSON.stringify(list, null, 1), 'utf8')
+        fs.renameSync(tmp, file)
       } catch (e) { /* 写不进日志不影响主流程 */ }
     }
 
+    // 同一次经历别写两遍：桥超时后模型重试同一工具会拿到两个 done，
+    // 「/小屋 去 公园」之后再调 cabin_go park 也是同一条。60 秒内相同文本直接跳过。
+    let lastRemember = { key: '', at: 0 }
     function remember(body, args) {
       if (!flag('writeMemory', true)) return
       try {
         const memory = api.use('memory')
         if (!memory || typeof memory.addEvent !== 'function') return
         const r = body.result || {}
+        if (r.ok === false) return   // 游戏说没做成，别记成经历
         const happened = Array.isArray(r.happened) ? r.happened.filter(Boolean) : []
         const label = String(body.label || '').trim()
         if (!happened.length && !label) return
@@ -252,6 +305,11 @@ export default {
           ? '在小屋世界写了日记：' + Array.from(wrote).slice(0, 500).join('')
           : '在小屋世界' + (label ? '「' + label + '」' : '') + (happened.length ? '：' + happened.join('；') : '')
         const saved = clip(text, wrote ? 550 : 300)
+        // 60 秒内同样的文本不重复记：桥超时后模型重试同一工具会拿到两条 done。
+        const now = Date.now()
+        const key = saved
+        if (key === lastRemember.key && now - lastRemember.at < 60000) return
+        lastRemember = { key: key, at: now }
         const pending = memory.addEvent({ text: saved, tags: ['小屋世界'], importance: 0.5 })
         if (pending && typeof pending.catch === 'function') pending.catch(function (error) { api.log.warn('小屋世界：写记忆失败 ' + errText(error)) })
         logMemory(saved, label)
@@ -284,24 +342,20 @@ export default {
       const got = await bridge.callTool(name, a, { waitMs: waitMs() })
       if (!got.ok) return { ok: false, message: got.message }
       const body = got.body || {}
-      if (name === 'cabin_status') return { ok: true, message: briefStatus(body) }
-      if (name === 'cabin_look') return { ok: true, message: briefLook(body) }
-      if (name === 'cabin_catalog') return { ok: true, message: briefCatalog(body) }
-      if (name === 'cabin_process') {
-        if (body.ok === false) return { ok: false, message: body.error || '活动没登记上' }
-        return { ok: true, message: briefProcess(body) }
-      }
+      const brief = BRIEF_BY_NAME.get(name)
+      // 群聊里不报零花钱、感受这些私事：api.context 已经按这个口径写提示，回执得跟上。
+      if (brief) return { ok: true, message: brief(body, { public: !(where.chat && where.chat.kind === 'private') }) }
       if (body.status === 'running') {
         return {
           ok: true,
           message: (body.label ? body.label : '这件事') + '还没做完（taskId ' + (body.taskId || '?') + '）：完成前不要当作已经做完。'
-            + ((where && where.chat && where.chat.chatId === AUTO_SESSION)
+            + (isAutoChat
               ? '不想等就用 cabin_stop 停下。'
               : '过一会儿可以用 cabin_task 查，或者用 cabin_stop 停下。'),
         }
       }
-      if (body.status === 'failed') return { ok: false, message: '失败了：' + (body.error || '游戏没有完成这个动作') }
-      if (body.status === 'done' && body.result && body.result.ok === false) return { ok: false, message: '失败了：' + (body.result.outcome || body.result.error || '游戏没完成') }
+      const why = failReason(body, '游戏没完成')
+      if (why) return { ok: false, message: '失败了：' + why }
       if (body.status === 'done') { remember(body, args); return { ok: true, message: briefTask(body) } }
       return { ok: true, message: briefRaw(body) }
     }
@@ -326,7 +380,9 @@ export default {
         // 她只能回「工具不可用，我不能假装调用」。少一份名单就少一次这种事故。
         // 唯一的差别是不许花钱时把 buy/eat 摘掉。
         const allowBuy = flag('autoLifeAllowBuy', true)
-        const names = CORE.filter(function (n) { return allowBuy || (n !== 'cabin_buy' && n !== 'cabin_eat') })
+        // 「不许花钱」只等于不许买：cabin_eat 吃背包里已有的东西不花钱，
+        // 摘掉它会让提示词里的「饿了就 cabin_eat」变成调用一个没挂载的工具。
+        const names = CORE.filter(function (n) { return allowBuy || n !== 'cabin_buy' })
         return toolSpecsNow().filter(function (spec) { return names.indexOf(spec.name) >= 0 }).map(function (spec) { return toolOf(spec, where) })
       }
       const level = where.level
@@ -357,7 +413,8 @@ export default {
     api.rule(function (kind) {
       if (kind !== 'private') return ''
       const who = ownerCall()
-      return who ? RULE + '\n- 你叫主人「' + who + '」。' : RULE
+      const base = ruleText()
+      return who ? base + '\n- 你叫主人「' + who + '」。' : base
     })
 
     api.every(60000, async function () {
@@ -366,18 +423,40 @@ export default {
 
     // ---- 自动生活：让她在后台会话里自己决定做点什么（默认关） ----
     const autoState = { day: '', count: 0, lastAt: 0, running: false, lastResult: '' }
+    // 纯函数：这一轮该不该跳过，以及为什么。now 显式传入，方便测。
+    // 阈值 AUTO_STALE_MS 在模块顶部：loadAuto() 也要读它，而那段在 setup 里更早就跑。
+    function autoSkipReason(state, now) {
+      if (state.running !== true) return ''
+      if (now - (Number(state.lastAt) || 0) > AUTO_STALE_MS) return ''
+      return '上一轮还在跑'
+    }
     // 和 memory-log.json / .pending-restart 一样放在 <游戏目录>/data 下。
     // 以前写在 api.dataDir() 根目录，换 gameDir 时这些状态就会一半跟走一半不跟。
-    const autoFile = path.join(dataDirNow(), 'auto-life.json')
-    try {
-      const legacy = path.join(api.dataDir(), 'auto-life.json')
-      if (legacy !== autoFile && fs.existsSync(legacy) && !fs.existsSync(autoFile)) fs.renameSync(legacy, autoFile)
-    } catch (e) { /* 搬不过去就从 0 开始计数，不影响她用 */ }
-    function loadAuto() {
-      try { Object.assign(autoState, JSON.parse(fs.readFileSync(autoFile, 'utf8')) || {}) } catch (e) { /* 第一次还没有 */ }
-      if (autoState.running === true && Date.now() - (Number(autoState.lastAt) || 0) > 120000) autoState.running = false
+    // 每次用到再算路径：dataDirNow() 跟着 bridge.config.json 的 dataDir 走，
+    // 固定成常量的话，用户换了游戏目录后这个文件会留在旧位置。
+    function autoFileNow() { return path.join(dataDirNow(), 'auto-life.json') }
+    function migrateAuto() {
+      try {
+        const file = autoFileNow()
+        const legacy = path.join(api.dataDir(), 'auto-life.json')
+        if (legacy !== file && fs.existsSync(legacy) && !fs.existsSync(file)) fs.renameSync(legacy, file)
+      } catch (e) { /* 搬不过去就从 0 开始计数，不影响她用 */ }
     }
-    function saveAuto() { try { fs.writeFileSync(autoFile, JSON.stringify(autoState, null, 2), 'utf8') } catch (e) { api.log.warn('自动生活状态写不进：' + errText(e)) } }
+    function loadAuto() {
+      migrateAuto()
+      try { Object.assign(autoState, JSON.parse(fs.readFileSync(autoFileNow(), 'utf8')) || {}) } catch (e) { /* 第一次还没有 */ }
+      if (autoState.running === true && Date.now() - (Number(autoState.lastAt) || 0) > AUTO_STALE_MS) autoState.running = false
+    }
+    // 和 logMemory 一样写 tmp 再 rename：直接覆盖时进程被杀会留半截 JSON，
+    // 下次 parse 失败就当没写过，次数和日期从 0 重算。
+    function saveAuto() {
+      try {
+        const file = autoFileNow()
+        const tmp = file + '.tmp-' + process.pid
+        fs.writeFileSync(tmp, JSON.stringify(autoState, null, 2), 'utf8')
+        fs.renameSync(tmp, file)
+      } catch (e) { api.log.warn('自动生活状态写不进：' + errText(e)) }
+    }
     function dayKey() { const d = new Date(); return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate() }
     loadAuto()
 
@@ -386,6 +465,7 @@ export default {
       const opt = extra || {}
       // 状态直接给：省掉"先调一次 cabin_status"，也保证她一定看到了自己在哪、几点、手上有什么事。
       const brief = String(opt.brief || '').split('\n').filter(function (l) { return l && !/^状态数据/.test(l) })
+      const hasSleep = hasTool('cabin_sleep')
       return [
         '【小屋世界 · 自动生活】这是你自己的时间，不是在和谁聊天：不要输出要说给谁听的话，也不要发消息。',
         ...(brief.length ? ['', '你现在是这样：', brief.join('\n')] : []),
@@ -398,7 +478,9 @@ export default {
         '- 想吃顿好的：cabin_go 去餐厅，cabin_restaurant 先 action:"menu" 看菜单，再 action:"order" 点菜（dish 填菜单里的 id）、action:"eat" 吃；',
         '- 不知道哪儿有某样东西：cabin_catalog 搜一下（比如搜"五子棋"），再去那个地方用；',
         '- 想连着做几件事：cabin_process start 排进去（身体动作一次一件，其余排队），随时 list 看进度；',
-        '- 困了或夜深了：cabin_sleep（action:"sleep" 真的睡，一觉到你自己醒）；只是打个盹才用 cabin_use 的 whale_bed nap；',
+        ...(hasSleep
+          ? ['- 困了或夜深了：cabin_sleep（action:"sleep" 真的睡，一觉到你自己醒）；只是打个盹才用 cabin_use 的 whale_bed nap；']
+          : ['- 困了：用 cabin_use 的 whale_bed 睡一会儿；']),
         '- 什么都不想做：就看一眼状态或者干脆不动，没人催你。',
         '规则：一次只调用一个工具；以工具返回为准，返回 status:"running" 还没做完，不要当成做完了；做完一件可以接着做下一件，觉得够了就停。',
         ...(opt.longDoing ? ['', '注意：你手头这件事已经做了 ' + opt.longDoing + ' 分钟了。如果不想继续，用 cabin_process finish（收尾，算完成）或 cabin_stop（直接停下）结束它，再去做别的。'] : []),
@@ -417,16 +499,33 @@ export default {
       } catch (e) { return null }
     }
 
+    // api.sendText 自身没有超时：卡在这里 autoState.running 会一直是 true。
+    // 15 秒没回执就不再等（消息可能已经发出去了，文案别把话说死）。
+    const NOTIFY_TIMEOUT_MS = 15000
     async function notifyOwner(text) {
       if (!flag('autoLifeNotify', true)) return
       const qq = String((api.config() || {}).ownerQQ || '').trim()
       if (!qq) return
       const safe = String(text == null ? '' : text).replace(/<[^>]{1,40}>/g, '')
-      try { await api.sendText('private:' + qq, safe) } catch (e) { api.log.warn('小屋世界汇报发不出去：' + errText(e)) }
+      let timer = null
+      try {
+        await Promise.race([
+          api.sendText('private:' + qq, safe),
+          new Promise(function (_resolve, reject) {
+            // 超时只代表「不等回执了」：消息本身可能仍然发出去了，文案别把话说死。
+            timer = setTimeout(function () { reject(new Error('超过 ' + Math.round(NOTIFY_TIMEOUT_MS / 1000) + ' 秒没有回执，先按没发出去处理')) }, NOTIFY_TIMEOUT_MS)
+          }),
+        ])
+      } catch (e) {
+        api.log.warn('小屋世界汇报发不出去：' + errText(e))
+      } finally {
+        if (timer) { clearTimeout(timer); timer = null }
+      }
     }
 
     async function autoLifeTick(force) {
-      if (autoState.running) return { ok: false, message: '上一轮还在跑' }
+      const reason = autoSkipReason(autoState, Date.now())
+      if (reason) return { ok: false, message: reason }
       autoState.running = true
       try {
         if (!flag('autoLife', false) && !force) return { ok: false, message: '自动生活没开' }
@@ -458,6 +557,8 @@ export default {
         try {
           const prompt = autoPrompt({ brief: s.body ? briefStatus(s.body) : '', longDoing: longDoing })
           const text = await api.core.hub.runSystemTurn(AUTO_SESSION.slice(7), '小屋世界 · 自动生活', prompt, { timeoutMs: 120000 })
+          // 心跳：会话本身可能跑满 120 秒，刷新一下再去做后面三个 await 的收尾工作。
+          autoState.lastAt = Date.now()
           autoState.lastResult = clip(String(text || ''), 300)
           try {
             const ev = await recentDoneTask(20)
@@ -465,10 +566,11 @@ export default {
             const p2 = (st2.body && st2.body.position) || {}
             const bits = []
             if (ev && ev.label) {
-              const h = ev.result && ev.result.happened && ev.result.happened[0]
+              const h = firstHappened(ev.result)
               bits.push('我刚' + ev.label + (h ? '：' + h : ''))
-            } else if (autoState.lastResult) {
-              bits.push(autoState.lastResult)
+            } else {
+              // 这一轮没有落地的动作：别把模型自己的话当成「我刚做了什么」发出去。
+              bits.push('这一轮没在游戏里做事')
             }
             bits.push('现在在：' + (p2.place || '') + (p2.zoneName ? ' · ' + p2.zoneName : ''))
             await notifyOwner(bits.join('\n'))
@@ -659,23 +761,19 @@ export default {
     }
 
     async function waitGame(maxMs) {
-      const deadline = Date.now() + (maxMs || 20000)
-      let last = null
-      while (Date.now() < deadline) {
-        await new Promise(function (r) { setTimeout(r, 1500) })
-        try {
-          const got = await bridge.health()
-          last = got.ok ? got.body : null
-          if (got.ok && got.body && got.body.game === true) return { ok: true, game: true }
-        } catch (e) { /* 还在起 */ }
-      }
-      return { ok: false, game: Boolean(last && last.game === true), last: last }
+      const waited = await waitBridge(async function () {
+        const h = await bridge.health()
+        return { row: h.ok ? h.body : null, done: !!(h.ok && h.body && h.body.game === true) }
+      }, maxMs || 20000)
+      return waited.hit ? { ok: true, game: true } : { ok: false, game: Boolean(waited.row && waited.row.game === true), last: waited.row }
     }
 
     async function launchGameExe() {
       const dir = gameDir()
       const exe = exePath(dir)
-      if (!fs.existsSync(exe)) return { ok: false, message: '找不到 ' + exe + '：先点「一键安装」；游戏装在别处的话，在模块配置里写 gameDir。' }
+      if (!fs.existsSync(exe)) return { ok: false, message: exeMissingText(exe, '先点「一键安装」；游戏装在别处的话，在模块配置里写 gameDir。') }
+      // 进程还在（多半是卡住没连上桥）就别再开一个：两个进程会写同一份 --data。
+      if (isGameRunning(dir)) return { ok: true, already: true }
       try {
         const child = spawn(exe, ['--', '--data', dataDirNow()], { cwd: dir, detached: true, stdio: 'ignore' })
         child.once('error', function (e) { api.log.warn('小屋世界：游戏启动失败 ' + errText(e)) })
@@ -694,7 +792,7 @@ export default {
     async function startGame() {
       const dir = gameDir()
       const exe = exePath(dir)
-      if (!fs.existsSync(exe)) return { ok: false, game: false, message: '找不到 ' + exe + '：先点「一键安装」。' }
+      if (!fs.existsSync(exe)) return { ok: false, game: false, message: exeMissingText(exe, '先点「一键安装」。') }
       // 桥在跑时 Windows 不允许 rename 副本目录，所以重建只在桥停下做（restartBridge 会先停）。
       const state = hostState()
       const h = await healthCached(4000)
@@ -713,6 +811,7 @@ export default {
         }
         const launched = await launchGameExe()
         if (!launched.ok) return { ok: false, game: false, message: launched.message }
+        if (launched.already) return { ok: false, game: false, message: '游戏进程已经在跑但没连上桥（多半卡住了）：去任务管理器结束 CabinWorld.exe 再点一次。' }
         const waited = await waitGame(20000)
         if (waited.game) return { ok: true, game: true, message: '桥本来就在跑，已经把游戏打开并连上了。' }
         return { ok: false, game: false, message: '游戏窗口应该起来了，但 20 秒内没连上桥：先看游戏窗口有没有报错；或者去任务管理器结束卡住的 CabinWorld.exe 再点一次。' }
@@ -721,7 +820,7 @@ export default {
         return { ok: false, game: false, message: '桥在跑，但状态不对：' + (h.error || '连不上桥') + '（不重复启动，先看桥窗口的报错）' }
       }
       // 桥没在跑：这时才重建副本（桥在跑时目录被占用，rename 会失败）。
-      const synced = ensureHost({ gameDir: dir, patchesScript: PATCHES, log: api.log })
+      const synced = await ensureHost({ gameDir: dir, patchesScript: PATCHES, log: api.log })
       if (!synced.ok) return { ok: false, game: false, message: synced.message }
       // 补丁没打上也照样能跑（官方桥原样兜底），但睡觉/工具姿势两个工具就不存在了。
       // 这个结论以前只写进 host.log，用户完全看不到，得带到返回值里。
@@ -730,8 +829,10 @@ export default {
         : ''
       try {
         // 跑的是 bridge-host 副本（官方 bridge 保持原样，一键安装覆盖也不影响）。
-        const started = startHost({ gameDir: dir, configPath: path.join(dir, 'bridge', 'bridge.config.json'), log: api.log })
+        const started = startHost({ gameDir: dir, configPath: configPath(dir), log: api.log })
         if (!started.ok) return { ok: false, game: false, message: started.message }
+        // 桥就是用新的 bridge.config.json 起来的，端口/天气已经生效：把待重启标记清掉。
+        clearPendingRestart()
       } catch (error) {
         return { ok: false, game: false, message: '启动失败：' + errText(error) }
       }
@@ -758,14 +859,23 @@ export default {
     }
 
     // 两条「走去某处」的命令只差兜底一句：/小屋 去 遇到未知状态附原始返回，餐厅/电玩城快捷方式跟 running 一样说「正在走过去」。
+    // 纯函数：只根据桥的返回决定说什么，不碰桥、不写记忆。抽出来是为了能测。
+    function goToVerdict(body, unknownIsMoving) {
+      const b = body || {}
+      const why = failReason(b, '游戏没完成这个动作')
+      if (why) return '没走成：' + why
+      if (b.status === 'done') return ''
+      if (b.status === 'running' || unknownIsMoving) return '正在走过去…（' + (b.label || '') + '）'
+      return briefRaw(b)
+    }
     async function goTo(place, unknownIsMoving) {
       const got = await bridge.callTool('cabin_go', { place: place }, { waitMs: waitMs() })
       if (!got.ok) return got.message
       const body = got.body || {}
-      if (body.status === 'done') { remember(body); return briefTask(body) }
-      if (body.status === 'failed') return '没走成：' + (body.error || '游戏没有完成这个动作')
-      if (body.status === 'running' || unknownIsMoving) return '正在走过去…（' + (body.label || '') + '）'
-      return briefRaw(body)
+      const verdict = goToVerdict(body, unknownIsMoving)
+      if (verdict) return verdict
+      remember(body)
+      return briefTask(body)
     }
 
     api.command({
@@ -788,7 +898,7 @@ export default {
           const done = ((got.body && got.body.events) || []).filter(isDoneTask).slice(-3).reverse()
           if (!done.length) return '小屋世界里还没有做完的事。'
           return done.map(function (e) {
-            const h = e.result && e.result.happened && e.result.happened[0]
+            const h = firstHappened(e.result)
             return '· ' + (e.label || '') + (h ? '：' + h : '')
           }).join('\n')
         }
@@ -805,16 +915,16 @@ export default {
         if (rename) {
           const want = rename[1].trim()
           const r = await applyName({ displayName: want })
-          return r.ok ? ('改好了：小屋世界现在叫「' + (r.name || want) + '」。' + (r.gameRenamed ? '桥内存里的名字下次重启小屋世界才生效。' : '游戏这会儿没连上，点「重启小屋世界」后才会变。')) : ('没改成：' + r.message)
+          // applyName 的 message 已经分好三种结局：改好了 / 只写了配置（游戏没连上）/ 游戏拒绝了改名。
+          return r.ok ? r.message : ('没改成：' + r.message)
         }
         if (a === '安装' || a === 'install') {
-          const st = installer.getState()
-          if (st.running) return '正在装：' + (st.message || '') + '（' + (st.percent || 0) + '%）'
-          installer.install().then(function (r) {
+          const started = beginInstall(function (r) {
             if (chatId && r && r.message) {
               api.send(chatId, r.ok ? '小屋世界装好了：' + (r.tag || '') + '。发 /小屋 启动 就能开。' : '小屋世界没装上：' + r.message).catch(function () {})
             }
-          }).catch(function (e) { api.log.warn('小屋世界安装异常：' + errText(e)) })
+          })
+          if (!started.ok) return '正在装：' + started.message + '（' + started.percent + '%）'
           return '开始下载并安装小屋世界（约 287 MB），装好我会告诉你。'
         }
         if (a === '停' || a === 'stop') {
@@ -892,14 +1002,9 @@ export default {
     async function restartAll() {
       const dir = gameDir()
       if (!fs.existsSync(exePath(dir))) return { ok: false, game: false, message: '还没安装：先点「一键安装」。' }
-      let stoppedGame = false
-      // 名字校验放在 try 外面：被下面的 catch 当成「本来就没开」吞掉的话，
+      // killGame 里的名字校验不在 try 里面：被当成「本来就没开」吞掉的话，
       // 配错的 gameExe 会一路静默失败下去。
-      const killName = assertKillable(exeName(dir))
-      try {
-        execFileSync('taskkill', ['/IM', killName, '/F'], { stdio: 'ignore', timeout: 8000 })
-        stoppedGame = true
-      } catch (e) { /* 本来就没开 */ }
+      const stoppedGame = killGame(dir)
       if (stoppedGame) await new Promise(function (r) { setTimeout(r, 1500) })
       const restarted = await restartBridgeNow(dir)
       if (!restarted.ok) return { ok: false, game: false, message: restarted.message }
@@ -919,9 +1024,8 @@ export default {
 
     api.route('/install', async function (req, res) {
       if (assertLocal(req, res) || assertPost(req, res)) return
-      const st = installer.getState()
-      if (st.running) return { ok: false, message: '正在装了（' + (st.percent || 0) + '%）' }
-      installer.install().catch(function (e) { api.log.warn('小屋世界安装异常：' + errText(e)) })
+      const st = beginInstall(null)
+      if (!st.ok) return { ok: false, message: '正在装了（' + st.percent + '%）' }
       return { ok: true, message: '开始下载并安装' }
     })
 
@@ -947,16 +1051,16 @@ export default {
 
     api.route('/apply-name', async function (req, res) {
       if (assertLocal(req, res) || assertPost(req, res)) return
-      let body = {}
-      try { body = await api.core.http.body(req) } catch (e) { deny(res, 400, '请求体解析失败'); return }
-      return await applyName(body)
+      const read = await readBody(req, res)
+      if (!read.ok) return
+      return await applyName(read.body)
     })
 
     api.route('/bridge-settings', async function (req, res) {
       if (assertLocal(req, res) || assertPost(req, res)) return
-      let body = {}
-      try { body = await api.core.http.body(req) } catch (e) { deny(res, 400, '请求体解析失败'); return }
-      return await applyBridgeSettings(body)
+      const read = await readBody(req, res)
+      if (!read.ok) return
+      return await applyBridgeSettings(read.body)
     })
 
     api.route('/models', async function (req, res) {
@@ -972,7 +1076,8 @@ export default {
 
     // 1.1 可选内容：读出每一项的中文说明和当前开关，让用户自己在面板上勾。
     api.route('/update', async function (req, res) {
-      if (assertLocal(req, res)) return
+      // 这条会真的去打一次游戏工具（cabin_update_plan），和同模块其它写路由保持一致。
+      if (assertLocal(req, res) || assertPost(req, res)) return
       const got = await bridge.callTool('cabin_update_plan', {}, { waitMs: 20000 })
       if (!got.ok) return { ok: false, message: got.message, modules: [] }
       const body = got.body || {}
@@ -981,8 +1086,9 @@ export default {
 
     api.route('/update/apply', async function (req, res) {
       if (assertLocal(req, res) || assertPost(req, res)) return
-      let body = {}
-      try { body = await api.core.http.body(req) } catch (e) { deny(res, 400, '请求体解析失败'); return }
+      const read = await readBody(req, res)
+      if (!read.ok) return
+      const body = read.body
       const modules = body && body.modules
       if (!modules || typeof modules !== 'object' || Array.isArray(modules)) return { ok: false, message: 'modules 要是 {"模块id": true/false}' }
       const got = await bridge.callTool('cabin_update_apply', { modules: modules, reason: String((body && body.reason) || '面板上逐项选择') }, { waitMs: 30000 })
@@ -997,12 +1103,15 @@ export default {
 
     api.route('/auto-life/now', async function (req, res) {
       if (assertLocal(req, res) || assertPost(req, res)) return
+      // 自动生活关着的时候不许跑：那一轮挂不上任何工具，模型只能凭空说话，
+      // 汇报出来的「我自己坐了会儿」游戏里根本没发生。
+      if (!flag('autoLife', false)) return { ok: false, message: '自动生活没开：先在面板打开开关，再点「立刻跑一轮」' }
       return await autoLifeTick(true)
     })
 
     api.route('/help', async function (req, res) {
       if (assertLocal(req, res)) return
-      return { ok: true, help: HELP, places: PLACE_LIST, rule: RULE }
+      return { ok: true, help: HELP, places: PLACE_LIST, rule: ruleText() }
     })
 
     api.log.info('小屋世界模块已加载：游戏目录 ' + gameDir() + (installer.isInstalled() ? '（已安装）' : '（未安装，可以用面板或 /小屋 安装 一键装）'))
@@ -1010,6 +1119,10 @@ export default {
     return {
       status: statusCached,
       health: healthCached,
+      // 测试钩子：只在 CABIN_TEST=1 时挂出来，正常加载没有这个字段。
+      ...(process.env.CABIN_TEST === '1'
+        ? { _test: { autoLifeTick: autoLifeTick, goTo: goTo, goToVerdict: goToVerdict, autoSkipReason: autoSkipReason, autoState: autoState, ruleText: ruleText, remember: remember, logMemory: logMemory, memoryLogFile: memoryLogFile, resetSpecs: function () { specsCache = { at: 0, list: [] } } } }
+        : {}),
     }
   },
 }

@@ -7,7 +7,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { bridgeConfigInfo, writeBridgeConfig } from '../lib/bridgecfg.mjs'
 
-const ok = (cond, label, extra) => console.log((cond ? 'OK ' : 'FAIL ') + label + (extra ? ' - ' + extra : ''))
+const ok = (cond, label, extra) => {
+  if (cond) { console.log('OK ' + label + (extra ? ' - ' + extra : '')); return }
+  console.error('FAIL ' + label + (extra ? ' - ' + extra : ''))
+  process.exitCode = 1
+}
 const GAME = GAME_DIR
 
 const real = bridgeConfigInfo(GAME)

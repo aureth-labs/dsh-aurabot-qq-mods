@@ -1,6 +1,6 @@
 // 地点中文名 → id。/小屋 去 公园 用得到。
 
-export const PLACES = [
+const PLACES = [
   { id: 'xjhome', names: ['小鲸鱼家', '家', '小屋', '回家', 'xjhome'] },
   { id: 'park', names: ['公园', '小屋旁的公园', 'park'] },
   { id: 'shop', names: ['小卖部', '商店', '买东西', 'shop'] },

@@ -4,7 +4,11 @@
 import mod from '../index.mjs'
 import { GAME_DIR, BRIDGE_JSON, expectedCoreNames } from './_dirs.mjs'
 
-const ok = (cond, label, extra) => console.log((cond ? 'OK ' : 'FAIL ') + label + (extra ? ' - ' + extra : ''))
+const ok = (cond, label, extra) => {
+  if (cond) { console.log('OK ' + label + (extra ? ' - ' + extra : '')); return }
+  console.error('FAIL ' + label + (extra ? ' - ' + extra : ''))
+  process.exitCode = 1
+}
 
 function build({ allowSocial, level, chatKind, allOwners }) {
   const built = []

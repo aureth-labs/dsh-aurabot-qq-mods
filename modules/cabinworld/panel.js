@@ -1,7 +1,7 @@
 // 小屋世界面板：一栏到底 —— 状态、一键安装/启动、设置、名字同步、桥设置、保存。
 // 这段是函数体，面板会注入 React、h、ui、call、toast。
 
-const { useState, useEffect } = React
+const { useState, useEffect, useRef } = React
 
 const FIELD_STYLE = { marginBottom: 14 }
 const LABEL_STYLE = { fontWeight: 620, fontSize: 13, marginBottom: 2 }
@@ -33,7 +33,7 @@ return function CabinPanel({ settings, save, toast }) {
   const [lifeBusy, setLifeBusy] = useState(false)
   const [lifeMsg, setLifeMsg] = useState('')
 
-  const load = async function () {
+  const loadHealth = async function () {
     try {
       const r = await call('/health')
       setInfo(r)
@@ -42,6 +42,11 @@ return function CabinPanel({ settings, save, toast }) {
     } catch (e) {
       setMsg('取状态失败：' + errText(e))
     }
+  }
+
+  // 全量刷新：手动刷新按钮、安装完成、跑完一轮自动生活之后用。
+  const load = async function () {
+    await loadHealth()
     loadMemory()
     loadLife()
   }
@@ -96,9 +101,10 @@ return function CabinPanel({ settings, save, toast }) {
   // 1.1 可选内容：读一次当前状态（不轮询，免得打断用户勾选）。
   const loadUpdate = async function () {
     try {
-      const r = await call('/update')
+      const r = await call('/update', {})
       if (!r || !r.ok) { setUpd({ modules: [] }); setUpdMsg((r && r.message) || '读不到可选内容'); return }
       setUpd(r)
+      setUpdMsg('')   // 上一次的报错要清掉，否则成功读到列表后下面还挂着旧文案
       const sel = {}
       ;(r.modules || []).forEach(function (m) { if (m && m.id) sel[m.id] = m.state === 'on' })
       setUpdSel(sel)
@@ -107,13 +113,18 @@ return function CabinPanel({ settings, save, toast }) {
     }
   }
 
+  const aliveRef = useRef(true)
+  useEffect(function () { return function () { aliveRef.current = false } }, [])
+
   useEffect(function () {
     load()
     loadNames()
     loadUpdate()
     call('/models').then(function (r) { if (r && r.ok) setModels(r.models || []) }).catch(function (e) { setModels([]); setMsg('读模型列表失败：' + errText(e) + '，自动生活模型可能显示成「已下线」。') })
-    const timer = setInterval(load, 5000)
-    return function () { clearInterval(timer) }
+    // 状态 5 秒一次；记忆记录和自动生活状态降到 30 秒一次，少打两次读盘/请求。
+    const fast = setInterval(loadHealth, 5000)
+    const slow = setInterval(function () { loadMemory(); loadLife() }, 30000)
+    return function () { clearInterval(fast); clearInterval(slow) }
   }, [])
 
   useEffect(function () {
@@ -131,6 +142,7 @@ return function CabinPanel({ settings, save, toast }) {
   const watch = async function () {
     for (let i = 0; i < 900; i++) {
       await new Promise(function (r) { setTimeout(r, 1500) })
+      if (!aliveRef.current) return
       try {
         const st = await call('/install/status')
         setJob(st)
@@ -157,37 +169,24 @@ return function CabinPanel({ settings, save, toast }) {
     setBusy(false)
   }
 
-  // 游戏窗口平时是藏着的，这个按钮把它叫出来（Godot 窗口用 SW_SHOWNORMAL 唤回）。
-  const showGame = async function () {
-    try {
-      const r = await call('/game/show', {})
-      setMsg((r && r.message) || '')
-      setTimeout(load, 800)
-    } catch (e) {
-      setMsg('显示游戏窗口失败：' + errText(e))
+  // 三个「点一下就发请求、把结果说出来、过一会儿刷新」的按钮只差三样：路径、失败文案、刷新延迟。
+  const action = function (path, failText, delay) {
+    return async function () {
+      try {
+        const r = await call(path, {})
+        setMsg((r && r.message) || '')
+        setTimeout(load, delay)
+      } catch (e) {
+        setMsg(failText + errText(e))
+      }
     }
   }
 
+  // 游戏窗口平时是藏着的，这个按钮把它叫出来（Godot 窗口用 SW_RESTORE 唤回）。
+  const showGame = action('/game/show', '显示游戏窗口失败：', 800)
   // 关窗口（点 ×）会直接把游戏进程结束掉，想让它退到后台就用这个。
-  const hideGame = async function () {
-    try {
-      const r = await call('/game/hide', {})
-      setMsg((r && r.message) || '')
-      setTimeout(load, 800)
-    } catch (e) {
-      setMsg('藏起游戏窗口失败：' + errText(e))
-    }
-  }
-
-  const start = async function () {
-    try {
-      const r = await call('/start', {})
-      setMsg((r && r.message) || '')
-      setTimeout(load, 1500)
-    } catch (e) {
-      setMsg('启动失败：' + errText(e))
-    }
-  }
+  const hideGame = action('/game/hide', '藏起游戏窗口失败：', 800)
+  const start = action('/start', '启动失败：', 1500)
 
   // 重启：关掉游戏窗口再重启桥；游戏会自己连回来。
   const restart = async function () {
@@ -201,6 +200,33 @@ return function CabinPanel({ settings, save, toast }) {
       setMsg('重启失败：' + errText(e))
     }
     setBusy(false)
+  }
+
+  // 模块里装不上时，把这段贴给 DSH，让它手动把游戏装好。路径用面板已知的 gameDir，贴过去就能直接用。
+  const copyInstallPrompt = async function () {
+    const dir = (info && info.gameDir) ? String(info.gameDir).trim() : ''
+    const text = [
+      '帮我手动装一下 Cabin World（小屋世界）这个游戏。我的 DSH 里已经装了 aurabot 的 cabinworld 模块，但模块里「一键安装」失败了。',
+      '',
+      '游戏在 GitHub：https://github.com/BabyBus2022/cabin-world',
+      '要 Release 里的 Windows 版，资源名是 CabinWorld-win64.zip。',
+      '',
+      dir ? ('请把它装到这个目录：' + dir) : '请先确认 cabinworld 模块的数据目录（一般叫 modules-data/cabinworld），把游戏装进去；具体路径看模块设置里「游戏目录」的值。',
+      '装好的标志：那个目录下有 start.cmd 和 CabinWorld.exe。',
+      '',
+      '装完之后：',
+      '1. 按模块设置里的住户名和端口准备 bridge.config.json（HTTP 只监听 127.0.0.1）；',
+      '2. 启动游戏，确认 http://127.0.0.1:<端口>/v1/health 能返回 game:true；',
+      '3. 回到 cabinworld 模块面板，点「取一次状态」看是不是在线。',
+      '',
+      '每一步都告诉我结果，哪里卡住了直说。',
+    ].join('\n')
+    try {
+      await navigator.clipboard.writeText(text)
+      setMsg('提示词已复制，粘贴给 DSH 就行')
+    } catch (e) {
+      setMsg('复制失败：' + errText(e) + '。可以先把游戏目录发给 DSH，说「帮我照 cabinworld 模块的说明装 Cabin World 到 <目录>」。')
+    }
   }
 
   // 只提交和当前不同的项；桥要求 modules 是 {"id": true/false}。
@@ -278,13 +304,14 @@ return function CabinPanel({ settings, save, toast }) {
       return
     }
     setBooting(true)
-    setBridgeMsg('正在保存…')
+    setMsg('正在保存桥设置…')
     try {
       const r = await call('/bridge-settings', { port: port, launchGame: launchInput, weatherMode: weatherInput })
-      setBridgeMsg((r && r.message) || '')
+      // 桥设置的提示必须用顶部通用的那条：bridgeMsg 渲染在「名字」折叠块里，在这个块点保存会什么都不显示。
+      setMsg((r && r.message) || '')
       if (r && r.ok) { load(); loadNames() }
     } catch (e) {
-      setBridgeMsg('保存桥设置失败：' + errText(e))
+      setMsg('保存桥设置失败：' + errText(e))
     }
     setBooting(false)
   }
@@ -351,7 +378,7 @@ return function CabinPanel({ settings, save, toast }) {
   const personaText = names ? (names.personaName || '(未知)') : '…'
   const adv = info && info.advanced && info.advanced.tools ? info.advanced.tools : null
   const advNames = adv ? [['sleep', '睡觉'], ['toolpose', '姿势']].filter(function (row) { return adv[row[0]] === true }).map(function (row) { return row[1] }) : []
-  const advText = !bridgeOk ? '等桥起来' : (!gameOk ? '游戏没连上（连上后才有）' : (advNames.length ? advNames.join('、') : '游戏这一版没有高级协议'))
+  const advText = !bridgeOk ? '等桥起来' : (!gameOk ? '游戏没连上（连上后才有）' : (advNames.length ? advNames.join('、') : '补丁没打上（看 bridge-host/sync.log）'))
   const bridgeNameText = names ? (names.bridgeName || '(没读到)') : '…'
   const same = names && names.same === true
 
@@ -366,11 +393,14 @@ return function CabinPanel({ settings, save, toast }) {
 
   h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 } },
     h(ui.Btn, { kind: 'primary', onClick: install, disabled: busy || running }, installed ? '重新安装 / 更新' : '一键安装'),
-    h(ui.Btn, { onClick: start, disabled: !installed || gameOk }, gameOk ? '游戏已在运行' : '启动小屋世界'),
+    h(ui.Btn, { kind: 'ghost', onClick: copyInstallPrompt }, '装不上？复制提示词'),
+    h(ui.Btn, { onClick: start, disabled: !installed || gameOk || busy || running }, gameOk ? '游戏已在运行' : '启动小屋世界'),
     h(ui.Btn, { onClick: restart, disabled: busy || running || !installed }, '重启小屋世界'),
-    h(ui.Btn, { onClick: showGame, disabled: !gameOk }, '显示游戏窗口'),
-      h(ui.Btn, { onClick: hideGame, disabled: !gameOk }, '藏起游戏窗口'),
-      h(ui.Btn, { onClick: test, disabled: !bridgeOk }, '取一次状态'),
+    // 按「装没装」启用，不按桥有没有连上游戏：启动失败时窗口是被藏起来的，
+    // 提示里让人「先看游戏窗口有没有报错」，按钮却灰着，只能去任务管理器。
+    h(ui.Btn, { onClick: showGame, disabled: !installed }, '显示游戏窗口'),
+    h(ui.Btn, { onClick: hideGame, disabled: !installed }, '藏起游戏窗口'),
+    h(ui.Btn, { onClick: test, disabled: !bridgeOk }, '取一次状态'),
     h(ui.Btn, { kind: 'ghost', onClick: load }, '刷新')),
 
   pending ? h('div', { className: 'ab-small', style: { color: 'var(--ab-warn)', marginTop: 8, lineHeight: 1.55 } },
@@ -420,7 +450,7 @@ return function CabinPanel({ settings, save, toast }) {
       h('option', { value: 'high' }, 'high'),
       h('option', { value: 'max' }, 'max'))),
   h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 } },
-    h(ui.Btn, { small: true, onClick: runLifeNow, disabled: lifeBusy }, lifeBusy ? '正在跑…' : '立刻跑一轮'),
+    h(ui.Btn, { small: true, onClick: runLifeNow, disabled: lifeBusy || !(life && life.enabled) }, lifeBusy ? '正在跑…' : '立刻跑一轮'),
     lifeMsg ? h('span', { className: 'ab-small ab-muted' }, lifeMsg) : null),
   saveRow(),
   ]),

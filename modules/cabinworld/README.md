@@ -254,7 +254,7 @@
 
 - 游戏：`modules-data/cabinworld`（上游 `V1.1`，`CabinWorld-win64.zip` 约 287 MB，解压后约 362 MB；装的时候会把内层 `CabinWorld\` 的内容上移到根目录）。
 - 桥：`http://127.0.0.1:18790`，`data\bridge.json` 每次启动换 token；`data\saves\` 是正式存档（不要外传）。实际跑的是 `bridge-host/` 副本（`.patched` = 1）。
-- 模块：`~/.dsh/plugins-data/aurabot/modules/cabinworld`，在 Aurabot 1.2.1 里 `running: user`、无报错，注册了 13 个工具、`/小屋` 命令、16 个面板路由（`grep -c "api.route(" index.mjs` = 16）。睡觉与工具姿势两类由 `lib/patches/` 打到副本桥上；餐厅、电玩城/棋盘由上游 1.1 官方桥自带。
+- 模块：`~/.dsh/plugins-data/aurabot/modules/cabinworld`，在 Aurabot 1.2.1 里 `running: user`、无报错，注册了 13 个工具、`/小屋` 命令、18 个面板路由（`grep -c "api.route(" index.mjs` = 18）。睡觉与工具姿势两类由 `lib/patches/` 打到副本桥上；餐厅、电玩城/棋盘由上游 1.1 官方桥自带。
 
 已验证（都可以重跑）：
 

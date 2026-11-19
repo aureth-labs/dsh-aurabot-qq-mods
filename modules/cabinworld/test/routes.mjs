@@ -4,7 +4,11 @@
 import path from 'node:path'
 import mod from '../index.mjs'
 
-const ok = (cond, label, extra) => console.log((cond ? 'OK ' : 'FAIL ') + label + (extra ? ' - ' + extra : ''))
+const ok = (cond, label, extra) => {
+  if (cond) { console.log('OK ' + label + (extra ? ' - ' + extra : '')); return }
+  console.error('FAIL ' + label + (extra ? ' - ' + extra : ''))
+  process.exitCode = 1
+}
 const firstLine = (s) => String(s || '').split('\n')[0]
 
 const routes = new Map()
