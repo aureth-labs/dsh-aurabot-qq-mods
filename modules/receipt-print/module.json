@@ -1,0 +1,25 @@
+{
+  "id": "receipt-print",
+  "name": "小票打印",
+  "version": "0.1.0",
+  "description": "把模板和提示词变成热敏小票：设定提示词、引用模板，定时生成或随时触发；支持 Windows USB 打印队列、网口 9100、macOS/Linux CUPS，没接打印机时可先预览版面。",
+  "category": "desktop",
+  "tags": [
+    "小票",
+    "热敏打印",
+    "ESC/POS"
+  ],
+  "author": "HDB",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "network",
+    "filesystem",
+    "process"
+  ],
+  "build": {
+    "out": ".build"
+  }
+}
