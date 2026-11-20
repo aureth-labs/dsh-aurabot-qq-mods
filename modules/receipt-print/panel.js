@@ -27,7 +27,7 @@ const emptyTemplate = () => ({
   enabled: true,
   schedule: { enabled: false, time: '08:30', days: [] },
   printer: '',
-  width: 0,
+  widthMm: 0,
   footer: '',
   qr: '',
 })
@@ -40,8 +40,9 @@ return function Panel({ settings, toast }) {
   const [busy, setBusy] = useState('')
   const [preview, setPreview] = useState('')
   const [text, setText] = useState('')
-  const [form, setForm] = useState({ name: '', transport: 'windows', target: '', width: 32 })
+  const [form, setForm] = useState({ name: '', transport: 'windows', target: '', paperWidthMm: 58 })
   const [rawPrinters, setRawPrinters] = useState([])
+  const [live, setLive] = useState(null)
 
   const reload = async () => {
     const r = await call('/templates').catch(() => null)
@@ -49,6 +50,7 @@ return function Panel({ settings, toast }) {
       setTemplates(r.templates || [])
       setPrinters(r.printers || [])
       setRawPrinters(r.settings?.printers || [])
+      setLive(r.settings || null)
     }
     const h = await call('/history').catch(() => null)
     if (h?.ok) setHistory(h.history || [])
@@ -95,12 +97,13 @@ return function Panel({ settings, toast }) {
   const addPrinter = async () => {
     if (!form.name.trim()) return toast('给打印机起个名字')
     if (form.transport !== 'preview' && !form.target.trim()) return toast('填 IP 或系统打印队列名')
-    const next = [...rawPrinters, { ...form, name: form.name.trim(), target: form.target.trim(), width: Number(form.width) }]
+    const next = [...rawPrinters, { ...form, name: form.name.trim(), target: form.target.trim(), paperWidthMm: Number(form.paperWidthMm) }]
     const r = await call('/settings', { patch: { printers: next } }).catch(() => null)
     if (!r?.ok) return toast('添加失败')
     setRawPrinters(next)
-    setForm({ name: '', transport: 'windows', target: '', width: 32 })
+    setForm({ name: '', transport: 'windows', target: '', paperWidthMm: 58 })
     toast('已添加')
+    reload()
   }
 
   const removePrinter = async (name) => {
@@ -163,6 +166,11 @@ return function Panel({ settings, toast }) {
             h('select', { style: field, value: draft.printer || '', onChange: (e) => setDraft({ ...draft, printer: e.target.value }) },
               h('option', { value: '' }, '默认打印机'),
               printers.map((p) => h('option', { key: p.name, value: p.name }, p.name)))),
+          h('label', null, '纸张',
+            h('select', { style: field, value: draft.widthMm || 0, onChange: (e) => setDraft({ ...draft, widthMm: Number(e.target.value) }) },
+              h('option', { value: 0 }, '跟随打印机'),
+              h('option', { value: 58 }, '58mm'),
+              h('option', { value: 80 }, '80mm'))),
         ),
         h('div', { style: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' } },
           h('label', null, h('input', { type: 'checkbox', checked: draft.schedule?.enabled === true, onChange: (e) => setSchedule({ enabled: e.target.checked }) }), ' 定时生成'),
@@ -186,15 +194,17 @@ return function Panel({ settings, toast }) {
     ),
 
     h(ui.Card, { title: '打印机' },
-      h('p', { className: 'ab-note' }, 'USB 打印机填 Windows「设备和打印机」里显示的队列名；网口填 IP（可带 :9100）。改完记得保存设置。'),
+      h('p', { className: 'ab-note' }, `全局纸宽 ${live?.paperWidthMm ?? settings.paperWidthMm ?? 58} mm，有效宽度 ${live?.effectiveWidthMm > 0 ? live.effectiveWidthMm + ' mm' : '自动'}；改纸宽、有效宽度和自检指令请到「设置」页。USB 打印机填 Windows「设备和打印机」里的队列名，网口填 IP（可带 :9100）。`),
+      h('div', { style: { display: 'flex', gap: 8, marginBottom: 8 } },
+        h(ui.Btn, { onClick: () => testPrinter('') }, '一键自检默认打印机')),
       !rawPrinters.length && h('p', { className: 'ab-muted' }, '还没有打印机，可以先加一台「只预览」。'),
       rawPrinters.map((p) => {
         const meta = printers.find((x) => x.name === p.name)
         return h('div', { key: p.name, style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '6px 0', borderTop: '1px solid rgba(128,128,128,.18)' } },
           h('div', { style: { flex: '1 1 220px' } },
             h('div', null, p.name),
-            h('div', { className: 'ab-small ab-muted' }, `${(TRANSPORTS.find((t) => t[0] === p.transport) || [])[1] || p.transport} · ${p.target || '未填目标'} · ${meta?.width || p.width || settings.width} 字符`)),
-          h(ui.Btn, { disabled: busy === 'test-' + p.name, onClick: () => testPrinter(p.name) }, busy === 'test-' + p.name ? '发送中…' : '测试'),
+            h('div', { className: 'ab-small ab-muted' }, `${(TRANSPORTS.find((t) => t[0] === p.transport) || [])[1] || p.transport} · ${p.target || '未填目标'} · ${meta?.paperMm || p.paperWidthMm || settings.paperWidthMm || 58}mm / ${meta?.columns || '—'} 列`)),
+          h(ui.Btn, { disabled: busy === 'test-' + p.name, onClick: () => testPrinter(p.name) }, busy === 'test-' + p.name ? '发送中…' : '自检'),
           h(ui.Btn, { onClick: () => removePrinter(p.name) }, '移除'),
         )
       }),
@@ -203,8 +213,8 @@ return function Panel({ settings, toast }) {
         h('select', { style: field, value: form.transport, onChange: (e) => setForm({ ...form, transport: e.target.value }) },
           TRANSPORTS.map(([value, label]) => h('option', { key: value, value }, label))),
         h('input', { style: { ...field, flex: '1 1 150px' }, placeholder: '队列名 / IP / 留空', value: form.target, onChange: (e) => setForm({ ...form, target: e.target.value }) }),
-        h('select', { style: field, value: form.width, onChange: (e) => setForm({ ...form, width: Number(e.target.value) }) },
-          h('option', { value: 32 }, '58mm'), h('option', { value: 48 }, '80mm')),
+        h('select', { style: field, value: form.paperWidthMm, onChange: (e) => setForm({ ...form, paperWidthMm: Number(e.target.value) }) },
+          h('option', { value: 58 }, '58mm'), h('option', { value: 80 }, '80mm')),
         h(ui.Btn, { onClick: addPrinter }, '添加'),
       ),
     ),
@@ -215,7 +225,7 @@ return function Panel({ settings, toast }) {
         h(ui.Btn, {
           onClick: async () => {
             const r = await call('/preview', { text }).catch(() => null)
-            setPreview(r?.preview || '没有内容')
+            setPreview(r?.ok ? `每行 ${r.columns} 列 · 纸宽 ${r.paperWidthMm}mm / 有效 ${r.effectiveWidthMm}mm\n\n${r.preview}` : '没有内容')
           },
         }, '按当前纸宽预览')),
       preview && h('pre', { className: 'ab-small', style: { whiteSpace: 'pre-wrap', marginTop: 10, padding: 10, border: '1px solid rgba(128,128,128,.25)', borderRadius: 8 } }, preview),

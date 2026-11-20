@@ -28,13 +28,16 @@ function fakeSpawn(captured) {
 }
 
 test('打印机参数归一化', () => {
-  const p = normalizePrinter({ name: ' POS-58 ', transport: 'weird', target: ' 1.2.3.4 ', width: 100 }, { width: 48 })
+  const p = normalizePrinter({ name: ' POS-58 ', transport: 'weird', target: ' 1.2.3.4 ', width: 48 }, { width: 32 })
   assert.equal(p.name, 'POS-58')
   assert.equal(p.transport, 'windows')
   assert.equal(p.target, '1.2.3.4')
-  assert.equal(p.width, 48)
-  assert.equal(normalizePrinter({ width: 48 }).width, 48)
-  assert.equal(normalizePrinter({ width: 32 }).width, 32)
+  assert.equal(p.paperWidthMm, 80)
+  assert.equal(p.effectiveWidthMm, 0, '0 表示按纸宽自动')
+  assert.equal(normalizePrinter({ width: 32 }).paperWidthMm, 58)
+  assert.equal(normalizePrinter({ paperWidthMm: 40, effectiveWidthMm: 35 }).paperWidthMm, 40)
+  assert.equal(normalizePrinter({ paperWidthMm: 40, effectiveWidthMm: 35 }).effectiveWidthMm, 35)
+  assert.equal(normalizePrinter({ paperWidthMm: 300 }).paperWidthMm, 58, '超范围纸宽回落默认值')
 })
 
 test('解析网口目标', () => {

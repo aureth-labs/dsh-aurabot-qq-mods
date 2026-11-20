@@ -36,8 +36,10 @@ export function buildReceiptBytes(lines, options = {}) {
     cut = 'partial',
     feed = 3,
     qr = '',
+    columns,
     width = 32,
   } = options
+  const cols = Math.max(8, Math.min(96, Math.floor(Number(columns ?? width)) || 32))
   const encode = encoder(encoding)
   const chunks = []
 
@@ -56,7 +58,7 @@ export function buildReceiptBytes(lines, options = {}) {
       chunks.push(Buffer.from([ESC, 0x61, 0x00]))
       chunks.push(Buffer.from('\n', 'utf8'))
     } else if (line?.style === 'sep') {
-      chunks.push(encode(text || '-'.repeat(Math.max(8, Math.floor(width)))))
+      chunks.push(encode(text || '-'.repeat(Math.max(8, cols))))
       chunks.push(Buffer.from('\n', 'utf8'))
     } else {
       chunks.push(encode(text))

@@ -4,15 +4,18 @@ import { openStore } from './lib/store.mjs'
 import { normalizePrinter, sendBytes, TRANSPORT_LABELS } from './lib/transport.mjs'
 import { buildReceiptBytes } from './lib/escpos.mjs'
 import { buildLines, buildPrompt, cleanModelText, previewText, formatDate } from './lib/templates.mjs'
+import { resolvePaper, parseHexPayload } from './lib/paper.mjs'
 import { tick } from './lib/scheduler.mjs'
 
 const DEFAULTS = {
   enabled: true,
   defaultPrinter: '',
   printers: [],
-  width: 32,
+  paperWidthMm: 58,
+  effectiveWidthMm: 0,
   encoding: 'gbk',
   cut: 'partial',
+  selfTestHex: '',
   maxChars: 1200,
   showHeader: true,
   footer: '',
@@ -30,12 +33,25 @@ const SEED_TEMPLATE = {
 }
 
 function normalizeSettings(raw = {}) {
-  const settings = { ...DEFAULTS, ...(raw && typeof raw === 'object' ? raw : {}) }
+  const source = raw && typeof raw === 'object' ? raw : {}
+  const settings = { ...DEFAULTS, ...source }
+  // 兼容旧配置里的 width（32/48 个字符）；显式 paperWidthMm 优先
+  const legacyPaper = source.paperWidthMm !== undefined
+    ? source.paperWidthMm
+    : (Number(source.width) === 48 ? 80 : 58)
+  const paper = resolvePaper({
+    paperWidthMm: legacyPaper,
+    effectiveWidthMm: settings.effectiveWidthMm,
+  })
+  const effectiveRaw = Number(settings.effectiveWidthMm)
   return {
     ...settings,
-    width: Number(settings.width) === 48 ? 48 : 32,
+    paperWidthMm: paper.paperMm,
+    // 0 表示自动，跟着纸宽走；填了就固定，并限制在纸宽以内
+    effectiveWidthMm: effectiveRaw > 0 ? Math.min(paper.paperMm, Math.round(effectiveRaw * 10) / 10) : 0,
     encoding: String(settings.encoding) === 'utf8' ? 'utf8' : 'gbk',
     cut: ['partial', 'full', 'none'].includes(settings.cut) ? settings.cut : 'partial',
+    selfTestHex: String(settings.selfTestHex || '').trim().slice(0, 20000),
     maxChars: Math.max(100, Math.min(4000, Number(settings.maxChars) || DEFAULTS.maxChars)),
     timeoutMs: Math.max(1000, Math.min(30000, Number(settings.timeoutMs) || DEFAULTS.timeoutMs)),
     showHeader: settings.showHeader !== false,
@@ -44,7 +60,13 @@ function normalizeSettings(raw = {}) {
 }
 
 function normalizePrinters(settings) {
-  return settings.printers.map((raw) => normalizePrinter(raw, settings))
+  return settings.printers.map((raw) => normalizePrinter(raw, {
+    paperWidthMm: settings.paperWidthMm,
+    effectiveWidthMm: settings.effectiveWidthMm,
+    encoding: settings.encoding,
+    cut: settings.cut,
+    selfTestHex: settings.selfTestHex,
+  }))
 }
 
 function resolvePrinter(settings, name) {
@@ -57,9 +79,14 @@ function resolvePrinter(settings, name) {
   return printers[0] || null
 }
 
-function paperWidth(settings, printer, template) {
-  return Number(template?.width) === 48 ? 48
-    : printer?.width || settings.width
+// 纸宽优先级：模板指定 > 打印机指定 > 全局设置。
+// 有效宽度 0 时按纸宽自动算（58→48mm，80→72mm），再换算成每行字符数。
+function paperFor(settings, printer, template) {
+  const paperMm = template?.widthMm || printer?.paperWidthMm || settings.paperWidthMm
+  const effectiveMm = Number(printer?.effectiveWidthMm) > 0
+    ? printer.effectiveWidthMm
+    : (Number(settings.effectiveWidthMm) > 0 ? settings.effectiveWidthMm : 0)
+  return resolvePaper({ paperWidthMm: paperMm, effectiveWidthMm: effectiveMm })
 }
 
 async function readBody(req) {
@@ -77,13 +104,15 @@ async function readBody(req) {
 export default {
   id: 'receipt-print',
   name: '小票打印',
-  version: '0.1.0',
+  version: '0.2.0',
   api: 1,
-  description: '把模板和提示词变成热敏小票：可定时生成或随时触发，支持 Windows USB 打印队列、网口 9100 和 CUPS；没接打印机时可先预览版面。',
+  description: '把模板和提示词变成热敏小票：可定时生成或随时触发；纸宽按毫米设置并自适应排版，支持一键 ESC/POS 自检（指令可替换）、Windows USB 打印队列、网口 9100 和 CUPS；没接打印机时可先预览版面。',
   defaults: DEFAULTS,
   settings: [
     { key: 'enabled', label: '启用', type: 'switch', hint: '关掉后定时任务不再触发，命令仍会提示已关闭' },
-    { key: 'width', label: '纸宽（每行字符）', type: 'select', options: [{ value: 32, label: '58mm（32 字符）' }, { value: 48, label: '80mm（48 字符）' }], hint: '按打印机实际纸宽选；中文占 2 个字符' },
+    { key: 'paperWidthMm', label: '纸宽（mm）', type: 'number', min: 20, max: 120, step: 1, hint: '常见 58 / 80；以打印机规格为准' },
+    { key: 'effectiveWidthMm', label: '有效打印宽度（mm）', type: 'number', min: 0, max: 120, step: 1, hint: '0 = 自动（58mm→48mm，80mm→72mm）；每行字符数由它换算，填纸的可用宽度' },
+    { key: 'selfTestHex', label: '自检指令（十六进制，可空）', type: 'text', placeholder: '留空 = 内置 ESC/POS 自检页', hint: '例如 1B 40 1B 61 01 ...；填了就原样发给打印机，不再发内置自检页' },
     { key: 'encoding', label: '中文编码', type: 'select', options: [{ value: 'gbk', label: 'GBK（多数国产机）' }, { value: 'utf8', label: 'UTF-8' }] },
     { key: 'cut', label: '切纸', type: 'select', options: [{ value: 'partial', label: '半切' }, { value: 'full', label: '全切' }, { value: 'none', label: '不切' }] },
     { key: 'defaultPrinter', label: '默认打印机', type: 'text', hint: '填打印机名字，需和下面「打印机」里的一致；空则用第一台' },
@@ -124,9 +153,9 @@ export default {
       const printer = options.printerName
         ? normalizePrinters(settings).find((p) => p.name === options.printerName) || null
         : (template.printer ? normalizePrinters(settings).find((p) => p.name === template.printer) : null) || resolvePrinter(settings, '')
-      const width = paperWidth(settings, printer, template)
+      const paper = paperFor(settings, printer, template)
       const now = options.now instanceof Date ? options.now : new Date()
-      const prompt = buildPrompt(template, { width, now })
+      const prompt = buildPrompt(template, { ...paper, width: paper.columns, now })
       if (!prompt.text) return { ok: false, message: '模板提示词是空的' }
 
       running.add(template.id)
@@ -143,7 +172,9 @@ export default {
         const { lines, qr } = buildLines({
           template,
           body,
-          width,
+          width: paper.columns,
+          paperMm: paper.paperMm,
+          effectiveMm: paper.effectiveMm,
           showHeader: settings.showHeader,
           footer: template.footer || settings.footer,
           qr: template.qr || settings.qrText,
@@ -165,7 +196,7 @@ export default {
         const bytes = buildReceiptBytes(lines, {
           encoding: printer.encoding || settings.encoding,
           cut: printer.cut || settings.cut,
-          width,
+          columns: paper.columns,
           qr,
           feed: 3,
         })
@@ -197,11 +228,13 @@ export default {
       const body = String(text || '').trim()
       if (!body) return { ok: false, message: '要打印什么？用法：/打印 内容' }
       const printer = resolvePrinter(settings, printerName)
-      const width = paperWidth(settings, printer, null)
+      const paper = paperFor(settings, printer, null)
       const { lines, qr } = buildLines({
         template: { name: '打印' },
         body,
-        width,
+        width: paper.columns,
+        paperMm: paper.paperMm,
+        effectiveMm: paper.effectiveMm,
         showHeader: false,
         footer: settings.footer,
         qr: settings.qrText,
@@ -212,7 +245,7 @@ export default {
       const bytes = buildReceiptBytes(lines, {
         encoding: printer.encoding || settings.encoding,
         cut: printer.cut || settings.cut,
-        width,
+        columns: paper.columns,
         qr,
         feed: 3,
       })
@@ -248,36 +281,83 @@ export default {
       const list = printers.map((p, i) => {
         const mark = p.name === settings.defaultPrinter ? '（默认）' : ''
         const target = p.transport === 'preview' ? '' : ` → ${p.target || '未填目标'}`
-        return `${i + 1}. ${p.name}${mark} · ${TRANSPORT_LABELS[p.transport] || p.transport}${target} · ${p.width} 字符`
+        const paper = resolvePaper({ paperWidthMm: p.paperWidthMm, effectiveWidthMm: p.effectiveWidthMm })
+        return `${i + 1}. ${p.name}${mark} · ${TRANSPORT_LABELS[p.transport] || p.transport}${target} · ${paper.paperMm}mm / ${paper.columns} 列`
       })
       return ['打印机：', ...list].join('\n')
     }
 
-    async function testPrint(name) {
+    function rulerLine(columns) {
+      return '1234567890'.repeat(Math.ceil(columns / 10) + 1).slice(0, columns)
+    }
+
+    /**
+     * 一键自检：默认发内置 ESC/POS 自检页（纸宽、列数、编码、中文、刻度尺、二维码、切纸）。
+     * 打印机或全局设置了 selfTestHex 时，原样发送那段十六进制指令。
+     */
+    async function selfTest(name) {
       const settings = settingsNow()
       const printer = resolvePrinter(settings, name || settings.defaultPrinter)
       if (!printer) return { ok: false, message: printerList() }
-      const { lines, qr } = buildLines({
-        template: { name: '打印测试' },
-        body: [
-          '小票打印已连通',
-          `传输：${TRANSPORT_LABELS[printer.transport] || printer.transport}`,
+
+      const paper = paperFor(settings, printer, null)
+      const customHex = String(printer.selfTestHex || settings.selfTestHex || '').trim()
+      let bytes
+      if (customHex) {
+        const parsed = parseHexPayload(customHex)
+        if (!parsed.ok) return { ok: false, message: `自检指令有问题：${parsed.error}` }
+        if (!parsed.bytes.length) return { ok: false, message: '自检指令是空的' }
+        bytes = parsed.bytes
+      } else {
+        const body = [
           `打印机：${printer.name}`,
-          `纸宽：${printer.width} 字符`,
-          `编码：${printer.encoding}`,
-          '如果中文正常、切纸正常，就可以用了。',
-        ].join('\n'),
-        width: printer.width,
-        showHeader: true,
-        footer: '{date} {time}',
-        qr: 'https://github.com/HDB-Studio/dsh-aurabot-qq-mods',
-        now: new Date(),
-      })
-      const bytes = buildReceiptBytes(lines, { encoding: printer.encoding, cut: printer.cut, width: printer.width, qr })
+          `通道：${TRANSPORT_LABELS[printer.transport] || printer.transport}`,
+          `目标：${printer.transport === 'preview' ? '不实际出纸' : (printer.target || '未填')}`,
+          `纸宽：${paper.paperMm}mm / 有效 ${paper.effectiveMm}mm / 每行 ${paper.columns} 列`,
+          `编码：${printer.encoding} · 切纸：${printer.cut}`,
+          '',
+          '中文测试：小票打印中文正常',
+          'ASCII: ABC abc 0123456789',
+          rulerLine(paper.columns),
+          '上面这行数字如果正好铺满纸宽，说明有效宽度设置正确。',
+        ].join('\n')
+        const { lines, qr } = buildLines({
+          template: { name: '打印机自检' },
+          body,
+          width: paper.columns,
+          paperMm: paper.paperMm,
+          effectiveMm: paper.effectiveMm,
+          showHeader: true,
+          footer: '{date} {time}',
+          qr: 'AURABOT receipt-print',
+          now: new Date(),
+        })
+        bytes = buildReceiptBytes(lines, {
+          encoding: printer.encoding || settings.encoding,
+          cut: printer.cut || settings.cut,
+          columns: paper.columns,
+          qr,
+          feed: 4,
+        })
+      }
+
       const result = await sendBytes(printer, bytes, { timeoutMs: settings.timeoutMs, dataDir: api.dataDir() })
-      return result.ok
-        ? { ok: true, message: `测试页已发送到「${printer.name}」` }
-        : { ok: false, message: `测试失败：${result.error || '未知错误'}` }
+      store.addHistory({
+        template: customHex ? '自检（自定义指令）' : '自检',
+        printer: printer.name,
+        transport: printer.transport,
+        ok: result.ok === true,
+        error: result.error || '',
+        chars: customHex ? customHex.length : paper.columns,
+        preview: false,
+      })
+      if (!result.ok) return { ok: false, message: `自检失败：${result.error || '未知错误'}` }
+      return {
+        ok: true,
+        message: customHex
+          ? `已把自定义自检指令（${bytes.length} 字节）发到「${printer.name}」`
+          : `自检页已发到「${printer.name}」（${paper.paperMm}mm / ${paper.columns} 列）`,
+      }
     }
 
     // ---------- 定时 ----------
@@ -307,10 +387,10 @@ export default {
         const settings = settingsNow()
         if (!text || text === '列表') {
           const defaultName = settings.defaultPrinter || normalizePrinters(settings)[0]?.name || '未配置'
-          return [templateList(), '', `默认打印机：${defaultName}`, '用法：/小票 名称 · /小票 预览 名称 · /小票 测试'].join('\n')
+          return [templateList(), '', `默认打印机：${defaultName}`, '用法：/小票 名称 · /小票 预览 名称 · /小票 自检'].join('\n')
         }
-        if (text === '测试') {
-          return (await testPrint('')).message
+        if (text === '测试' || text === '自检') {
+          return (await selfTest('')).message
         }
         if (text.startsWith('预览')) {
           const name = text.replace(/^预览\s*/, '').trim()
@@ -353,13 +433,30 @@ export default {
 
     api.command({
       name: '打印机',
-      desc: '看小票打印机和默认机器；/打印机 测试 [名字] 打测试页',
+      desc: '看小票打印机和默认机器；/打印机 自检 [名字] 打自检页',
       async run(arg) {
         const text = String(arg || '').trim()
-        const name = text.replace(/^测试\s*/, '').trim()
-        if (text.startsWith('测试')) return (await testPrint(name)).message
+        const name = text.replace(/^(测试|自检)\s*/, '').trim()
+        if (/^(测试|自检)/.test(text)) return (await selfTest(name)).message
         const settings = settingsNow()
-        return [printerList(), '', `纸宽：${settings.width} 字符 · 编码：${settings.encoding} · 切纸：${settings.cut}`, '去面板「小票打印」里增删打印机。'].join('\n')
+        const paper = resolvePaper({ paperWidthMm: settings.paperWidthMm, effectiveWidthMm: settings.effectiveWidthMm })
+        const selfTestLabel = settings.selfTestHex ? '自定义指令' : '内置 ESC/POS 自检页'
+        return [
+          printerList(),
+          '',
+          `纸宽：${paper.paperMm}mm · 有效：${paper.effectiveMm}mm · 每行 ${paper.columns} 列`,
+          `编码：${settings.encoding} · 切纸：${settings.cut} · 自检：${selfTestLabel}`,
+          '去面板「小票打印」里改纸宽、增删打印机。',
+        ].join('\n')
+      },
+    })
+
+    api.command({
+      name: '自检',
+      aliases: ['selfcheck'],
+      desc: '一键自检打印机：/自检 [打印机名字]',
+      async run(arg) {
+        return (await selfTest(String(arg || '').trim())).message
       },
     })
 
@@ -367,7 +464,10 @@ export default {
     api.route('/templates', () => ({
       ok: true,
       templates: store.templates(),
-      printers: normalizePrinters(settingsNow()),
+      printers: normalizePrinters(settingsNow()).map((p) => ({
+        ...p,
+        ...resolvePaper({ paperWidthMm: p.paperWidthMm, effectiveWidthMm: p.effectiveWidthMm }),
+      })),
       settings: settingsNow(),
     }))
 
@@ -404,7 +504,7 @@ export default {
 
     api.route('/test', async (req) => {
       const body = await readBody(req)
-      return testPrint(String(body.name || '').trim())
+      return selfTest(String(body.name || '').trim())
     })
 
     api.route('/history', () => ({
@@ -419,17 +519,26 @@ export default {
       const body = await readBody(req)
       const settings = settingsNow()
       const printer = resolvePrinter(settings, body.printer)
-      const width = paperWidth(settings, printer, null)
+      const paper = paperFor(settings, printer, null)
       const { lines, qr } = buildLines({
         template: { name: '' },
         body: String(body.text || ''),
-        width,
+        width: paper.columns,
+        paperMm: paper.paperMm,
+        effectiveMm: paper.effectiveMm,
         showHeader: false,
         footer: settings.footer,
         qr: settings.qrText,
         now: new Date(),
       })
-      return { ok: true, preview: previewText(lines), width, qr: qr ? '会打印二维码' : '' }
+      return {
+        ok: true,
+        preview: previewText(lines),
+        columns: paper.columns,
+        paperWidthMm: paper.paperMm,
+        effectiveWidthMm: paper.effectiveMm,
+        qr: qr ? '会打印二维码' : '',
+      }
     })
 
     log.info?.(`小票打印已启动，${store.templates().length} 个模板，${normalizePrinters(settingsNow()).length} 台打印机`)

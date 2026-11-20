@@ -1,7 +1,7 @@
 // 模板：提示词占位符替换、模型输出清洗、打印行组装。
 import { wrapText } from './layout.mjs'
 
-export const PLACEHOLDERS = ['date', 'weekday', 'time', 'datetime', 'weekdayNum', 'width', 'name']
+export const PLACEHOLDERS = ['date', 'weekday', 'time', 'datetime', 'weekdayNum', 'width', 'paper', 'effective', 'columns', 'name']
 
 const WEEKDAY_CN = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
 
@@ -24,16 +24,20 @@ export function substitute(text, vars) {
   })
 }
 
-export function templateVars(template, { width, now = new Date() } = {}) {
+export function templateVars(template, { width, paperMm = 58, effectiveMm = 48, now = new Date() } = {}) {
   return {
     ...formatDate(now),
+    // width 保留为「每行字符数」，方便旧提示词继续用
     width: String(width),
+    columns: String(width),
+    paper: String(paperMm),
+    effective: String(effectiveMm),
     name: String(template?.name || ''),
   }
 }
 
-export function buildPrompt(template, { width, now = new Date() } = {}) {
-  const vars = templateVars(template, { width, now })
+export function buildPrompt(template, { width, paperMm, effectiveMm, now = new Date() } = {}) {
+  const vars = templateVars(template, { width, paperMm, effectiveMm, now })
   const text = substitute(template?.prompt, vars).trim()
   const system = substitute(template?.system || '你是简洁的中文助理。只输出要打印在小票上的正文，不要 Markdown、不要代码块、不要解释。', vars).trim()
   return { system, text }
@@ -66,6 +70,8 @@ export function buildLines({
   template,
   body = '',
   width = 32,
+  paperMm = 58,
+  effectiveMm = 48,
   showHeader = true,
   footer = '',
   qr = '',
@@ -73,7 +79,7 @@ export function buildLines({
   title,
 } = {}) {
   const lines = []
-  const vars = templateVars(template, { width, now })
+  const vars = templateVars(template, { width, paperMm, effectiveMm, now })
   const heading = String(title || template?.name || '').trim()
 
   if (showHeader) {

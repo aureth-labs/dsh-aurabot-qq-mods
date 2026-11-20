@@ -1,8 +1,8 @@
 {
   "id": "receipt-print",
   "name": "小票打印",
-  "version": "0.1.0",
-  "description": "把模板和提示词变成热敏小票：设定提示词、引用模板，定时生成或随时触发；支持 Windows USB 打印队列、网口 9100、macOS/Linux CUPS，没接打印机时可先预览版面。",
+  "version": "0.2.0",
+  "description": "把模板和提示词变成热敏小票：设定提示词、引用模板，定时生成或随时触发；按毫米设置纸宽并自适应排版，支持一键 ESC/POS 自检（指令可替换）、Windows USB 打印队列、网口 9100 和 CUPS，没接打印机时可先预览版面。",
   "category": "desktop",
   "tags": [
     "小票",

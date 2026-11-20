@@ -7,6 +7,7 @@ import { connect } from 'node:net'
 import { spawn } from 'node:child_process'
 import { writeFile, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
+import { normalizePaperMm, normalizeEffectiveMm, DEFAULT_PAPER_MM } from './paper.mjs'
 
 export const TRANSPORTS = ['windows', 'tcp', 'cups', 'preview']
 
@@ -17,19 +18,34 @@ export const TRANSPORT_LABELS = {
   preview: '只预览',
 }
 
+// 旧配置 width 是字符数，只有 32/48 才当作旧字段，避免把 32mm 这种自定义纸宽误读。
+function legacyPaperMm(width) {
+  const n = Number(width)
+  if (n === 48) return 80
+  if (n === 32) return 58
+  return undefined
+}
+
 export function normalizePrinter(raw = {}, defaults = {}) {
   const transport = TRANSPORTS.includes(raw.transport) ? raw.transport : (defaults.transport || 'windows')
-  const requestedWidth = Number(raw.width)
-  const fallbackWidth = Number(defaults.width)
-  const width = [32, 48].includes(requestedWidth) ? requestedWidth : ([32, 48].includes(fallbackWidth) ? fallbackWidth : 32)
+  const rawPaper = raw.paperWidthMm !== undefined
+    ? raw.paperWidthMm
+    : (raw.width !== undefined ? legacyPaperMm(raw.width) : undefined)
+  const defaultPaper = defaults.paperWidthMm !== undefined
+    ? defaults.paperWidthMm
+    : (defaults.width !== undefined ? legacyPaperMm(defaults.width) : undefined)
+  const paperMm = normalizePaperMm(rawPaper, normalizePaperMm(defaultPaper, DEFAULT_PAPER_MM))
+  const rawEffective = Number(raw.effectiveWidthMm ?? defaults.effectiveWidthMm)
   return {
     name: String(raw.name || defaults.name || '打印机').trim(),
     transport,
     target: String(raw.target || defaults.target || '').trim(),
     port: Number(raw.port || defaults.port || 9100),
-    width: width === 48 ? 48 : 32,
+    paperWidthMm: paperMm,
+    effectiveWidthMm: rawEffective > 0 ? normalizeEffectiveMm(rawEffective, paperMm) : 0,
     encoding: String(raw.encoding || defaults.encoding || 'gbk'),
     cut: String(raw.cut || defaults.cut || 'partial'),
+    selfTestHex: String(raw.selfTestHex || defaults.selfTestHex || '').trim(),
   }
 }
 

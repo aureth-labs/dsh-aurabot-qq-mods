@@ -9,6 +9,17 @@ export function newId() {
   return `tpl-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
 }
 
+// 旧模板用 width=32/48（字符数），换算成纸宽；0 表示跟随打印机。
+function templatePaperMm(raw) {
+  if (raw.widthMm !== undefined) {
+    const n = Number(raw.widthMm)
+    return Number.isFinite(n) && n >= 20 && n <= 120 ? Math.round(n * 10) / 10 : 0
+  }
+  if (Number(raw.width) === 48) return 80
+  if (Number(raw.width) === 32) return 58
+  return 0
+}
+
 export function normalizeTemplate(raw = {}) {
   const schedule = raw.schedule && typeof raw.schedule === 'object' ? raw.schedule : {}
   const days = Array.isArray(schedule.days)
@@ -27,7 +38,7 @@ export function normalizeTemplate(raw = {}) {
       days,
     },
     printer: String(raw.printer || ''),
-    width: Number(raw.width) === 48 ? 48 : 0,
+    widthMm: templatePaperMm(raw),
     footer: String(raw.footer || ''),
     qr: String(raw.qr || ''),
     createdAt: Number(raw.createdAt) || Date.now(),
