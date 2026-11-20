@@ -36,7 +36,7 @@ const MIN_MS = 60_000            // 一分钟（碎碎念间隔/静默窗口都�
 export default {
   id: 'pet',
   name: '桌宠',
-  version: '1.0.19',
+  version: '1.0.20',
   api: 1,
   description: '把大肥鱼请到桌面上：会冒气泡、做小动作，你在干活时也陪着你。',
 
@@ -904,7 +904,7 @@ export default {
     // 表现是「行为层整体不生效」而面板一切正常，极难发现。这里拿「模板签名」和「生成时记下的签名」
     // 对账：缺文件 / 内容不符 / 模板比生成物新，一律在 status 里明说，面板据此提示重新生成。
     // 只读对账，绝不自动覆盖用户手改过的 app/（生成走 installClient，由面板按钮触发）。
-    const CLIENT_FILES = ['main.js', 'preload.js', 'index.html', 'physics.js', 'packmeta.js', 'behavior.js', 'chat.html', 'house.html', 'house.js']
+    const CLIENT_FILES = ['main.js', 'preload.js', 'index.html', 'physics.js', 'packmeta.js', 'behavior.js', 'chat.html', 'house.html', 'house.js', 'package.json']
     const CLIENT_OPTIONAL = ['README.md'] // 只复制不校验：文档缺失不影响运行
     const CLIENT_STAMP = 'client-stamp.json' // 生成时写进 app/ 的签名凭据
     const fileHash = (p) => {
@@ -1060,7 +1060,11 @@ export default {
     // 测试钩子：测试注入 fake spawn/kill，不打真网络、不真启动 Electron
     const petHooks = api.__petTestHooks || {}
     const spawnFn = petHooks.spawn || nodeSpawn
-    const killFn = petHooks.kill || ((pid) => { process.kill(Number(pid), 'SIGTERM'); return true })
+    const killFn = petHooks.kill || ((pid) => process.kill(pid, 'SIGTERM'))
+    const probePid = petHooks.probePid || ((pid) => process.kill(pid, 0))
+    function processAlive(pid) {
+      try { return probePid(pid) } catch (error) { return error?.code === 'EPERM' }
+    }
     // Electron 宿主保险（真机踩过）：DSH 跑在 Electron 里，**主进程的 fs 带 asar 补丁**——路径里只要出现
     // `.asar`，openSync 就先按「打开 asar 包」处理，去读文件头；读不到直接抛
     // `Invalid package <path>`（Electron 45 实测，堆栈落在 node:electron/js2c/node_init 的 openSync 包装）。
@@ -1081,11 +1085,23 @@ export default {
     }
     const procFile = () => api.dataDir('process.json')
     let electronProc = null // { pid, startedAt }
-    const recordedPid = () => {
-      if (electronProc) return electronProc
-      const p = readJson(procFile(), null)
-      if (p && Number.isInteger(p.pid) && p.pid > 0) electronProc = p
-      return electronProc
+    let electronStartup = null
+    function forgetProcess(proc) {
+      if (electronProc === proc) electronProc = null
+      const saved = readJson(procFile(), null)
+      if (saved?.pid === proc.pid && saved.startedAt === proc.startedAt) {
+        try { unlinkSync(procFile()) } catch {}
+      }
+    }
+    function recordedPid() {
+      const proc = electronProc || readJson(procFile(), null)
+      if (!Number.isSafeInteger(proc?.pid) || proc.pid <= 0) return null
+      if (!processAlive(proc.pid)) {
+        forgetProcess(proc)
+        return null
+      }
+      electronProc = proc
+      return proc
     }
 
     // ---------- zip 直装（无 npm 环境的兜底，自动化优先） ----------
@@ -1562,12 +1578,13 @@ export default {
       if (!existsSync(join(appDir(), 'main.js'))) return { ok: false, message: '还没生成客户端：先点「下载 / 生成客户端」' }
       // 有 npm-cli 就走 npm（老行为，保持不变）；没有（DSH 自带运行时/裸机）就走 zip 直装，零环境依赖。
       const cli = npmCli()
-      if (!cli) return electronInstallZip(exe)
+      if (!cli || !existsSync(join(appDir(), 'package.json'))) return electronInstallZip(exe)
       const out = await new Promise((resolve) => {
         let tail = ''
         let child = null
         try {
-          child = spawnFn(process.execPath, [cli, 'install', '-D', 'electron'], {
+          // 保留生成时的 package.json 内容和签名，按指定版本安装。
+          child = spawnFn(process.execPath, [cli, 'install', '--no-save', `electron@${electronZipUrl().ver}`], {
             cwd: appDir(),
             env: { ...process.env, ELECTRON_MIRROR: electronMirror() },
             windowsHide: true,
@@ -1594,43 +1611,79 @@ export default {
       }
     }
 
-    function launch() {
+    function launchFailure(reason) {
+      const message = `桌宠启动失败：${String(reason).slice(0, 240)}`
+      api.log.warn(message)
+      return { ok: false, message }
+    }
+
+    async function launch() {
+      if (electronStartup) return electronStartup
       if (online().online) return { ok: true, alreadyRunning: true, message: '桌宠已经在跑了（心跳正常），不用重复启动' }
+      const running = recordedPid()
+      if (running) return { ok: true, alreadyRunning: true, pid: running.pid, message: '桌宠进程已在运行，尚未收到心跳' }
       const exe = electronExe()
-      if (!existsSync(exe)) return { ok: false, message: 'Electron 还没安装：先点「安装 Electron」' }
-      if (!existsSync(join(appDir(), 'main.js'))) return { ok: false, message: 'app/main.js 不见了：先点「下载 / 生成客户端」' }
+      if (!existsSync(exe)) return launchFailure('Electron 还没安装：先点「安装 Electron」')
+      if (!existsSync(join(appDir(), 'main.js'))) return launchFailure('app/main.js 不见了：先点「下载 / 生成客户端」')
+      if (!existsSync(join(appDir(), 'package.json'))) return launchFailure('app/package.json 不见了：请重新生成客户端')
+      let child
       try {
         // 分离进程启动；env 必须去掉 ELECTRON_RUN_AS_NODE（见 cleanElectronEnv）
-        const child = spawnFn(exe, ['main.js'], { cwd: appDir(), env: cleanElectronEnv(), detached: true, stdio: 'ignore', windowsHide: true })
-        child.on?.('error', (error) => api.log.warn('桌宠启动失败：', error.message)) // 没人听就是未捕获异常，会带走 DSH
-        child.unref?.()
-        electronProc = { pid: child.pid, startedAt: Date.now() }
-        try { writeJsonAtomic(procFile(), electronProc) } catch (e) { api.log.debug(`进程文件写入失败：${e.message}`) }
-        api.log.info(`桌宠已启动（pid ${child.pid}）`)
-        return { ok: true, pid: child.pid, message: `桌宠已启动（pid ${child.pid}），等它连上就有心跳了` }
+        child = spawnFn(exe, ['main.js'], { cwd: appDir(), env: cleanElectronEnv(), detached: true, stdio: 'ignore', windowsHide: true })
       } catch (error) {
-        return { ok: false, message: '启动失败：' + String(error?.message || error).slice(0, 160) }
+        return launchFailure(error?.message || error)
       }
+      const proc = { pid: child.pid, startedAt: Date.now() }
+      electronStartup = new Promise((resolve) => {
+        let starting = true
+        const finish = (result) => {
+          starting = false
+          clearTimeout(timer)
+          resolve(result)
+        }
+        const timer = setTimeout(() => {
+          if (!Number.isSafeInteger(proc.pid) || proc.pid <= 0 || !processAlive(proc.pid)) {
+            finish(launchFailure('Electron 进程未能通过启动后的存活检查'))
+            return
+          }
+          electronProc = proc
+          try { writeJsonAtomic(procFile(), proc) } catch (error) { api.log.debug(`进程文件写入失败：${error.message}`) }
+          api.log.info(`桌宠进程已启动（pid ${proc.pid}）`)
+          finish({ ok: true, pid: proc.pid, message: `桌宠进程已启动（pid ${proc.pid}），等它连上就有心跳了` })
+        }, petHooks.startupGraceMs ?? 3500)
+        child.once('error', (error) => {
+          if (starting) finish(launchFailure(error.message))
+          else api.log.warn(`桌宠进程错误：${error.message}`)
+        })
+        child.once('exit', (code, signal) => {
+          const reason = signal ? `信号 ${signal}` : `退出码 ${code}`
+          if (starting) finish(launchFailure(`Electron 在启动检查期间退出（${reason}）`))
+          else if (electronProc === proc) {
+            forgetProcess(proc)
+            const message = `桌宠进程已退出（${reason}）`
+            if (code === 0) api.log.info(message)
+            else api.log.warn(message)
+          }
+        })
+        child.unref()
+      }).finally(() => { electronStartup = null })
+      return electronStartup
     }
 
     function stop() {
       const p = recordedPid()
       if (!p) return { ok: false, message: '没有正在运行的桌宠进程记录' }
-      let killed = true
       try { killFn(p.pid) } catch (error) {
-        // ESRCH = 进程本来就不在了：清理记录、按已停止处理，别让面板卡在「停不掉」
-        if (String(error?.code) === 'ESRCH') {
-          electronProc = null
-          try { unlinkSync(procFile()) } catch {}
+        // ESRCH = 进程在检查后退出：清理记录、按已停止处理。
+        if (error?.code === 'ESRCH') {
+          forgetProcess(p)
           return { ok: true, pid: p.pid, message: `桌宠进程（pid ${p.pid}）已经不在了，清掉了记录` }
         }
-        killed = false
         return { ok: false, pid: p.pid, message: '停止失败：' + String(error?.message || error).slice(0, 120) }
       }
-      electronProc = null
-      try { unlinkSync(procFile()) } catch {}
+      forgetProcess(p)
       api.log.info(`桌宠已停止（pid ${p.pid}）`)
-      return { ok: killed, pid: p.pid, message: killed ? `已停止桌宠（pid ${p.pid}）` : '停止指令没有确认成功，看看进程还在不在' }
+      return { ok: true, pid: p.pid, message: `已停止桌宠（pid ${p.pid}）` }
     }
 
     // ---------- pet pack 与素材路由（P1/P4）：packs 目录只读给客户端，404 绝不回落别的包 ----------
@@ -3488,9 +3541,9 @@ export default {
       if (!guard(req, res).ok) return
       api.core.http.send(res, 200, await electronInstall())
     })
-    api.route('/launch', (req, res) => {
+    api.route('/launch', async (req, res) => {
       if (!guard(req, res).ok) return
-      api.core.http.send(res, 200, launch())
+      api.core.http.send(res, 200, await launch())
     })
     api.route('/stop', (req, res) => {
       if (!guard(req, res).ok) return

@@ -193,11 +193,6 @@ let teaseChase = false    // 晃鼠标勾引追独立闸（默认关；=== true 
 function effectivePhysics() {
   return { ...physics.DEFAULT_PHYSICS, ...(pack && pack.physics ? pack.physics : {}), ...(cfgPhysics || {}) }
 }
-/** 把 animRate 推给渲染页（window.__setAnimRate）。低频路径：只在值变化时调。 */
-function pushAnimRate() {
-  if (!win || win.isDestroyed()) return
-  win.webContents.executeJavaScript(`window.__setAnimRate && window.__setAnimRate(${JSON.stringify(animRate)})`).catch(() => {})
-}
 function applyScale(s) {
   if (!win || win.isDestroyed()) return
   const v = Math.min(2, Math.max(0.5, Number(s) || 1))

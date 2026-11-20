@@ -15,6 +15,8 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { deflateRawSync } from 'node:zlib'
 import { createHash } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 
 let mod
 const OWNER = '10000001'
@@ -35,12 +37,13 @@ function startModule({ settings = {}, hooks } = {}) {
   const routes = new Map()
   const sentToQQ = []
   let voiceFile = ''
+  const warnings = []
   const api = {
     id: 'pet',
     dir: MODULE_DIR,
     version: 'test',
     __petTestHooks: hooks || {}, // 测试注入 fake spawn/kill：不打真网络、不真启动 Electron
-    log: { info() {}, warn() {}, debug() {}, error() {} },
+    log: { info() {}, warn(...args) { warnings.push(args.join(' ')) }, debug() {}, error() {} },
     dataDir: (...parts) => {
       const d = join(process.env.AURABOT_DATA_DIR, 'modules-data', 'pet')
       mkdirSync(d, { recursive: true })
@@ -120,7 +123,7 @@ function startModule({ settings = {}, hooks } = {}) {
     return { cursor: first.json.cursor, events: r.json.events }
   }
   return {
-    api, exports, routes, call, connect, token, sentToQQ,
+    api, exports, routes, call, connect, token, sentToQQ, warnings,
     setVoiceFile: (f) => { voiceFile = f }, setMood: (v) => { moodValue = v },
     setMemory: (list) => { memItems = list }, setThinkReply: (t) => { thinkReply = t },
     holdThink: (p) => { thinkHold = p }, thinkCalls,
@@ -637,6 +640,26 @@ test('clientStatus：生成后 healthy，且 app/ 里留下签名凭据', async 
   assert.ok(existsSync(join(env.api.dataDir('app'), 'client-stamp.json')), '生成时写了 client-stamp.json')
 })
 
+test('生成客户端：主入口通过 ESM 语法检查，客户端包在 ESM 上层目录里按 CommonJS 加载', async () => {
+  const env = startModule()
+  writeFileSync(join(process.env.AURABOT_DATA_DIR, 'package.json'), '{"type":"module"}')
+  const { json } = await env.call('/client/install', { method: 'POST', json: {} })
+  assert.equal(json.ok, true, json.message)
+  assert.ok(json.files.includes('package.json'))
+  const app = env.api.dataDir('app')
+  const manifest = JSON.parse(readFileSync(join(app, 'package.json'), 'utf8'))
+  assert.equal(manifest.type, 'commonjs')
+  assert.equal(manifest.main, 'main.js')
+
+  const syntax = spawnSync(process.execPath, ['--input-type=module', '--check'], {
+    input: readFileSync(join(app, manifest.main)), encoding: 'utf8',
+  })
+  assert.equal(syntax.status, 0, syntax.stderr)
+  // physics.js 使用 module.exports，按 ESM 执行会因 module 未定义而失败。
+  const load = spawnSync(process.execPath, [join(app, 'physics.js')], { encoding: 'utf8' })
+  assert.equal(load.status, 0, load.stderr)
+})
+
 test('clientStatus：缺 behavior.js（典型旧壳）→ missing 点名、healthy=false', async () => {
   const env = startModule()
   await env.call('/client/install', { method: 'POST', json: {} })
@@ -683,8 +706,9 @@ test('autoRegenClient：升级后 app/ 未被手改 → 模块重启时自动重
   const env = startModule()
   await env.call('/client/install', { method: 'POST', json: {} })
   const app = env.api.dataDir('app')
-  // 伪装「旧版模板生成的壳」：main.js 是旧内容，凭据 sig 与这份旧内容一致（= 没被手改过）
-  writeFileSync(join(app, 'main.js'), '// 旧版 main.js：没有小屋白屏兜底\n')
+  // 模拟 1.0.19 生成的客户端：旧入口、没有包清单，签名与这份旧内容一致。
+  writeFileSync(join(app, 'main.js'), '// 旧版 main.js\n')
+  unlinkSync(join(app, 'package.json'))
   writeFileSync(join(app, 'client-stamp.json'), JSON.stringify({ sig: appSig(app), at: 1 }))
   const st = env.exports.clientStatus()
   assert.equal(st.outdated, true, '升级后模板与凭据签名不一致 = outdated')
@@ -692,6 +716,7 @@ test('autoRegenClient：升级后 app/ 未被手改 → 模块重启时自动重
   // 模拟插件重启：同一数据目录重新 setup（启动段会调 autoRegenClient）
   startModule()
   assert.equal(readFileSync(join(app, 'main.js'), 'utf8').includes('旧版 main.js'), false, '旧 main.js 已被新模板覆盖')
+  assert.equal(JSON.parse(readFileSync(join(app, 'package.json'), 'utf8')).type, 'commonjs')
   const st2 = env.exports.clientStatus()
   assert.equal(st2.healthy, true, st2.message)
   assert.equal(st2.generatedSig, st2.sig, '生成凭据已跟上新模板')
@@ -740,7 +765,7 @@ function fakeSpawn({ exit = 0, makeExe } = {}) {
       pid: 42424,
       stdout: { on() {} }, stderr: { on() {} },
       on(event, fn) { if (event === 'close') setTimeout(() => fn(exit), 5) },
-      kill() {}, unref() {},
+      once() {}, kill() {}, unref() {},
     }
   }
   return { spawn, calls }
@@ -785,7 +810,7 @@ test('Electron 安装：走 node + npm-cli.js（不经 shell）、注入 ELECTRO
   const c = calls[0]
   assert.equal(c.cmd, process.execPath, '直接用当前 node 跑 npm-cli.js（Windows 上 spawn npm.cmd 无 shell 会被拒）')
   assert.ok(c.args[0].endsWith('npm-cli.js'), `第一个参数是 npm-cli.js：${c.args[0]}`)
-  assert.deepEqual(c.args.slice(1), ['install', '-D', 'electron'])
+  assert.deepEqual(c.args.slice(1), ['install', '--no-save', 'electron@45.1.0'])
   assert.equal(c.opts.cwd, appDir, '在 app 目录里装')
   assert.equal(c.env.ELECTRON_MIRROR, 'https://npmmirror.com/mirrors/electron/', '必须注入 npmmirror 镜像（直连 github release 会 fetch failed）')
   assert.ok(!('shell' in c.opts) || !c.opts.shell, '不经 shell 拼接')
@@ -1167,7 +1192,8 @@ test('安全：zip 与 SHASUMS256 校验不符 → 拒绝安装且不落盘（�
 test('启动桌宠：分离进程 + 清 ELECTRON_RUN_AS_NODE；心跳活着提示已在跑；stop 杀记录的 pid', async () => {
   const killed = []
   const { spawn, calls } = fakeSpawn()
-  const env = startModule({ hooks: { spawn, kill: (pid) => { killed.push(pid); return true } } })
+  const launchHooks = { spawn, probePid: () => true, startupGraceMs: 0 }
+  const env = startModule({ hooks: { ...launchHooks, kill: (pid) => { killed.push(pid); return true } } })
   const appDir = env.api.dataDir('app')
   const exe = join(appDir, 'node_modules', 'electron', ELECTRON_REL)
   await env.exports.download()
@@ -1204,7 +1230,7 @@ test('启动桌宠：分离进程 + 清 ELECTRON_RUN_AS_NODE；心跳活着提�
 
     // 进程本来就不在（ESRCH）：按已停止处理并清记录，不让面板卡「停不掉」
     mkdirSync(dirname(exe), { recursive: true })
-    const env2 = startModule({ hooks: { spawn, kill: () => { const e = new Error('no such process'); e.code = 'ESRCH'; throw e } } })
+    const env2 = startModule({ hooks: { ...launchHooks, kill: () => { const e = new Error('no such process'); e.code = 'ESRCH'; throw e } } })
     await env2.exports.download()
     writeFileSync(exe, 'fake electron')
     await env2.exports.launch()
@@ -1232,7 +1258,76 @@ test('启动失败路径：Electron 没装 / main.js 不见 → 明确报错不 
   const r2 = await env.exports.launch()
   assert.equal(r2.ok, false, 'main.js 不见了')
   assert.match(r2.message, /main\.js/)
-  assert.equal(calls.length, 0, '两条失败路径都没 spawn')
+  await env.exports.download()
+  unlinkSync(join(appDir, 'package.json'))
+  const r3 = await env.exports.launch()
+  assert.equal(r3.ok, false)
+  assert.match(r3.message, /package\.json.*重新生成/)
+  assert.equal(calls.length, 0, '失败路径都没 spawn')
+})
+
+test('启动检查：并发启动共用检查，Electron 提前退出时状态保持离线并记录退出码', async () => {
+  const children = []
+  const env = startModule({ hooks: {
+    spawn: () => {
+      const child = Object.assign(new EventEmitter(), { pid: 42424 + children.length, unref() {} })
+      children.push(child)
+      return child
+    },
+    probePid: () => true,
+    startupGraceMs: 0,
+  } })
+  await env.exports.download()
+  const exe = join(env.api.dataDir('app'), 'node_modules', 'electron', ELECTRON_REL)
+  mkdirSync(dirname(exe), { recursive: true })
+  writeFileSync(exe, 'fake electron')
+
+  const launch = env.call('/launch', { method: 'POST', json: {} })
+  const duplicate = env.exports.launch()
+  assert.equal((await env.call('/status')).json.pid, null)
+  assert.equal(children.length, 1)
+  children[0].emit('exit', 1, null)
+
+  const result = (await launch).json
+  assert.equal(result.ok, false)
+  assert.match(result.message, /启动检查期间退出.*退出码 1/)
+  assert.deepEqual(await duplicate, result)
+  assert.ok(env.warnings.includes(result.message))
+  assert.equal(existsSync(env.api.dataDir('process.json')), false)
+  const { json: status } = await env.call('/status')
+  assert.equal(status.pid, null)
+  assert.equal(status.client.running, false)
+  assert.deepEqual(status.online, { online: false, lastSeenAt: 0, clients: 0 })
+
+  const retry = await env.exports.launch()
+  assert.equal(retry.ok, true, retry.message)
+  assert.equal(env.exports.status().pid, retry.pid)
+  assert.equal((await env.exports.launch()).alreadyRunning, true, '进程存活但暂无心跳时也不重复启动')
+  assert.equal(children.length, 2)
+  children[1].emit('exit', null, 'SIGTERM')
+  assert.equal(env.exports.status().pid, null)
+  assert.equal(env.exports.status().client.running, false)
+  assert.equal(existsSync(env.api.dataDir('process.json')), false)
+  assert.match(env.warnings.at(-1), /进程已退出.*SIGTERM/)
+})
+
+test('启动检查：进程失联时启动失败，状态丢弃上次遗留的无效 PID', async () => {
+  const { spawn } = fakeSpawn()
+  const env = startModule({ hooks: { spawn, startupGraceMs: 0, probePid: () => false } })
+  await env.exports.download()
+  const exe = join(env.api.dataDir('app'), 'node_modules', 'electron', ELECTRON_REL)
+  mkdirSync(dirname(exe), { recursive: true })
+  writeFileSync(exe, 'fake electron')
+  const record = env.api.dataDir('process.json')
+  writeFileSync(record, JSON.stringify({ pid: 42424, startedAt: 1 }))
+  assert.equal(env.exports.status().pid, null)
+  assert.equal(existsSync(record), false)
+  const result = await env.exports.launch()
+  assert.equal(result.ok, false)
+  assert.match(result.message, /未能通过启动后的存活检查/)
+  assert.ok(env.warnings.includes(result.message))
+  assert.equal(env.exports.status().client.running, false)
+  assert.equal(existsSync(record), false)
 })
 
 // ---------- P3：拖拽物理移植（dsh-pet MIT 物理模块的去 TS 单文件版） ----------
@@ -2055,6 +2150,7 @@ test('安全：客户端包只含客户端源码，不含 node_modules（消除 
     ptr += 46 + nameLen + zip.readUInt16LE(ptr + 30) + zip.readUInt16LE(ptr + 32)
   }
   assert.ok(names.includes('main.js'), '必须含 main.js')
+  assert.ok(names.includes('package.json'), '下载包必须含 CommonJS 包清单')
   assert.ok(names.includes('host.json'), '必须含内嵌 host.json')
   assert.equal(names.some((n) => n.includes('node_modules')), false, '不得把 node_modules（electron.exe 等）打进包')
   assert.ok(zip.length < 1024 * 1024, `包体积应远小于 1MB（实际 ${zip.length} 字节）`)
