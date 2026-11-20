@@ -1,0 +1,14 @@
+{
+  "id": "moyu-calendar",
+  "name": "摸鱼人日历",
+  "version": "1.0.4",
+  "description": "每天从公众号「摸鱼人日历」取当日日历图，定时发到指定 QQ 聊天。",
+  "category": "tool",
+  "tags": ["摸鱼", "日历", "公众号"],
+  "author": "Earmo",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["network", "filesystem", "plugin-config"]
+}
