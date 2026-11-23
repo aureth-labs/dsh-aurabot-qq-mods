@@ -11,7 +11,7 @@ import { checkinAction, describeClaim, formatDate, looksLoggedIn, msUntil, nowMi
 export default {
   id: 'breeze',
   name: 'Breeze 语音',
-  version: '1.3.5',
+  version: '1.3.3',
   api: 1,
   description: 'Breeze Blue 在线文字转语音 + 每日自动签到领积分',
   tab: 'voice',
@@ -519,11 +519,6 @@ export default {
           `--user-data-dir=${chromeDir()}`,
           '--no-first-run',
           '--no-default-browser-check',
-          // 关键：只要开了 --remote-debugging-port，Chrome 就会把 navigator.webdriver 置成 true，
-          // 谷歌登录取指纹时判成「此浏览器或应用可能不安全」直接拒登。下面两个开关把它压回 false，
-          // 指纹和正常 Chrome 一致（实测 webdriver=false、UA-CH 正常），登录窗口就不再被谷歌拦。
-          '--disable-blink-features=AutomationControlled',
-          '--exclude-switches=enable-automation',
           ...(headless ? ['--headless=new', 'about:blank'] : ['https://breezeblue.ai/zh/auth/login']),
         ],
         { detached: true, stdio: 'ignore' },
