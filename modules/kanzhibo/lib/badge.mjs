@@ -550,7 +550,12 @@ export function createBadge(deps) {
         ctx.badgeRooms.rooms[rk] = Date.now()
         saveState({ badgeDay: ctx.badgeDay, badgeUrl: ctx.badgeUrl, badgeEvidence: ev.how, badgeAttemptDay: '', badgeAttemptRoom: '', badgeRooms: ctx.badgeRooms })
       } else {
-        saveState({ badgeUrl: ctx.badgeUrl, badgeEvidence: '未确认：' + ev.how, badgeAttemptDay: ctx.badgeAttemptDay, badgeAttemptRoom: ctx.badgeAttemptRoom })
+        const rk = roomKeyOf(ctx.badgeUrl)
+        const proven = ctx.badgeRooms && ctx.badgeRooms.day === today && ctx.badgeRooms.rooms && ctx.badgeRooms.rooms[rk]
+        const patch = { badgeUrl: ctx.badgeUrl, badgeEvidence: '未确认：' + ev.how, badgeAttemptDay: ctx.badgeAttemptDay, badgeAttemptRoom: ctx.badgeAttemptRoom }
+        // 没确认到 +100，且这个房间没有“已确认送出”的记录 → 不能把 badgeDay 留成今天（否则面板误报已送）
+        if (!proven && ctx.badgeDay === today) { ctx.badgeDay = ''; ctx.badgeUrl = ''; patch.badgeDay = ''; patch.badgeUrl = '' }
+        saveState(patch)
       }
       // 2026-11-09：送灯牌这轮的面板用完了，顺手收掉（best-effort，不影响结论）。
       //   半自动等确认期间面板特意开着（页面别动，签名才对得上），收的动作放在点了之后。

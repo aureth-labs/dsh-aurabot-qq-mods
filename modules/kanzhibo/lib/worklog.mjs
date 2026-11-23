@@ -15,7 +15,7 @@ export function createWorklog({ dataDir, dayKey }) {
   } catch { recent = [] }
   const fmtStep = (e) => {
     const at = String((e && e.at) || '')
-    const t = at.length >= 19 ? at.slice(11, 19) : new Date().toLocaleTimeString('zh-CN', { hour12: false })
+    const t = at ? new Date(at).toLocaleTimeString('zh-CN', { hour12: false }) : new Date().toLocaleTimeString('zh-CN', { hour12: false })
     return t + ' ' + (e && e.ok === false ? '✗ ' : '· ') + String((e && e.step) || '') +
       (e && e.detail ? '：' + e.detail : '')
   }

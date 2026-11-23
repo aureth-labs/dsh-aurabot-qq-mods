@@ -147,7 +147,7 @@ return function KanzhiboPanel({ settings, draftSettings, setSettings, toast }) {
 
   const lastNote = sc && sc.text ? (String(sc.text).split('\n').filter((x) => x.indexOf('最近一条') === 0)[0] || '') : ''
   const today = sc ? sc.today : ''
-  const badgeDone = sc && sc.badgeDay === today
+  const badgeDone = sc && (sc.badgeDone !== undefined ? sc.badgeDone : sc.badgeDay === today)
   const commentDone = sc && sc.commentedDay === today
 
   return h('div', { className: 'ab-grid' },
@@ -281,7 +281,7 @@ return function KanzhiboPanel({ settings, draftSettings, setSettings, toast }) {
       (sc && sc.ops && sc.ops.items && sc.ops.items.length)
         ? h('div', { style: { flex: '1 1 320px', minWidth: 0 } },
             sc.ops.items.map((e, i) => h('div', { key: i, className: 'ab-small ab-muted' },
-              (String(e.at || '').slice(11, 19) || '') + ' ' + (e.ok === false ? '✗ ' : '· ') + String(e.step || '') + (e.detail ? '：' + e.detail : ''))))
+              (e.at ? new Date(e.at).toLocaleTimeString('zh-CN', { hour12: false }) : '') + ' ' + (e.ok === false ? '✗ ' : '· ') + String(e.step || '') + (e.detail ? '：' + e.detail : ''))))
         : dim('还没有记录')
     ),
 

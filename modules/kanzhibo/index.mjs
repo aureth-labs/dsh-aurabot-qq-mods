@@ -381,6 +381,11 @@ export default {
       // 2026-11-09 修：下面对象里的 url 只是键名，不是变量；roomId 那行原来直接用了 url，
       // 于是整个 /selfcheck 抛 ReferenceError: url is not defined。先把当前地址取到局部变量。
       const curUrl = ctx.cdp ? await currentUrl() : ''
+      const today0 = dayKey()
+      const rk0 = roomKeyOf(curUrl)
+      const br0 = ctx.badgeRooms
+      const ev0 = String((loadState().badgeEvidence) || '')
+      const badgeDone = Boolean((br0 && br0.day === today0 && br0.rooms && br0.rooms[rk0]) || (ctx.badgeDay === today0 && !ev0.startsWith('未确认') && roomKeyOf(ctx.badgeUrl) === rk0))
       return {
         probeToken,
         ok: true,
@@ -399,6 +404,7 @@ export default {
         douyinEnabled: Boolean((api.config().douyin || {}).enabled),
         commentedDay,
         badgeDay: ctx.badgeDay,
+        badgeDone,
         giftByDm: Boolean(s.giftByDm),
         semiAuto: Boolean(s.semiAuto),
         badgeGiveUpDay: ctx.badgeGiveUpDay,
@@ -413,7 +419,7 @@ export default {
         sayToday: ctx.sayLog.day === dayKey() ? ctx.sayLog.items.slice(-10) : [],
         // 2026-11-21：工作区操作记录（面板「工作区记录」卡用最近几步）
         ops: { count: worklog.count, items: recentOps(8) },
-        today: dayKey(),
+        today: today0,
         text: await selfCheck(),
       }
     })
