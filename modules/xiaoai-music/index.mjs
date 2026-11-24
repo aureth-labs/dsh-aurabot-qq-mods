@@ -3,6 +3,7 @@ import { VoiceCursor } from './lib/speaker/cursor.mjs';
 import { loadWindowsCredentials, saveWindowsCredentials } from './lib/speaker/windows.mjs';
 import { connectSpeaker, verifySpeakerLogin, historyFailure } from './lib/speaker/mina.mjs';
 import { SpeakerProbe, matchSavedSongSources, WAKE_ACK_LEAD_IN_MS } from './lib/speaker/probe.mjs';
+import { recognitionRows } from './lib/speaker/recognition.mjs';
 import { askProbeModel, MODEL_TOKEN_BUDGET, MODEL_TEST_QUESTION } from './lib/speaker/model.mjs';
 import { SpeakerLogin } from './lib/speaker/login.mjs';
 import { authObservation, completeServiceLogin } from './lib/speaker/transport.mjs';
@@ -17,7 +18,7 @@ import { createDialogueSpeech } from './lib/companion/speech.mjs';
 import { createWakeAudio } from './lib/companion/wake-audio.mjs';
 import { ListenerPreference } from './lib/speaker/listener.mjs';
 import { suggestWakeNames } from './lib/speaker/wake-ai.mjs';
-import { WakePreference } from './lib/speaker/wake.mjs';
+import { WakePreference, validateWakeConfig, wakeReadings } from './lib/speaker/wake.mjs';
 import { createLocalAudioHandler } from './lib/songs/local-audio.mjs';
 import { checkResourceCopy } from './lib/songs/resource-check.mjs';
 import { createFamilyActions } from './lib/companion/actions.mjs';
@@ -66,9 +67,9 @@ export function speakerFailure(error) {
 export default {
   id: 'xiaoai-music',
   name: 'xiaoai music · 小爱音响接入',
-  version: '0.15.2',
+  version: '0.15.4',
   api: 1,
-  description: '小爱音箱接入、歌曲与歌单播放、提醒及 AI 称呼同音词补足。',
+  description: '小爱音箱接入、歌曲与歌单播放、提醒、称呼拼音匹配与识别日志。',
   defaults: { networkInterface: '', speakerDevice: '', resourceRoot: '' },
   settings: [],
   panel: 'panel.js',
@@ -405,8 +406,9 @@ async function setupRuntime(api) {
     api.route('/status', async () => status());
     api.route('/storage/verification', async req => localRequest(req) && req.method === 'GET'
       ? { ok: true, verification: resourceVerification } : { ok: false, message: '需要本机读取核验状态。' });
+    const wakeView = wake => ({ wake, readings: wakeReadings(wake), acknowledgementAudio: wakeAudio.state(wake.acknowledgement) });
     api.route('/speaker/wake', async req => localRequest(req) && req.method === 'GET'
-      ? { ok: true, wake: wakePreference.get(), acknowledgementAudio: wakeAudio.state(wakeReply()) }
+      ? { ok: true, ...wakeView(wakePreference.get()) }
       : { ok: false, message: '需要本机读取家庭称呼。' });
     api.route('/speaker/wake/audio', createLocalAudioHandler({
       library: { get: id => wakeAudio.preview(wakeReply(), id) }, isLocalRequest: localRequest,
@@ -439,11 +441,15 @@ async function setupRuntime(api) {
       return { verification: resourceVerification };
     });
     post('/speaker/wake/suggest', async body => suggestWakeNames(options => api.ask(options), body));
+    post('/speaker/wake/pinyin', async body => {
+      try { return { readings: wakeReadings(validateWakeConfig({ names: body?.names, greetingNames: [] })) }; }
+      catch (error) { return { ok: false, message: error.message }; }
+    });
     post('/speaker/wake/save', async body => {
       const latestWake = () => {
         const wake = wakePreference.get();
         return { ok: false, code: 'WAKE_SETTINGS_CHANGED', message: '称呼设置已更新，请核对后再保存。',
-          wake, acknowledgementAudio: wakeAudio.state(wake.acknowledgement) };
+          ...wakeView(wake) };
       };
       let wake;
       try { wake = await wakePreference.save(body, body?.expectedWake); }
@@ -454,12 +460,12 @@ async function setupRuntime(api) {
       const text = wake.acknowledgement;
       try { await wakeAudio.generate(text); } catch {}
       if (JSON.stringify(wake) !== JSON.stringify(wakePreference.get())) return latestWake();
-      const acknowledgementAudio = wakeAudio.state(text);
-      return { wake, acknowledgementAudio, message: acknowledgementAudio.phase === 'failed'
+      const view = wakeView(wake);
+      return { ...view, message: view.acknowledgementAudio.phase === 'failed'
         ? '称呼已保存，语音生成失败。' : '称呼已保存。' };
     });
     api.route('/capabilities', async () => ({ ok: true,
-      module: 'xiaoai-music', version: '0.15.2',
+      module: 'xiaoai-music', version: '0.15.4',
       tools: [{ name: 'xiaoai_music', parameters: { type: 'object', properties: PLAYBACK_PROPERTIES, required: ['action'], additionalProperties: false } },
         { name: 'xiaoai_reminder', parameters: { type: 'object', properties: REMINDER_PROPERTIES, required: ['action'], additionalProperties: false } }],
       moduleCalls: { playback: "api.use('xiaoai-music').execute(args)", reminders: "api.use('xiaoai-music').remind(args)" },
@@ -533,6 +539,12 @@ async function setupRuntime(api) {
     post('/speaker/history/check', async () => {
       const records = await (await prepare()).conversationsSince(cursor.state.since || Date.now());
       return { historyReadable: true, historyCount: records.length };
+    });
+    post('/speaker/history/read', async () => {
+      const records = await (await prepare()).conversations();
+      return { records: recognitionRows(records, wakePreference.get(), probe?.observations),
+        listenerActive: Boolean(probe?.active()),
+        message: '最近10条云端识别文字；匹配按当前已保存称呼计算。处理结果仅保留本轮接入的最近30条，重载后清空。读取不会补执行旧指令。' };
     });
     post('/speaker/arm', async () => {
       await preference.setEnabled(false);

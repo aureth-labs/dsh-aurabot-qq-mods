@@ -7,29 +7,46 @@ import { execFile, spawn } from 'node:child_process'
 import { existsSync, lstatSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { createEgoBackend, acquireEgoTarget } from './ego.mjs'
 
+// 顺序：显式环境变量 → Chrome → Edge（找不到 Chrome 才用 Edge）
 const CANDIDATES = [
-  process.env.EDGE_PATH,
   process.env.CHROME_PATH,
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+  process.env.EDGE_PATH,
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-  '/usr/bin/microsoft-edge',
-  '/usr/bin/microsoft-edge-stable',
+  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
   '/usr/bin/google-chrome',
   '/usr/bin/google-chrome-stable',
   '/usr/bin/chromium',
   '/usr/bin/chromium-browser',
-  '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+  '/usr/bin/microsoft-edge',
+  '/usr/bin/microsoft-edge-stable',
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
 ].filter(Boolean)
 
-/** 找浏览器：面板填了就用填的，否则 Edge 优先，再找 Chrome / Chromium。 */
+// 启动等待预算：冷启动 + 杀毒逐个扫 chrome 的子进程时，15 秒经常不够，
+// 短了会把「启动慢」误报成「浏览器没起来，请检查路径」。（同 douyin 2.3.9 的修法）
+const LAUNCH_POLL_MS = 250
+const LAUNCH_POLLS = 120
+const LAUNCH_TIMEOUT_SEC = (LAUNCH_POLL_MS * LAUNCH_POLLS) / 1000
+
+/** 是不是一个能直接执行的浏览器文件（目录、非可执行文件都不算）。 */
+function isBrowserExe (p, exists = existsSync) {
+  try {
+    if (!exists(p)) return false
+    if (!lstatSync(p).isFile()) return false
+    return process.platform !== 'win32' || /\.exe$/i.test(p)
+  } catch (error) {
+    return false
+  }
+}
+
+/** 找浏览器：面板填了且真实可用就用填的；填的路径不存在（磁盘清理/搬移后很常见）就回退去常见安装位置探测，Chrome 优先，再找 Edge / Chromium。 */
 export function findBrowser (explicit = '', exists = existsSync) {
-  if (explicit) return exists(explicit) ? explicit : ''
-  return CANDIDATES.find((p) => exists(p)) || ''
+  if (explicit && isBrowserExe(explicit, exists)) return explicit
+  return CANDIDATES.find((p) => isBrowserExe(p, exists)) || ''
 }
 
 /** 本机空闲端口。 */
@@ -42,13 +59,23 @@ export function freePort () {
   })
 }
 
-/** 资料目录里记下的调试端口（我们启动时自己写的；DSH 重启后靠它接回已经开着的窗口）。 */
-export function readPortFile (profileDir, read = readFileSync) {
+/** 老版本写进第二行的固定标记（那时还没记录真实 ws 路径）。 */
+const LEGACY_OWNER = '/devtools/browser/aurabot'
+
+/** 从 ws 地址里取路径部分（/devtools/browser/<uuid>），用来确认端口是不是我们自己的。 */
+function wsPath (ws) {
+  try { return new URL(String(ws)).pathname } catch (error) { return '' }
+}
+
+/** 资料目录里记下的调试端口与归属路径（我们启动时自己写的；DSH 重启后靠它接回已经开着的窗口）。 */
+export function readPortInfo (profileDir, read = readFileSync) {
   try {
-    const n = Number(String(read(join(profileDir, 'DevToolsActivePort'), 'utf8')).split(/\r?\n/)[0].trim())
-    return Number.isInteger(n) && n > 0 && n < 65536 ? n : 0
+    const lines = String(read(join(profileDir, 'DevToolsActivePort'), 'utf8')).split(/\r?\n/)
+    const n = Number(String(lines[0] || '').trim())
+    const port = Number.isInteger(n) && n > 0 && n < 65536 ? n : 0
+    return { port, owner: String(lines[1] || '').trim() }
   } catch (error) {
-    return 0
+    return { port: 0, owner: '' }
   }
 }
 
@@ -61,15 +88,32 @@ export function pickPage (targets, siteRe = /^https:\/\/[^/]*hongguoduanju\.com/
   return { page, extra: ours.slice(1) }
 }
 
+/** 关掉一个标签页：带超时，别让共享实例忙的时候把关闭流程挂住。 */
+function closeTab (port, id) {
+  if (!port || !id) return Promise.resolve()
+  return fetch(`http://127.0.0.1:${port}/json/close/${id}`, { signal: AbortSignal.timeout(2000) }).catch(() => {})
+}
+
 async function getJson (url, ms = 5000) {
   const r = await fetch(url, { signal: AbortSignal.timeout(ms) })
   if (!r.ok) throw new Error(`${url} → ${r.status}`)
   return r.json()
 }
 
+/** 调试地址必须指向本机（端口也要对得上）：本机伪造的 /json/* 不能把输入、截图引到别处去。 */
+export function assertLocalWs (wsUrl, expectPort = 0) {
+  let u
+  try { u = new URL(String(wsUrl)) } catch (error) { throw new Error(`浏览器给的调试地址不是合法 URL：${wsUrl}`) }
+  if (u.protocol !== 'ws:') throw new Error(`调试地址协议不对：${wsUrl}`)
+  const host = u.hostname.replace(/^\[|\]$/g, '')
+  if (!['127.0.0.1', 'localhost', '::1'].includes(host)) throw new Error(`调试地址不在本机（${host}），拒绝连接`)
+  if (expectPort && String(u.port) !== String(expectPort)) throw new Error(`调试地址端口不对（${u.port} ≠ ${expectPort}），拒绝连接`)
+}
+
 /** 一条 CDP 连接：send 发命令，on 收事件。 */
-export function connectCdp (wsUrl, { WS = globalThis.WebSocket } = {}) {
+export function connectCdp (wsUrl, { WS = globalThis.WebSocket, expectPort = 0 } = {}) {
   if (!WS) throw new Error('当前 Node 没有 WebSocket（要 Node 22 以上）')
+  assertLocalWs(wsUrl, expectPort)
   const sock = new WS(wsUrl)
   let nextId = 1
   let closed = false
@@ -144,7 +188,7 @@ export function createBrowser ({
   spawnProcess = spawn, getPort = freePort, getBrowserJson = getJson, connect = connectCdp,
   wait = sleep, platform = process.platform,
   killGroup = (pid, signal) => process.kill(-pid, signal),
-  killTree = windowsKillTree, stopWaitMs = 3000, stderrWaitMs = 250, useEgo = () => false
+  killTree = windowsKillTree, stopWaitMs = 3000, stderrWaitMs = 250
 } = {}) {
   let cdp = null
   let attaching = null
@@ -157,47 +201,7 @@ export function createBrowser ({
   let retryAt = 0
   let lastError = ''
 
-  const connected = () => (egoTarget ? Boolean(cdp && !cdp.closed) : Boolean(owned && !owned.exited && !owned.needsStop && cdp && !cdp.closed))
-
-  // —— DSH 侧边浏览器（ego）模式：连 DSH 共享实例、认领自己的标签页；
-  // 绝不 spawn、绝不杀进程（共享实例归 DSH 管）。
-  let egoTarget = null
-  let egoPort = 0
-  let egoBackend = null
-  const useEgoNow = () => { try { return useEgo() === true } catch (error) { return false } }
-  async function egoConnect (check, extra) {
-    if (egoTarget && cdp && !cdp.closed) return
-    if (egoTarget) { // 上一条连接断了：把自己那个标签页关掉再认领新的，别在共享实例里堆僵尸页
-      const stale = egoTarget; const stalePort = egoPort
-      egoTarget = null; egoPort = 0
-      fetch(`http://127.0.0.1:${stalePort}/json/close/${stale.id}`).catch(() => {})
-    }
-    if (!egoBackend) egoBackend = createEgoBackend({ getJson, log })
-    const { port } = await egoBackend.ensure(check)
-    const target = await acquireEgoTarget(port, getBrowserJson)
-    check()
-    const c = connect(target.webSocketDebuggerUrl)
-    try {
-      await c.ready
-      check()
-      await c.send('Page.enable')
-      await c.send('Runtime.enable')
-      if (extra) await extra(c)
-      cdp = c
-      egoTarget = target
-      egoPort = port
-    } catch (error) {
-      c.close()
-      fetch(`http://127.0.0.1:${port}/json/close/${target.id}`).catch(() => {})
-      throw error
-    }
-  }
-  async function egoDisconnect () {
-    const t = egoTarget; const port = egoPort
-    egoTarget = null; egoPort = 0
-    cdp?.close(); cdp = null
-    if (t && port) fetch(`http://127.0.0.1:${port}/json/close/${t.id}`).catch(() => {})
-  }
+  const connected = () => Boolean(owned && !owned.exited && !owned.needsStop && cdp && !cdp.closed)
 
   const cancelled = () => Object.assign(new Error('红果没打开，请先打开红果开关'), { code: 'cancelled' })
   const lockError = () => new Error('红果浏览器资料目录被占用（SingletonLock / profile appears to be in use），请先关闭占用该目录的浏览器')
@@ -253,13 +257,25 @@ export function createBrowser ({
     if (p.stopping) return p.stopping
     p.needsStop = true
     p.stopping = Promise.resolve().then(async () => {
-      // 对已确认连上的自己进程先走浏览器的正常退出，避免留下旧锁。
-      if (!p.exited && p.terminate) {
-        try { await p.terminate.send('Browser.close', {}, 3000) } catch (error) {}
+      // 先走浏览器的正常退出，避免留下旧锁。必须用「浏览器级」连接：
+      // 页面级 session 上发 Browser.close 会 -32601；接管来的窗口（pid 为 0）也只能靠它关。
+      if (!p.exited && p.port) {
+        let bc = null
+        let closed = false
+        try {
+          bc = await browserConn(p.port)
+          await bc.send('Browser.close', {}, 3000)
+          closed = true
+        } catch (error) {
+        } finally {
+          try { bc?.close() } catch (error) {}
+        }
+        // 接管来的窗口没有自己的进程可观察（pid 为 0）：确认关掉就别再干等 3 秒；
+        // 连 close 都没发出去时不能假装它已退出，否则端口记录被删、下次启动撞锁
+        if (closed && !p.child.pid) p.exited = true
         await waitExit(p, stopWaitMs)
-        p.terminate.close()
-        p.terminate = null
       }
+      if (!p.exited && p.terminate) { p.terminate.close(); p.terminate = null }
       if (!p.exited && p.child.pid) {
         if (platform === 'win32') {
           let killed = false
@@ -276,7 +292,17 @@ export function createBrowser ({
         }
       }
       if (p.terminate) { p.terminate.close(); p.terminate = null }
-      if (!p.exited && p.child.pid) throw new Error('无法确认自己启动的浏览器已退出，请检查该进程')
+      if (!p.exited && p.child.pid) {
+        // 先解绑再抛：否则本进程之后每次启动都会撞上 needsStop 反复抛，浏览器再也打不开
+        if (owned === p) owned = null
+        throw new Error('无法确认自己启动的浏览器已退出，请检查该进程')
+      }
+      // 接管来的窗口（没有自己的进程可观察）：连 Browser.close 都没发出去就是没关掉。
+      // 这时不能删端口记录 —— 留着它，下次启动才能接回那个还开着的窗口
+      if (!p.exited && !p.child.pid && p.port) {
+        if (owned === p) owned = null
+        throw new Error('接管来的窗口没能关掉（Browser.close 没发出去），请手动关闭它')
+      }
       // 自己的窗口确实关了，端口记录也作废，下次别去接它
       try { rmSync(join(profileDir, 'DevToolsActivePort'), { force: true }) } catch (error) {}
       if (owned === p) owned = null
@@ -284,22 +310,49 @@ export function createBrowser ({
     try { await p.stopping } finally { p.stopping = null }
   }
 
+  /** 新开 about:blank：新内核要求 PUT，老内核只认 GET。 */
+  async function newBlankTab (port) {
+    const url = `http://127.0.0.1:${port}/json/new?about:blank`
+    try {
+      const r = await fetch(url, { method: 'PUT', signal: AbortSignal.timeout(3000) })
+      if (r.ok) return await r.json()
+    } catch (error) {}
+    return getBrowserJson(url)
+  }
+
+  /** 走「浏览器级」连接：页面级 session 上发 Browser.* 会 -32601。 */
+  async function browserConn (port) {
+    const ver = await getBrowserJson(`http://127.0.0.1:${port}/json/version`, 1500)
+    if (!ver?.webSocketDebuggerUrl) throw new Error('拿不到浏览器的调试地址')
+    const c = connect(ver.webSocketDebuggerUrl, { expectPort: port })
+    // 关闭流程不该被一个没响应的浏览器拖到 10 秒：这里单独给 3 秒
+    let timer = null
+    try {
+      await Promise.race([c.ready, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('浏览器没响应')), 3000) })])
+    } catch (error) {
+      try { c.close() } catch (closeError) {}
+      throw error
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+    return c
+  }
+
   async function attach (port, check) {
     const { page, extra } = pickPage(await getBrowserJson(`http://127.0.0.1:${port}/json/list`))
     check()
-    for (const t of extra) await fetch(`http://127.0.0.1:${port}/json/close/${t.id}`).catch(() => {})
+    for (const t of extra) await closeTab(port, t.id)
     let target = page
-    if (!target) target = await getBrowserJson(`http://127.0.0.1:${port}/json/new?about:blank`).catch(() => null)
+    if (!target) target = await newBlankTab(port).catch(() => null)
     check()
     if (!target?.webSocketDebuggerUrl) throw new Error('浏览器里没有能控制的标签页')
-    const c = connect(target.webSocketDebuggerUrl)
+    const c = connect(target.webSocketDebuggerUrl, { expectPort: port })
     attaching = c
     try {
       await c.ready
       check()
       await c.send('Page.enable')
       await c.send('Runtime.enable')
-      await c.send('Network.enable', { maxResourceBufferSize: 20e6, maxTotalBufferSize: 100e6 })
       await c.send('Page.setMuted', { muted: true }).catch(() => {}) // 老版本没有这个命令，静音再靠 --mute-audio
       check()
       cdp = c
@@ -311,20 +364,18 @@ export function createBrowser ({
     }
   }
 
-  function launchError (error, p) {
+  function launchError (error, p, why = '') {
     const detail = [error?.message, p?.error?.message, p?.stderr?.trim()].filter(Boolean).join('；')
     if (/SingletonLock|profile appears to be in use/i.test(detail)) return lockError()
-    return new Error(detail || '浏览器没起来，请检查浏览器路径和专用资料目录')
+    // 有具体报错就原样报，别再合并成一句怪路径的话——历史上把「进程静默退出」「启动太慢」
+    // 全报成「浏览器没起来，请检查浏览器路径和专用资料目录」，路径明明是对的，用户查路径查不出问题。
+    if (detail) return new Error(detail)
+    if (p?.exited) return new Error('浏览器进程启动后自己退出了，没有任何报错输出。最常见原因：已经有一个用同一资料目录的浏览器在跑（浏览器自动更新重启 / 上次的窗口没关干净；专用窗口平时放在屏幕外看不见）；另外磁盘清理或「把软件搬到别的盘」会弄坏浏览器安装（路径还在但起不来）。先在任务管理器结束全部 chrome.exe / msedge.exe 再重试；还不行就修复 / 重装浏览器，或在面板换一个浏览器路径')
+    if (why === 'timeout') return new Error(`浏览器进程 ${LAUNCH_TIMEOUT_SEC} 秒内没开出调试端口（进程还活着，路径多半没问题，是启动太慢或被杀毒软件拦了）。稍等再试一次；反复出现就检查杀毒软件对浏览器的拦截`)
+    return new Error('浏览器没起来，请检查浏览器路径和专用资料目录')
   }
 
   async function launch (source, check) {
-    if (useEgoNow()) {
-      await egoConnect(check, async (c) => {
-        await c.send('Network.enable', { maxResourceBufferSize: 20e6, maxTotalBufferSize: 100e6 })
-        await c.send('Page.setMuted', { muted: true }).catch(() => {})
-      })
-      return
-    }
     let p = owned
     try {
       check()
@@ -335,18 +386,25 @@ export function createBrowser ({
         await attach(p.port, () => { check(); if (p.exited || p.error) throw launchError(null, p) })
         return
       }
-      // DSH 被强制重启时上一个窗口还开着：接回去，不然它一直占着资料目录
-      const left = readPortFile(profileDir)
-      if (left && await getBrowserJson(`http://127.0.0.1:${left}/json/version`, 1500).catch(() => null)) {
-        check()
-        p = owned = { child: { pid: 0, kill () {} }, port: left, exited: false, error: null, stderr: '', done: new Promise(() => {}), outputClosed: true, outputDone: Promise.resolve() }
-        await attach(left, check)
-        return
+      // DSH 被强制重启时上一个窗口还开着：接回去，不然它一直占着资料目录。
+      // 端口文件可能是别的浏览器 / 别的程序写的：要求 /json/version 的 ws 路径与记录一致才接管
+      //（老版本写的是固定标记，认它，不然升级后就接不回自己的窗口）。
+      const left = readPortInfo(profileDir)
+      if (left.port) {
+        const ver = await getBrowserJson(`http://127.0.0.1:${left.port}/json/version`, 1500).catch(() => null)
+        const mine = ver?.webSocketDebuggerUrl && (!left.owner || left.owner === LEGACY_OWNER || wsPath(ver.webSocketDebuggerUrl) === left.owner)
+        if (mine) {
+          check()
+          p = owned = { child: { pid: 0, kill () {} }, port: left.port, exited: false, error: null, stderr: '', done: new Promise(() => {}), outputClosed: true, outputDone: Promise.resolve() }
+          await attach(left.port, check)
+          return
+        }
       }
       if (hasLock()) throw lockError()
       const path = browserPath()
       const bin = findBrowser(path)
-      if (!bin) throw new Error(path ? `浏览器路径不对：${path}` : '找不到 Edge / Chrome，先装一个，或在面板里填浏览器路径')
+      if (!bin) throw new Error(path ? `浏览器路径不对：${path}（这个文件不存在或不可执行，常见安装位置也没找到 Chrome / Edge；先装一个，或把路径改成 chrome.exe / msedge.exe 的完整路径）` : '找不到 Chrome / Edge，先装一个，或在面板里填浏览器路径')
+      if (path && bin !== path) log?.warn?.(`面板填的浏览器路径不存在：${path}，已自动改用 ${bin}`)
       mkdirSync(profileDir, { recursive: true })
       const port = await getPort()
       check()
@@ -373,21 +431,22 @@ export function createBrowser ({
       ], { stdio: ['ignore', 'ignore', 'pipe'], detached: true })
       p = owned = observe(child, port)
       child.unref()
-      for (let i = 0; i < 60; i++) {
-        await wait(250)
+      for (let i = 0; i < LAUNCH_POLLS; i++) {
+        await wait(LAUNCH_POLL_MS)
         check()
         if (p.exited || p.error) throw launchError(null, p)
         const version = await getBrowserJson(`http://127.0.0.1:${port}/json/version`, 1500).catch(() => null)
         check()
         if (p.exited || p.error) throw launchError(null, p)
         if (version) {
-          // Edge 经常不写这个文件，自己写一份，DSH 重启后才能接回这个窗口
-          try { writeFileSync(join(profileDir, 'DevToolsActivePort'), `${port}\n/devtools/browser/aurabot\n`) } catch (error) {}
+          // Edge 经常不写这个文件，自己写一份（含真实的 ws 路径，下次靠它确认端口是不是我们自己的）
+          const owner = wsPath(version.webSocketDebuggerUrl) || LEGACY_OWNER
+          try { writeFileSync(join(profileDir, 'DevToolsActivePort'), `${port}\n${owner}\n`) } catch (error) {}
           await attach(port, () => { check(); if (p.exited || p.error) throw launchError(null, p) })
           return
         }
       }
-      throw launchError(null, p)
+      throw launchError(null, p, 'timeout')
     } catch (error) {
       try { await stopOwned(p) } catch (stopError) { throw new Error(`${launchError(error, p).message}；${stopError.message}`) }
       if (error.code === 'cancelled') throw error
@@ -446,40 +505,33 @@ export function createBrowser ({
     return cdp
   }
 
+  /** 页面操作的默认超时集中在这里，改一处就够。 */
+  const TIMEOUT = { eval: 30000, load: 8000 }
+
   /** 在页面里跑一段表达式，返回值（可以是 Promise）。 */
-  async function evaluate (expression, ms = 30000) {
+  async function evaluate (expression, ms = TIMEOUT.eval) {
     const r = await need().send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, ms)
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description?.split('\n')[0] || r.exceptionDetails.text || '页面脚本出错')
     return r.result?.value
   }
 
-  /** 打开网址，等页面加载完（最多 ms；load 事件常常很晚，后面再按需 waitFor 具体元素）。 */
-  async function goto (url, ms = 8000) {
+  /** 打开网址，等页面加载完（最多 ms；load 事件常常很晚，后面再按需等具体元素）。 */
+  async function goto (url, ms = TIMEOUT.load) {
     const c = need()
+    let timedOut = false
     const loaded = new Promise((resolve) => {
       const off = c.on('Page.loadEventFired', () => { off(); resolve() })
-      setTimeout(() => { off(); resolve() }, ms)
+      setTimeout(() => { off(); timedOut = true; resolve() }, ms)
     })
     await c.send('Page.navigate', { url })
     await loaded
-  }
-
-  /** 等某个选择器出现，返回它的中心点和属性；超时返回 null。 */
-  async function waitFor (selector, ms = 10000) {
-    const end = Date.now() + ms
-    while (Date.now() < end) {
-      const box = await evaluate(`(() => {
-        const n = document.querySelector(${JSON.stringify(selector)})
-        if (!n) return null
-        n.scrollIntoView({ block: 'center', inline: 'center' })
-        const r = n.getBoundingClientRect()
-        if (r.width <= 0 || r.height <= 0) return null
-        return { x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, h: r.height, left: r.x, top: r.y, state: n.getAttribute('data-e2e-state') || '', text: (n.innerText || '').slice(0, 200) }
-      })()`).catch(() => null)
-      if (box) return box
-      await sleep(300)
+    if (timedOut) {
+      // load 事件晚到不代表导航失败，但拿不准时调用方会读到上一页：确认真到了目标地址
+      const here = String(await evaluate('location.href').catch(() => ''))
+      // 只去掉 hash：query 也算地址的一部分，否则同路径不同 series_id 会被当成「到了」
+      const base = String(url).split('#')[0]
+      if (!here || !here.startsWith(base)) throw new Error(`页面没打开：${url}`)
     }
-    return null
   }
 
   /** 真鼠标点一下（页面看到的是正常的点击事件，不是脚本 .click()）。 */
@@ -512,50 +564,6 @@ export function createBrowser ({
     return true
   }
 
-  /** 往当前焦点打字（和输入法上屏一样，富文本编辑器也认）。 */
-  async function type (text) {
-    await need().send('Input.insertText', { text })
-  }
-
-  /** 清空当前焦点输入框：真按 Ctrl+A、退格（富文本编辑器的私信框不认 execCommand）。 */
-  async function clearFocused () {
-    const c = need()
-    const key = async (k, code, vk, modifiers = 0) => {
-      await c.send('Input.dispatchKeyEvent', { type: 'keyDown', key: k, code, windowsVirtualKeyCode: vk, modifiers })
-      await c.send('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code, windowsVirtualKeyCode: vk, modifiers })
-    }
-    await key('a', 'KeyA', 65, process.platform === 'darwin' ? 4 : 2)
-    await key('Backspace', 'Backspace', 8)
-  }
-
-  async function pressEnter () {
-    const c = need()
-    const key = { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }
-    await c.send('Input.dispatchKeyEvent', { type: 'keyDown', ...key, text: '\r' })
-    await c.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
-  }
-
-  /**
-   * 开始等一个接口的返回（先调它、再做动作、再 await），拿到 { status, headers, json }；超时 null。
-   * 用来确认点赞 / 评论到底成功没有，而不是点完就当成功。
-   */
-  function waitResponse (urlRe, ms = 10000) {
-    const c = need()
-    return new Promise((resolve) => {
-      const ids = new Map()
-      const done = (v) => { offA(); offB(); clearTimeout(t); resolve(v) }
-      const offA = c.on('Network.responseReceived', (p) => { if (urlRe.test(p.response?.url || '')) ids.set(p.requestId, { status: p.response.status, headers: p.response.headers || {} }) })
-      const offB = c.on('Network.loadingFinished', async (p) => {
-        if (!ids.has(p.requestId)) return
-        const b = await c.send('Network.getResponseBody', { requestId: p.requestId }).catch(() => null)
-        let json = null
-        try { json = JSON.parse(b?.base64Encoded ? Buffer.from(b.body, 'base64').toString() : b?.body) } catch (error) {}
-        done({ ...ids.get(p.requestId), json })
-      })
-      const t = setTimeout(() => done(null), ms)
-    })
-  }
-
   /** 截图（可截一块），返回 data:image/png。 */
   async function screenshot (clip) {
     const r = await need().send('Page.captureScreenshot', { format: 'png', ...(clip ? { clip: { ...clip, scale: 1 } } : {}) })
@@ -574,11 +582,10 @@ export function createBrowser ({
       const r = await open('显示窗口', () => true)
       if (!r.ok) throw new Error(r.message || '浏览器打不开')
     }
-    if (egoTarget) { try { await cdp.send('Page.bringToFront', {}) } catch (error) {} ; return } // 窗口归 DSH，挪不动
 
     // 🔴 窗口操作必须走「浏览器级」连接：页面级 session 上 Browser.getWindowForTarget
     // 会报 -32000 "Browser window not found"（页面会话没有窗口上下文），窗口一步都挪不动。
-    const port = owned?.port || egoPort
+    const port = owned?.port
     if (!port) throw new Error('拿不到浏览器的调试端口，点「开始登录」重开一次')
     let bc = null
     let placed = false
@@ -587,7 +594,7 @@ export function createBrowser ({
       for (let i = 0; i < 24 && !placed; i++) {
         const ver = await getBrowserJson(`http://127.0.0.1:${port}/json/version`, 1500).catch(() => null)
         if (ver?.webSocketDebuggerUrl) {
-          if (!bc) { bc = connectCdp(ver.webSocketDebuggerUrl); await bc.ready }
+          if (!bc) { bc = connectCdp(ver.webSocketDebuggerUrl, { expectPort: port }); await bc.ready }
           const list = await getBrowserJson(`http://127.0.0.1:${port}/json/list`, 2000).catch(() => null)
           const page = (list || []).find((t) => t.type === 'page')
           if (page?.id) {
@@ -619,16 +626,13 @@ export function createBrowser ({
     const pending = opening
     closing = Promise.resolve().then(async () => {
       if (pending) await pending
-      if (egoTarget) { await egoDisconnect(); return } // 共享实例：只断连接，不关浏览器
       attaching?.close()
       if (owned && !owned.exited && cdp && !cdp.closed) owned.terminate ||= cdp
       else cdp?.close()
       cdp = null
+      // stopOwned 自己会去重（p.stopping），且关不掉时先把 owned 置空再抛，所以只调一次就够
       let failed = null
       try { await stopOwned(owned) } catch (error) { failed = error }
-      if (pending) await pending
-      if (owned) try { await stopOwned(owned); failed = null } catch (error) { failed = error }
-      else failed = null
       if (failed) throw failed
     }).finally(() => { closing = null })
     return closing
@@ -645,5 +649,5 @@ export function createBrowser ({
     return list.filter((x) => domains.some((d) => x.domain === d || x.domain === '.' + d || String(x.domain).endsWith(d)))
   }
 
-  return { open, connected, evaluate, goto, waitFor, click, press, type, clearFocused, pressEnter, waitResponse, screenshot, show, close, cookies }
+  return { open, connected, evaluate, goto, click, press, screenshot, show, close, cookies }
 }

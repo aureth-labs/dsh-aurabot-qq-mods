@@ -1,5 +1,5 @@
 const { useEffect, useState } = React
-return function CompanionBondPanel({ toast }) {
+return function CompanionBondPanel({ toast, save }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -13,7 +13,7 @@ return function CompanionBondPanel({ toast }) {
       } catch (e) { if (active) setError(e.message) }
     }
     load()
-    const timer = setInterval(load, 15000)
+    const timer = setInterval(load, 5000)
     return () => { active = false; clearInterval(timer) }
   }, [])
   async function act(action) {
@@ -21,6 +21,15 @@ return function CompanionBondPanel({ toast }) {
     try {
       const r = await call('/interact', { action })
       toast(r.message || '已完成')
+      const next = await call('/status')
+      if (next.ok) { setData(next); setError('') }
+    } catch (e) { setError(e.message) }
+    finally { setBusy(false) }
+  }
+  async function desktopChange(patch) {
+    setBusy(true)
+    try {
+      await save(patch)
       const next = await call('/status')
       if (next.ok) { setData(next); setError('') }
     } catch (e) { setError(e.message) }
@@ -34,6 +43,21 @@ return function CompanionBondPanel({ toast }) {
   const names = { chat: '聊天', feed: '喂饭', play: '玩耍', touch: '摸摸', sleep: '休息', wake: '醒来' }
   return h(ui.Card, { title: '相伴养成' },
     error ? h('p', { role: 'alert' }, error) : null,
+    data.desktop ? h('section', { style: { border: '1px solid var(--ab-border, #8b8b8b44)', borderRadius: '14px', padding: '18px', marginBottom: '22px' } },
+      h('strong', { style: { fontSize: '17px' } }, '桌面陪伴 · 1.0.1'),
+      h('p', { className: 'ab-note' }, '低级：第三张 Q 版 · 中级：第二张精细版 · 高级：第一张简约版。'),
+      h('p', null, data.desktop.desktopEnabled ? `${data.desktop.stageName}${data.desktop.preview ? '（外观预览，不修改亲密度）' : '（随亲密度自动切换）'}` : '桌面立绘已关闭，养成进度照常保留。'),
+      data.desktop.error ? h('p', { role: 'alert' }, data.desktop.error) : null,
+      !data.desktop.supported ? h('p', { className: 'ab-note' }, '桌面立绘与动画目前支持 Apple Silicon Mac；其他系统仍可使用 QQ 养成。') : null,
+      h('div', { style: { display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center', margin: '12px 0' } },
+        h(ui.Btn, { disabled: busy || !data.desktop.supported, onClick: () => desktopChange({ desktopEnabled: !data.desktop.desktopEnabled }) }, data.desktop.desktopEnabled ? '隐藏立绘' : '显示立绘'),
+        h('select', { className: 'ab-input', 'aria-label': '人物外观', value: data.desktop.desktopPreviewStage, disabled: busy, onChange: e => desktopChange({ desktopPreviewStage: e.target.value }) },
+          ...[['auto','按亲密度自动切换'],['low','预览低级 · Q 版'],['middle','预览中级 · 精细版'],['high','预览高级 · 简约版']].map(([v,n]) => h('option', { key:v, value:v }, n))),
+        h('select', { className: 'ab-input', 'aria-label': '人物大小', value: data.desktop.desktopHeight, disabled: busy, onChange: e => desktopChange({ desktopHeight: Number(e.target.value) }) },
+          ...[...new Set([180,240,300,360,420,520,data.desktop.desktopHeight])].sort((a,b)=>a-b).map(v => h('option', { key:v, value:v }, `高度 ${v}`)))),
+      h(ui.Btn, { disabled:busy || !data.desktop.desktopEnabled, onClick:()=>desktopChange({desktopIdleEnabled:!data.desktop.desktopIdleEnabled}) }, data.desktop.desktopIdleEnabled ? '暂停待机动画' : '开启待机动画'),
+      h('p', {className:'ab-note'}, '三档待机：尾巴轻摆、偶尔眨眼、呆毛和发梢轻晃；鼠标靠近时眼睛会跟随并轻轻偏头，移远后平滑回正。'),
+      h('p', { className: 'ab-note' }, '自动切换：亲密度 0–99 低级、100–599 中级、600 起高级。可以拖动人物，右键隐藏或切换外观预览。')) : null,
     h('div', { style: { fontSize: '22px', fontWeight: 600 } }, `${data.stage} · Lv.${data.level}`),
     h('p', { className: 'ab-note' }, '养成的是和你聊天的她。每次相处，都慢慢积累成你们的默契。'),
     meter('亲密度', data.bond, 1000),

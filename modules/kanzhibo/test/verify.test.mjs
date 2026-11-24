@@ -490,7 +490,7 @@ console.log('\n=== 11.95 面板里同时有「赠送」和「送灯牌」（2026
     const i2 = src.indexOf("'^赠送$'")
     return i1 > 0 && i2 > 0 && i1 < i2
   })())
-  ok('prepareBadge 用 findBadgeConfirm 而不是单一 prepare', /let prep = await findBadgeConfirm\(2\)/.test(src))
+  ok('prepareBadge 用 findBadgeConfirm 而不是单一 prepare', /let prep = await findBadgeConfirm\(10\)/.test(src))
   // 同一条失败不该用旧口径再报一次
   ok('tick 不再用「已完成」旧口径重复报错', !/送完还是没判到「已完成」/.test(src))
 }
@@ -560,7 +560,7 @@ console.log('\n=== 11.9997 0.9.7 优化与加固（2026-11-09）===')
   ok('合并扫描保留按优先级分组判唯一', /BADGE_CONFIRM_TEXTS\.map/.test(src) && /pickUnique\(group\)/.test(src))
   ok('DOM 扫描跳过 script/style/svg 等无用节点', /var SKIP = \{ SCRIPT: 1, STYLE: 1/.test(find) && find.split('var SKIP').length >= 3, 'roots 两处都要有')
   ok('badgeSent 读完不再点开关收面板（少两次点击）', /if \(first === 'todo'\) return false/.test(src))
-  ok('prepareBadge 面板开着时不再点入口（入口是开关，点了反而关掉）', /panelOpen[\s\S]{0,60}findBadgeConfirm\(6\)/.test(src))
+  ok('prepareBadge 面板开着时不再点入口（入口是开关，点了反而关掉）', /panelOpen[\s\S]{0,60}findBadgeConfirm\(12\)/.test(src))
   ok('closeTaskPanel 确认面板真的开着才点（防止把入口点开）', /async function closeTaskPanel/.test(src) && /if \(!open\) return false/.test(src))
   ok('半自动红框按候选 rect 画（不再依赖 data-ab-pick 序号）', /clicker\.markRect\(prepared\.cand \? prepared\.cand\.rect : null\)/.test(src) && /async function markRect/.test(click))
   // —— 健壮性 ——

@@ -1,7 +1,7 @@
 const { useState, useEffect } = React;
-const names = { dsh: 'DSH 搜索', zhipu: '智谱', tavily: 'Tavily', exa: 'Exa', firecrawl: 'Firecrawl', searxng: 'SearXNG', context7: 'Context7' };
-const descriptions = { dsh: '沿用 DSH 的搜索设置，不用再填密钥。', zhipu: '适合中文资讯、公告和国内资料。', tavily: '适合日常资料和新闻检索。', exa: '适合官方网站、技术文档和论文。', firecrawl: '搜索网页，也能提取网页正文。', searxng: '连接你选择的聚合搜索实例，支持自建服务。', context7: '专门查编程库和框架文档，不参与通用搜索。' };
-const keyLinks = { zhipu: 'https://open.bigmodel.cn/', tavily: 'https://app.tavily.com/', exa: 'https://dashboard.exa.ai/', firecrawl: 'https://www.firecrawl.dev/', context7: 'https://context7.com/dashboard' };
+const names = { dsh: 'DSH 搜索', zhipu: '智谱', tavily: 'Tavily', exa: 'Exa', firecrawl: 'Firecrawl', searxng: 'SearXNG', keenable: 'Keenable', context7: 'Context7' };
+const descriptions = { dsh: '沿用 DSH 的搜索设置，不用再填密钥。', zhipu: '适合中文资讯、公告和国内资料。', tavily: '适合日常资料和新闻检索。', exa: '适合官方网站、技术文档和论文。', firecrawl: '搜索网页，也能提取网页正文。', searxng: '连接你选择的聚合搜索实例，支持自建服务。', keenable: '通用网页检索，也能提取网页正文；不填密钥也能用。', context7: '专门查编程库和框架文档，不参与通用搜索。' };
+const keyLinks = { zhipu: 'https://open.bigmodel.cn/', tavily: 'https://app.tavily.com/', exa: 'https://dashboard.exa.ai/', firecrawl: 'https://www.firecrawl.dev/', keenable: 'https://app.keenable.ai/console', context7: 'https://context7.com/dashboard' };
 const inputStyle = { width: '100%', boxSizing: 'border-box' };
 return function Panel({ settings, draftSettings, setSettings, toast }) {
   const s = draftSettings || settings;
@@ -58,8 +58,8 @@ return function Panel({ settings, draftSettings, setSettings, toast }) {
             h('summary', { style: { cursor: 'pointer', marginBottom: 12 } }, settings[id + 'ApiKeySet'] ? '已保存密钥 · 修改配置' : '填写配置'),
             field(names[id] + ' API Key', h('input', { className: 'ab-input', style: { ...inputStyle, display: 'block', marginTop: 7 }, type: 'password',
               value: s[id + 'ApiKey'] || '', autoComplete: 'new-password', spellCheck: false,
-              placeholder: s[id + 'ApiKeySet'] ? '已保存；不修改请留空' : '粘贴 API Key', onChange: e => set({ [id + 'ApiKey']: e.target.value }) }),
-              h('span', null, '按服务商规则计费。', h('a', { href: keyLinks[id], target: '_blank', rel: 'noreferrer' }, '获取密钥'))),
+              placeholder: s[id + 'ApiKeySet'] ? '已保存；不修改请留空' : id === 'keenable' ? '选填，留空即免密钥使用' : '粘贴 API Key', onChange: e => set({ [id + 'ApiKey']: e.target.value }) }),
+              h('span', null, id === 'keenable' ? '选填。不填密钥时每个 IP 每小时最多 1000 次；填写后提高限额，按服务商规则计费。' : '按服务商规则计费。', h('a', { href: keyLinks[id], target: '_blank', rel: 'noreferrer' }, '获取密钥'))),
             s[id + 'ApiKeySet'] ? h(ui.Btn, { onClick: () => set({ [id + 'ApiKey']: null }) }, s[id + 'ApiKey'] === null ? '保存后清除密钥' : '清除密钥') : null,
             h('details', { style: { marginTop: 12 } }, h('summary', { style: { cursor: 'pointer' } }, '服务地址与高级选项'),
               h('div', { style: { marginTop: 12 } }, field('服务地址', h('input', { className: 'ab-input', style: { ...inputStyle, display: 'block', marginTop: 7 }, value: s[id + 'Url'] || '', onChange: e => set({ [id + 'Url']: e.target.value }) }), '默认官方地址；密钥与请求会发到此处。仅填写你信任的 HTTPS 服务。'),

@@ -3,13 +3,13 @@ export const DEFAULTS = Object.freeze({
   maxSources: 2, ownerOnly: true, groups: '', private: true,
   tavilyApiKey: '', exaApiKey: '', maxResults: 5, timeoutSeconds: 30,
   searxngUrl: '', searxngApiKey: '', searxngEngines: '',
-  zhipuApiKey: '', firecrawlApiKey: '', context7ApiKey: '',
+  zhipuApiKey: '', firecrawlApiKey: '', context7ApiKey: '', keenableApiKey: '',
   tavilyUrl: 'https://api.tavily.com', exaUrl: 'https://api.exa.ai',
   zhipuUrl: 'https://open.bigmodel.cn/api', zhipuEngine: 'search_std',
-  firecrawlUrl: 'https://api.firecrawl.dev/v2', context7Url: 'https://context7.com',
+  firecrawlUrl: 'https://api.firecrawl.dev/v2', context7Url: 'https://context7.com', keenableUrl: 'https://api.keenable.ai',
   hourlyLimit: 30,
 });
-export const PROVIDERS = { dsh: 'DSH 搜索', zhipu: '智谱', tavily: 'Tavily', exa: 'Exa', firecrawl: 'Firecrawl', searxng: 'SearXNG', context7: 'Context7' };
+export const PROVIDERS = { dsh: 'DSH 搜索', zhipu: '智谱', tavily: 'Tavily', exa: 'Exa', firecrawl: 'Firecrawl', searxng: 'SearXNG', keenable: 'Keenable', context7: 'Context7' };
 export const WEB_SOURCES = Object.keys(PROVIDERS).filter(x => x !== 'context7');
 export function bounded(value, fallback, min, max) {
   const n = Number(value);

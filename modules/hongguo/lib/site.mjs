@@ -114,7 +114,7 @@ export function createSite ({ browser, log }) {
       if (out.length >= 60) break
       const cur = String(await b.evaluate('location.href').catch(() => ''))
       if (cur.startsWith(url)) continue
-      await b.goto(url).catch(() => {})
+      await b.goto(url).catch((error) => { log?.debug?.(`榜单页打不开 ${url}：`, error.message) })
       await new Promise((r) => setTimeout(r, 1200))
       add(await b.evaluate(PICK_DRAMAS).catch(() => []))
     }
@@ -124,7 +124,12 @@ export function createSite ({ browser, log }) {
   /** 剧集详情：剧名在 <h1>，简介在 p.pc-hero-desc-*（以「简介：」开头），封面在 og:image。 */
   async function detail (href) {
     const cur = String(await b.evaluate('location.href').catch(() => ''))
-    if (!href || (cur !== href && !cur.startsWith(href))) await b.goto(href).catch(() => {})
+    if (!href) throw new Error('没有剧集链接')
+    // 用 series_id 精确判断：series_id=123 是 series_id=1234 的前缀，前缀匹配会把上一部剧记到这一部名下
+    const sid = (String(href).match(/series_id=(\d+)/) || [])[1]
+    const onIt = sid ? cur.includes(`series_id=${sid}`) : cur === href
+    // 打不开就抛错：继续读页面只会读到上一部剧的剧名 / 简介 / 封面，记成错误的剧
+    if (!onIt) await b.goto(href)
     await new Promise((r) => setTimeout(r, 1500))
     return b.evaluate(`(() => {
       const t = document.querySelector('h1')
@@ -209,7 +214,8 @@ export function createSite ({ browser, log }) {
     const sid = (s.match(/series_id=(\d+)/) || s.match(/\/player\/(\d+)/) || [])[1]
     if (!sid) throw new Error('链接里没有 series_id')
 
-    await b.goto(`https://hongguoduanju.com/player/${sid}`).catch(() => {})
+    // 同样：播放页打不开就别往下读，否则测到的是上一部剧的播放进度
+    await b.goto(`https://hongguoduanju.com/player/${sid}`)
 
     // 等播放器就位（MSE 要等 readyState 到 2 才算能播）
     const VIDEO = `(() => {
@@ -271,11 +277,17 @@ export function createSite ({ browser, log }) {
     const seconds = Math.round(last)
     const wanted = Math.round(ms / 1000)
     // 播了不到 1/3 就当没看成（防止"点了播放但一直停在 0"被记成看过）
-    return { seconds, wanted, ok: seconds >= Math.max(8, wanted * 0.3), frames: shots }
+    // 门槛跟着停留时长走：停留设成 3 秒时不该按 8 秒判失败，但至少 2 秒才算看过
+    return { seconds, wanted, ok: seconds >= Math.min(8, Math.max(2, wanted * 0.3)), frames: shots }
   }
 
   /** 现在有没有验证码；有就返回原因。 */
-  const verify = () => b.evaluate(VERIFY_PROBE_GENERIC).catch(() => '')
+  // 探测失败不等于「没有验证」：把原因记下来（连接断了会在后面的 self() 里暴露成未登录），
+  // 但不要冒充成风控，免得一次断连就把今天整轮停掉
+  const verify = () => b.evaluate(VERIFY_PROBE_GENERIC).catch((error) => {
+    log?.debug?.('验证码探测失败（可能连接断了）：', error?.message || error)
+    return ''
+  })
 
   /** 开始登录：已登录直接返回；否则试着点登录入口，截二维码。 */
   async function loginStart () {

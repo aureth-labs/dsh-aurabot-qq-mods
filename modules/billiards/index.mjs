@@ -28,7 +28,7 @@ export const DEFAULTS = {
 export default {
   id: 'billiards',
   name: '台球',
-  version: '1.0.0',
+  version: '1.0.1',
   api: 1,
   description: '桌宠那台台球桌搬出来了：拖白球出杆打八球，整个桌面当球桌，球桌以外照常点东西。',
   panel: 'panel.js',

@@ -1,0 +1,23 @@
+{
+  "id": "routine",
+  "name": "作息",
+  "version": "1.1.1",
+  "description": "她的一天的骨架：上班/上学、通勤、在家休息、请假调休，都由这张作息表判定。十一种职业各有一套贴近现实的周班表（护士三班倒、餐饮双班、销售随机商品、高中生晚自习等），也能自己排。只有「在家休息」的时段才让过日子模块醒来——她上班时不找乐子，到家了才过自己的日子。",
+  "category": "desktop",
+  "tags": [
+    "作息",
+    "上下班",
+    "生活",
+    "职业"
+  ],
+  "author": "Ariz0324",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "filesystem",
+    "plugin-config",
+    "plugin-internals"
+  ]
+}

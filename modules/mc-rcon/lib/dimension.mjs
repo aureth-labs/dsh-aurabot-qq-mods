@@ -8,9 +8,18 @@
 export function parseDimension (text, aliases = []) {
   const t = String(text || '').toLowerCase()
   if (!t) return ''
-  // 1) 完整 id：minecraft:the_nether、twilightforest:twilight_forest
-  // 命名空间必须以字母开头，避免把坐标里的「15792:69」当成维度
-  const idm = t.match(/\b([a-z][a-z0-9_]*:[a-z0-9_]+)\b/)
+
+  // 1) xaero 路点分享里带 Internal-<维度>-waypoints，比坐标里的 false:0 可靠
+  //    维度名可能是 the_nether，也可能是 the-nether，统一成下划线
+  const internal = t.match(/internal-([a-z_-]+)-waypoints/i)
+  if (internal) {
+    const name = internal[1].toLowerCase().replace(/-/g, '_').replace(/_+$/, '')
+    if (['overworld', 'the_nether', 'the_end'].includes(name)) return `minecraft:${name}`
+  }
+
+  // 2) 完整 id：minecraft:the_nether、twilightforest:twilight_forest
+  // 命名空间和值都必须以字母开头，避免把坐标 / 数据字段（15792:69、false:0）当成维度
+  const idm = t.match(/\b([a-z][a-z0-9_]*:[a-z][a-z0-9_]*)\b/)
   if (idm) return idm[1]
 
   // 2) 别名；维度词必须离坐标不太远，避免「下界合金怎么做」这种被当成维度

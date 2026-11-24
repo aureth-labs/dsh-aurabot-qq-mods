@@ -1,5 +1,13 @@
 # 验证记录
 
+## 2026-11-22 · 1.0.3 新增 Keenable 渠道
+
+- 新增可选渠道 Keenable，默认不启用。勾选后不填密钥即可使用（每个 IP 每小时 1000 次、每秒 10 次）；填写密钥后改走带密钥的接口，只提高限额。各类问题的路由里都排在最后，已有渠道的顺序和默认值不变。
+- 搜索调用 `POST /v1/search/public`（有密钥时 `POST /v1/search`），传 `max_results` 和 `snippet_max_length: 1000`；时间范围用 `published_after`，限定网站与 DSH / Firecrawl 一样写进检索词。结果正文取 `snippet`。读网页调用 `GET /v1/fetch/public`（有密钥时 `GET /v1/fetch`）。
+- 免密钥实测（Linux、Node.js 22，只启用 Keenable，经 `qq_web_search` / `qq_read_webpage` 工具入口）：中文问题、英文技术问题、限定 nodejs.org 且一个月内、`mode=verify` 四次搜索各返回 5 条来源，用时 255–327 ms；读取 Node.js 版本页面返回 5,855 字符，533 ms。
+- 带密钥的路径只用受控响应测试，没有用真实密钥调用。
+- Linux Node.js 22 通过 51 项测试（新增 4 项：免密钥与带密钥的请求、网页提取、就绪状态、路由顺序）；`npm run build`、市场 `check`、`catalog` 和 `pack --only smart-search` 通过。没有在 Windows 上跑，也没有在真实 Aurabot 中加载面板。
+
 ## 2026-11-13 · 1.0.2 错误处理走查
 
 - 错误出口统一按允许的错误码重建固定中文提示；即使内部错误的 message/code 被追加诊断信息，也不把它带给模型或面板。普通异常原文在此前版本中已被隐藏，本次收紧内部类型的边界。

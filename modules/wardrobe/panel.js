@@ -22,6 +22,7 @@ return function WardrobePage({ toast }) {
   const [styleDraft, setStyleDraft] = useState('')
   const [draft, setDraft] = useState({})
   const [lookPreview, setLookPreview] = useState('')
+  const [newScenes, setNewScenes] = useState([])
   const [replaceId, setReplaceId] = useState('')
   const replaceRef = useRef(null)
   const fileRef = useRef(null)
@@ -51,13 +52,29 @@ return function WardrobePage({ toast }) {
     return r.json()
   }
 
+  const toggleScene = (arr, k) => (arr.includes(k) ? arr.filter((x) => x !== k) : [...arr, k])
+  const sceneName = (k) => ((data && data.scenes) || []).find((s) => s.key === k)?.name || k
+
+  const sceneChips = (picked, onToggle) => h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
+    h('span', { className: 'ab-muted', style: { fontSize: 11 } }, '适用场景：'),
+    ((data && data.scenes) || []).map((s) => h('label', {
+      key: s.key,
+      style: {
+        display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, cursor: 'pointer',
+        padding: '2px 8px', borderRadius: 12, border: '1px solid ' + (picked.includes(s.key) ? '#4a90d9' : 'rgba(128,128,128,.3)'),
+        color: picked.includes(s.key) ? '#4a90d9' : 'inherit',
+      },
+    },
+    h('input', { type: 'checkbox', checked: picked.includes(s.key), onChange: () => onToggle(s.key), style: { margin: 0 } }),
+    s.name)))
+
   const saveText = async () => {
     if (!desc.trim()) { toast && toast('先写一段描述'); return }
     setBusy(true)
     try {
-      const r = await post('/add', { name, desc })
+      const r = await post('/add', { name, desc, scenes: newScenes })
       if (r.ok === false) { toast && toast(r.message || '没存上'); return }
-      setName(''); setDesc('')
+      setName(''); setDesc(''); setNewScenes([])
       await load()
       toast && toast('已保存')
     } finally { setBusy(false) }
@@ -75,9 +92,9 @@ return function WardrobePage({ toast }) {
         fr.onerror = reject
         fr.readAsDataURL(f)
       })
-      const r = await post('/add', { name, desc, image: b64 })
+      const r = await post('/add', { name, desc, image: b64, scenes: newScenes })
       if (r.ok === false) { toast && toast(r.message || '没加上'); return }
-      setName(''); setDesc('')
+      setName(''); setDesc(''); setNewScenes([])
       await load()
       toast && toast(r.captioned ? '加好了，描述已自动生成' : '加好了')
     } finally { setBusy(false) }
@@ -86,6 +103,13 @@ return function WardrobePage({ toast }) {
   const change = async (id) => {
     const r = await post('/today', { set: id })
     if (r.ok) setData({ ...data, today: r.today, outfit: r.outfit })
+  }
+
+  const toggleAutoDress = async () => {
+    const r = await post('/autodress/set', { on: !data.autoDress })
+    if (r && r.ok === false) { toast && toast(r.message || '没改成功'); return }
+    setData({ ...data, autoDress: Boolean(r.autoDress) })
+    toast && toast(r.autoDress ? '自动换装已开启' : '自动换装已关闭')
   }
 
   const applyLook = async () => {
@@ -190,18 +214,27 @@ return function WardrobePage({ toast }) {
     } finally { setBusy(false) }
   }
 
-  const startEdit = (it) => setDraft({ ...draft, [it.id]: { name: it.name, desc: it.desc || '' } })
+  const startEdit = (it) => setDraft({ ...draft, [it.id]: { name: it.name, desc: it.desc || '', scenes: Array.isArray(it.scenes) ? [...it.scenes] : [] } })
   const cancelEdit = (id) => { const d = { ...draft }; delete d[id]; setDraft(d) }
   const saveEdit = async (id) => {
     const d = draft[id]
     if (!d) return
-    const r = await post('/update', { id, name: d.name, desc: d.desc })
+    const r = await post('/update', { id, name: d.name, desc: d.desc, scenes: d.scenes })
     if (r && r.ok === false) { toast && toast(r.message || '没存上'); return }
     cancelEdit(id)
     await load()
     toast && toast('已更新')
   }
   const delItem = async (id) => { await post('/del', { id }); await load() }
+  const tagAll = async () => {
+    setBusy(true)
+    try {
+      const r = await post('/scenes/auto', {})
+      if (r.ok === false) { toast && toast(r.message || '没标成'); return }
+      await load()
+      toast && toast(r.message || ('标好了 ' + r.tagged + ' 件'))
+    } finally { setBusy(false) }
+  }
   const clearAll = async () => {
     if (!window.confirm('删掉衣柜里的所有衣服？图片也会一起删。')) return
     await post('/clear', {})
@@ -252,6 +285,7 @@ return function WardrobePage({ toast }) {
         value: d.desc,
         onChange: (e) => setDraft({ ...draft, [it.id]: { ...d, desc: e.target.value } }),
       }),
+      sceneChips(d.scenes || [], (k) => setDraft({ ...draft, [it.id]: { ...d, scenes: toggleScene(d.scenes || [], k) } })),
       h('div', {
         className: 'ab-muted',
         style: { fontSize: 11, textAlign: 'right', color: String(d.desc || '').length >= 500 ? '#c0392b' : undefined },
@@ -262,6 +296,13 @@ return function WardrobePage({ toast }) {
     h('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8 } },
       h('div', { style: { fontSize: 13, fontWeight: 600 } }, it.name),
       h('div', { className: 'ab-muted', style: { fontSize: 11 } }, '整套')),
+    h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
+      (Array.isArray(it.scenes) && it.scenes.length)
+        ? it.scenes.map((k) => h('span', {
+          key: k,
+          style: { fontSize: 10, padding: '1px 7px', borderRadius: 10, border: '1px solid rgba(74,144,217,.5)', color: '#4a90d9' },
+        }, sceneName(k)))
+        : h('span', { className: 'ab-muted', style: { fontSize: 10 } }, '未标场景（不会被自动换上）')),
     h('div', { style: { fontSize: 12, lineHeight: 1.7, color: 'inherit', opacity: 0.9 } }, it.desc || '（没有描述）'))
 
   const actionBtns = (it) => {
@@ -313,7 +354,26 @@ return function WardrobePage({ toast }) {
 
     h('input', { ref: replaceRef, type: 'file', accept: 'image/*', style: { display: 'none' }, onChange: onReplaceFile }),
 
-    h(ui.Card, { title: '加一件衣服', desc: '上传参考图，自动写描述；或者自己写穿搭描述。' },
+    h(ui.Card, { title: '跟作息自动换装' },
+      h('div', { className: 'ab-switch-row' },
+        h('button', {
+          type: 'button',
+          className: 'ab-switch' + (data.autoDress ? ' on' : ''),
+          'aria-pressed': data.autoDress ? 'true' : 'false',
+          onClick: toggleAutoDress,
+        }),
+        h('span', { style: { fontSize: 13 } }, data.autoDress ? '已开启' : '已关闭')),
+      h('div', { className: 'ab-muted', style: { fontSize: 12, lineHeight: 1.8, marginTop: 8 } },
+        '她一天的处境（出门上班、下班到家、休息、睡觉）变化时，自动换上对应场景的衣服。',
+        h('br', null),
+        '今天你手动挑过衣服，就一整天不再自动换；没标场景的衣服永远不会被自动穿上。'),
+      (data.autoDress && !data.hasRoutine)
+        ? h('div', { style: { marginTop: 10, padding: '10px 12px', borderRadius: 8, background: '#fff7e6', border: '1px solid #ffe0a3', fontSize: 12, lineHeight: 1.8, color: '#8a6100' } },
+          '已开启，但没有检测到「作息 routine」模块，所以现在不会生效。',
+          h('br', null),
+          '装好「作息」后会自动开始工作，不用再回来改设置。')
+        : null),
+    h(ui.Card, { title: '加一件衣服', desc: '上传参考图，自动写描述；或者自己写穿搭描述。标了场景的衣服才会被作息自动换上。' },
       h('div', { style: { display: 'flex', gap: 10, alignItems: 'flex-start' } },
         h('input', {
           className: 'ab-input', style: { width: 160, flex: '0 0 160px' }, placeholder: '名字（可不填）',
@@ -328,13 +388,15 @@ return function WardrobePage({ toast }) {
         h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flex: '0 0 auto', paddingTop: 2 } },
           h(ui.Btn, { small: true, disabled: busy, onClick: saveText }, '保存'),
           h('input', { ref: fileRef, type: 'file', accept: 'image/*', style: { display: 'none' }, onChange: onFile }),
-          h(ui.Btn, { small: true, kind: 'ghost', disabled: busy, onClick: () => fileRef.current && fileRef.current.click() }, busy ? '处理中…' : '选图上传')))),
+          h(ui.Btn, { small: true, kind: 'ghost', disabled: busy, onClick: () => fileRef.current && fileRef.current.click() }, busy ? '处理中…' : '选图上传'))),
+      h('div', { style: { marginTop: 10 } }, sceneChips(newScenes, (k) => setNewScenes((s) => toggleScene(s, k))))),
 
     h(ui.Card, {
       title: '衣柜（' + data.items.length + ' 件）',
       right: h('div', { style: { display: 'flex', gap: 14, alignItems: 'center' } },
         h('span', { className: 'ab-muted', style: { fontSize: 11 } }, '图大小'),
         h('input', { type: 'range', min: 80, max: 220, step: 10, value: thumbW, onChange: (e) => setThumbW(Number(e.target.value)) }),
+        h(ui.Btn, { small: true, kind: 'ghost', disabled: busy, onClick: tagAll }, busy ? '标着…' : '一键标场景'),
         h(ui.Btn, { small: true, kind: 'ghost', onClick: clearAll }, '清空衣柜')),
     },
     data.items.length
@@ -352,6 +414,10 @@ return function WardrobePage({ toast }) {
           data.items.map((x) => h('option', { key: x.id, value: x.id }, x.name))),
         h(ui.Btn, { small: true, onClick: applyLook }, '保存并更新上下文')),
       h('div', { className: 'ab-muted', style: { fontSize: 12, lineHeight: 1.7 } }, data.outfit || '还没选'),
+      h('div', { className: 'ab-muted', style: { fontSize: 11, marginTop: 4 } },
+        (data.today && data.today.autoScene)
+          ? '今天由作息自动换装：' + sceneName(data.today.autoScene) + (data.today.autoDate ? '（' + data.today.autoDate + '）' : '')
+          : '当前是手动挑选；手动挑过的当天，自动换装会让路'),
       lookPreview
         ? h('div', { style: { marginTop: 10, padding: 10, borderRadius: 8, background: '#f7f7f7', fontSize: 12, lineHeight: 1.7, whiteSpace: 'pre-wrap' } }, lookPreview)
         : null),
@@ -457,5 +523,8 @@ return function WardrobePage({ toast }) {
           h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 } },
             h('div', { className: 'ab-muted', style: { fontSize: 11 } }, h2.poses + ' · ' + new Date(h2.at).toLocaleString().slice(-8)),
             h(ui.Btn, { small: true, kind: 'ghost', onClick: () => delPreview(h2.id) }, '删')))))
-        : h('div', { className: 'ab-muted ab-small' }, '还没有生成过。')))
+        : h('div', { className: 'ab-muted ab-small' }, '还没有生成过。')),
+
+
+)
 }

@@ -49,6 +49,22 @@ test('family settings expose safe dropdowns and save only this module settings',
   assert.equal(Object.hasOwn(h.saved[1], 'dialogueVoice'), false);
 });
 
+test('recognition history rejects remote and non-POST requests before accessing credentials', async t => {
+ const h=await setup(t);const handler=h.handlers.get('/speaker/history/read');
+ assert.equal((await h.get('/speaker/history/read')).ok,false);
+ assert.equal((await handler({method:'POST',socket:{remoteAddress:'192.0.2.1'},headers:{host:'127.0.0.1:3080','content-type':'application/json'},body:{}})).ok,false);
+ assert.equal((await h.get('/status')).connected,false);
+});
+
+test('pinyin preview returns multiple readings in order without changing saved names', async t => {
+  const h = await setup(t);
+  const before = await h.get('/speaker/wake');
+  const preview = await h.post('/speaker/wake/pinyin', { names: ['小伴', '蓝蓝'] });
+  assert.deepEqual(preview, { ok: true, readings: ['xiao ban', 'lan lan'] });
+  assert.deepEqual((await h.get('/speaker/wake')).wake, before.wake);
+  assert.equal((await h.get('/speaker/wake/pinyin')).ok, false);
+});
+
 test('module exports and HTTP routes share the playback and recurring reminder formats', async t => {
   const h = await setup(t);
   const capability = await h.get('/capabilities');

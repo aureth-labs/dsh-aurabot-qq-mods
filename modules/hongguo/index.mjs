@@ -9,7 +9,7 @@ import { createHongguo } from './lib/duty.mjs'
 export default {
   id: 'hongguo',
   name: '刷红果短剧',
-  version: '0.1.0',
+  version: '0.1.2',
   api: 1,
   description: '用专用浏览器刷红果短剧：看推荐、记下看过的，刷到好看的用 QQ 私聊告诉主人。',
   // 设置项和面板
@@ -20,10 +20,12 @@ export default {
     perRun: 3,
     maxWatchPerDay: 12,
     maxSharesPerDay: 3,
+    shareEnabled: true,
     dwellMin: 20,
     dwellMax: 90,
     browserPath: '',
-    visionModel: ''
+    visionModel: '',
+    closeAfterRun: true
   },
   settings: [
     { key: 'enabled', label: '打开红果短剧', type: 'switch', hint: '先登录再打开' },
@@ -31,9 +33,11 @@ export default {
     { key: 'perRun', label: '一轮看几部', type: 'number', min: 1 },
     { key: 'maxWatchPerDay', label: '每天最多看几部', type: 'number', min: 0 },
     { key: 'maxSharesPerDay', label: '每天最多分享几部', type: 'number', min: 0 },
-    { key: 'dwellMin', label: '每部停留最少（秒）', type: 'number', min: 1 },
-    { key: 'dwellMax', label: '每部停留最多（秒）', type: 'number', min: 1 },
-    { key: 'browserPath', label: '浏览器路径', type: 'text', hint: '留空自动找 Edge / Chrome', placeholder: 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' },
+    { key: 'shareEnabled', label: '刷到好的就私聊发给我', type: 'switch', hint: '关掉就只自己看，不发私聊' },
+    { key: 'dwellMin', label: '每部停留最少（秒）', type: 'number', min: 1, hint: '随机取中间的秒数，像真人看剧' },
+    { key: 'dwellMax', label: '每部停留最多（秒）', type: 'number', min: 1, hint: '要大于「最少」，否则按最少算' },
+    { key: 'closeAfterRun', label: '刷完自动关浏览器', type: 'switch', hint: '省内存：每轮跑完就退出，下一轮再冷启动（登录状态不受影响）。关掉就一直挂在后台' },
+    { key: 'browserPath', label: '浏览器路径', type: 'text', hint: '留空自动找 Chrome / Edge（装了哪个用哪个）', placeholder: 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' },
     { key: 'visionModel', label: '看画面用哪个模型', type: 'text', hint: '留空 = 跟聊天模型；默认模型看不懂画面时，填 xdpool/glm-5.3 这类支持图片的', placeholder: 'xdpool/glm-5.3' }
   ],
 
@@ -93,7 +97,9 @@ export default {
     // ?limit=N 控制展示墙往回看几条（默认 24，最多 200）
     api.route('/hongguo/state', async (req) => {
       const q = http.query(req)
-      return { ok: true, recent: hg.recent(Math.min(200, Number(q && q.limit) || 24)) }
+      // 下限兜底：负数会让 slice(-n) 变成 slice(n)，语义直接反掉
+      const limit = Math.max(1, Math.min(200, Number(q && q.limit) || 24))
+      return { ok: true, recent: hg.recent(limit) }
     })
     api.route('/hongguo/backfill-covers', async () => hg.backfillCovers())
     // 自检：她到底能不能看懂画面（真播十几秒抓一帧问她）

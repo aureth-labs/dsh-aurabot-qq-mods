@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import { SpeakerProbe, matchSavedSongSources, WAKE_ACK_LEAD_IN_MS } from '../lib/speaker/probe.mjs';
+import { recognitionRows } from '../lib/speaker/recognition.mjs';
 
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 const settle = () => new Promise(resolve => setImmediate(resolve));
@@ -66,6 +67,7 @@ async function fixture() {
     './lib/speaker/windows.mjs': { loadWindowsCredentials: async () => ({}), saveWindowsCredentials: async () => {} },
     './lib/speaker/mina.mjs': { connectSpeaker: async () => { connections++; return speaker; }, verifySpeakerLogin: async () => {}, historyFailure: () => ({}) },
     './lib/speaker/probe.mjs': { SpeakerProbe, matchSavedSongSources, WAKE_ACK_LEAD_IN_MS },
+    './lib/speaker/recognition.mjs': { recognitionRows },
     './lib/speaker/model.mjs': { askProbeModel: async () => '', MODEL_TOKEN_BUDGET: 120, MODEL_TEST_QUESTION: '隔离' },
     './lib/speaker/login.mjs': { SpeakerLogin: Login },
     './lib/speaker/transport.mjs': { authObservation: () => ({}), completeServiceLogin: async () => {} },
@@ -78,7 +80,8 @@ async function fixture() {
     './lib/companion/wake-audio.mjs': { createWakeAudio: () => ({ close: async () => {} }) },
     './lib/companion/runtime.mjs': { companionFailure: () => ({}), createFamilyCompanion: async () => service },
     './lib/speaker/wake-ai.mjs': { suggestWakeNames: async () => ({ ok: true }) },
-    './lib/speaker/wake.mjs': { WakePreference: class { async open() {} get() { return undefined; } } },
+    './lib/speaker/wake.mjs': { validateWakeConfig: value => value, wakeReadings: () => [],
+      WakePreference: class { async open() {} get() { return undefined; } } },
     './lib/songs/local-audio.mjs': { createLocalAudioHandler: () => () => {} },
     './lib/songs/resource-check.mjs': { checkResourceCopy: async () => ({ ok: true }) },
     './lib/speaker/listener.mjs': { ListenerPreference: Preference },
