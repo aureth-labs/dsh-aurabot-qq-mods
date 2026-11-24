@@ -12,7 +12,7 @@ import { checkinAction, describeClaim, formatDate, looksLoggedIn, msUntil, nowMi
 export default {
   id: 'breeze',
   name: 'Breeze 语音',
-  version: '1.3.4',
+  version: '1.3.5',
   api: 1,
   description: 'Breeze Blue 在线文字转语音 + 每日自动签到领积分',
   tab: 'voice',
@@ -661,6 +661,22 @@ export default {
       return r.reused ? '登录窗口开着呢，登进去以后我自动抓' : '登录窗口开好了，登录完我会自己抓，不用再点'
     }
 
+    // Interactive sign-in runs in the user's regular browser on the DSH host.
+    api.route('/browser-login', async (req) => {
+      if (req.method !== 'POST') return { ok: false, message: '请从面板打开登录窗口' }
+      if (await findExistingPort()) return { ok: false, message: '请先关掉之前的 Breeze 登录窗口，再试一次' }
+      const browser = findBrowser()
+      if (!browser) return { ok: false, message: '找不到 Chrome 或 Edge，请在下方填写浏览器路径' }
+      try {
+        const child = spawn(browser, [`--user-data-dir=${chromeDir()}`, 'https://breezeblue.ai/zh/auth/login'], { detached: true, stdio: 'ignore' })
+        await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
+        child.unref()
+        return { ok: true, message: '登录后关掉这个窗口，回面板点「手动签到」确认' }
+      } catch (error) {
+        return { ok: false, message: '开不了浏览器：' + error.message }
+      }
+    })
+
     api.route('/login', async () => {
       try {
         return { ok: true, message: await doLogin() }
@@ -700,6 +716,7 @@ export default {
 
     api.route('/checkin', async () => {
       const r = await claim()
+      if (r.ok && !readState().loginAt) writeState({ ...readState(), loginAt: new Date().toISOString() })
       markDone(r.ok, r.message, 'manual')
       return { ok: r.ok, message: r.ok ? r.message : '没成功：' + r.message }
     })
