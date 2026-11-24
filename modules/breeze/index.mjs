@@ -12,7 +12,7 @@ import { checkinAction, describeClaim, formatDate, looksLoggedIn, msUntil, nowMi
 export default {
   id: 'breeze',
   name: 'Breeze 语音',
-  version: '1.3.5',
+  version: '1.3.6',
   api: 1,
   description: 'Breeze Blue 在线文字转语音 + 每日自动签到领积分',
   tab: 'voice',
@@ -252,19 +252,22 @@ export default {
       try {
         opened = await startBrowser({ headless: true })
         const parts = await grabCookies()
-        // 复用别人（用户正开着的登录窗口）时别去关它，只关我们自己起的
-        if (opened && !opened.reused) await closeBrowser()
         if (looksLoggedIn(parts)) memCookie = parts.join('; ')
-      } catch (error) {
-        api.log.debug('[breeze] 从浏览器配置里读登录态失败：', error.message)
+      } finally {
+        if (opened && !opened.reused) await closeBrowser()
       }
       return memCookie
     }
 
     /** 真去领一次。返回 { ok, message, balance? } */
     async function claim() {
-      const cookie = await sessionCookie()
-      if (!cookie) return { ok: false, message: '还没登录，先在面板点一下「登录」' }
+      let cookie
+      try {
+        cookie = await sessionCookie()
+      } catch (error) {
+        return { ok: false, message: error.message }
+      }
+      if (!cookie) return { ok: false, message: '未找到 Breeze 登录记录。请点「在浏览器登录」，登录后关窗，再点「手动签到」' }
       const headers = {
         'content-type': 'application/json',
         'user-agent': 'Mozilla/5.0',
@@ -541,7 +544,7 @@ export default {
         }
         await new Promise((r) => setTimeout(r, 250))
       }
-      throw new Error('Chrome 15 秒内没开出调试端口')
+      throw new Error('暂时无法连接 Breeze 专用浏览器。如果登录窗口还开着，请关掉它，再点「手动签到」')
     }
 
     /** 把那个登录窗口关掉（连不上就算了） */

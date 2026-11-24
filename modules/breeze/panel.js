@@ -110,7 +110,7 @@ return function BreezePanel({ settings, draftSettings, setSettings, toast }) {
           busy === 'logout' ? '正在退…' : confirmOut ? '再点一次就退出' : '退出登录'),
       ),
       h('div', { className: 'ab-muted ab-small', style: { marginTop: 6 } },
-        hasLogin ? '登录态已建好' : '还没登录',
+        hasLogin ? '登录态已建好' : '尚未确认登录',
         last ? ' ｜ 上次签到：' + last : '',
         ' ｜ 换号前请先退出登录'),
     ),
