@@ -2519,7 +2519,7 @@
     {
       "id": "pocket",
       "name": "口袋aurabot",
-      "version": "1.5.19",
+      "version": "1.5.20",
       "description": "【手机 App】把她接进口袋：安卓 app 里直接聊天（发图、语音条、表情包双向），消息走她原生对话流，记忆/心情/其他模组全在，回复与主动搭话实时推到手机；自带局域网服务，家里 WiFi、公网 IPv6、隧道三种连法，记忆与 QQ 端共用同一套。",
       "category": "platform",
       "tags": [
@@ -2542,13 +2542,13 @@
         "process"
       ],
       "replacesBuiltin": false,
-      "tag": "pocket-v1.5.19",
-      "file": "pocket-v1.5.19.zip",
-      "path": "pocket-v1.5.19/pocket-v1.5.19.zip",
-      "size": 329161,
-      "sha256": "8f9558263601da368b789aecd31e5178a01573fb00cb886646b46c5c01b0f5c4",
-      "commit": "f24dd49f766965bde8a6f5a32973be1b794da4e1",
-      "publishedAt": "2026-11-15T08:27:07.556Z"
+      "tag": "pocket-v1.5.20",
+      "file": "pocket-v1.5.20.zip",
+      "path": "pocket-v1.5.20/pocket-v1.5.20.zip",
+      "size": 331913,
+      "sha256": "6c31bc8d41ba86a8fb9ead55eb94cd6247c9789243b332cfb2855231d21e8248",
+      "commit": "aa1f7400853c3b9e6bb13eb245889176ff03fcbb",
+      "publishedAt": "2026-11-25T14:50:08.169Z"
     },
     {
       "id": "poke-pro",
@@ -2888,6 +2888,37 @@
       "sha256": "efa19f34f006928b898db404c53a110d1e2e0f2a01da48f0bcac44a358871380",
       "commit": "0dac9be4c3d301bed19a22f9d2fb10c9825eb044",
       "publishedAt": "2026-11-25T04:54:28.904Z"
+    },
+    {
+      "id": "room",
+      "name": "小鱼的小屋",
+      "version": "1.2.0",
+      "description": "给她一间自己的房间：聊天攒鱼币、买家具、家电和装饰，在面板里拖着摆；心情差的时候屋里会变暗。",
+      "category": "desktop",
+      "tags": [
+        "小屋",
+        "养成",
+        "心情",
+        "装饰",
+        "家具"
+      ],
+      "author": "王啸宇",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "room-v1.2.0",
+      "file": "room-v1.2.0.zip",
+      "path": "room-v1.2.0/room-v1.2.0.zip",
+      "size": 96894,
+      "sha256": "fb146fee10281b2e0abcc96f3247fef98c84d51c4c3d98cd8099f26c01388fbf",
+      "commit": "aa1f7400853c3b9e6bb13eb245889176ff03fcbb",
+      "publishedAt": "2026-11-25T14:50:08.169Z"
     },
     {
       "id": "room3d",
@@ -3819,6 +3850,36 @@
       "publishedAt": "2026-11-16T14:57:29.316Z"
     },
     {
+      "id": "webdig",
+      "name": "网页挖数据",
+      "version": "1.0.0",
+      "description": "让她自己去一个网站里翻数据：先看 robots.txt，再把页面自带的数据或公开接口挖出来落盘，回一句结果摘要。只抓公开内容，不走登录态、不绕验证码、不伪装成别人。",
+      "category": "tool",
+      "tags": [
+        "抓网页",
+        "翻数据",
+        "调研"
+      ],
+      "author": "RookieApe-tao",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "process"
+      ],
+      "replacesBuiltin": false,
+      "tag": "webdig-v1.0.0",
+      "file": "webdig-v1.0.0.zip",
+      "path": "webdig-v1.0.0/webdig-v1.0.0.zip",
+      "size": 14006,
+      "sha256": "eb54d777242592b7cad74f4ccbeb37b3383f93dc00821f81367371be90423ead",
+      "commit": "aa1f7400853c3b9e6bb13eb245889176ff03fcbb",
+      "publishedAt": "2026-11-25T14:50:08.169Z"
+    },
+    {
       "id": "wechat-bridge",
       "name": "微信互通",
       "version": "0.1.0",
@@ -4052,5 +4113,5 @@
       "reason": "作者主动撤回。"
     }
   ],
-  "generatedAt": "2026-11-25T14:35:21.423Z"
+  "generatedAt": "2026-11-25T14:50:08.169Z"
 }
