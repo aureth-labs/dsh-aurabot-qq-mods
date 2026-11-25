@@ -47,9 +47,64 @@ export async function pollQrLogin(client, token, sessionCookies) {
   const cookie = cookieHeader(kept)
   if (!kept.pkey && !kept.user_pkey) return { state, cookies, hasPkey: false, verified: false }
   try {
-    const check = await verifyCookie(client, cookie)
-    return { state, cookies, cookie, hasPkey: true, ...check }
+    // captureCookies：这一步的 Set-Cookie 以前整个被丢掉（没开 capture），
+    // 顺手打开 —— 虽然实测它不下发 x_xhh_tokenid，但别的 cookie 不该白丢。
+    const check = await client.request({ path: '/account/restore_login', cookie, captureCookies: true })
+    const restored = mergeSetCookies(kept, check.setCookies)
+    const merged = cookieHeader(keepCookies(restored))
+    const r = check.data.result || {}
+    const profile = r.profile || r.account_detail || {}
+    const heyboxId = String(profile.heybox_id ?? profile.userid ?? r.heybox_id ?? r.account_detail?.userid ?? '').trim()
+    return { state, cookies: restored, cookie: merged, hasPkey: true, verified: Boolean(heyboxId), heyboxId, nickname: String(profile.username ?? profile.nickname ?? '') }
   } catch (error) {
-    return { state, cookies, hasPkey: true, verified: false, verifyError: error.message }
+    return { state, cookies, cookie, hasPkey: true, verified: false, verifyError: error.message }
   }
+}
+
+/**
+ * 用拿到的 pkey 打开一次网页，把前端种下的 `x_xhh_tokenid` 取回来。
+ *
+ * 为什么必须这么绕：扫码登录全程只走 HTTP 接口（get_qrcode_url → qr_state →
+ * restore_login），而 `x_xhh_tokenid` **不在任何一步的 Set-Cookie 里** —— 实测它是
+ * 小黑盒网页前端自己的 JS 种进浏览器的（README 也写着它「不是 HttpOnly」）。
+ * 所以扫码只能拿到 pkey，写操作（点赞/评论/发帖）就会被拒。这里补上取 token 的通道：
+ * 把 pkey 灌进浏览器 → 打开首页 → 等前端种 cookie → 读回 x_xhh_tokenid。
+ *
+ * 失败不抛（扫码本身已经成功，不能用「取不到 token」把它整体判死）：
+ * 返回 { ok:false, reason }，调用方保留只有 pkey 的 Cookie 并如实提示。
+ */
+export async function fetchWebToken({ browser, cookie, waitMs = 12000, log } = {}) {
+  if (!browser) return { ok: false, reason: '浏览器不可用' }
+  const parsed = parseCookiePairs(cookie)
+  if (!parsed.length) return { ok: false, reason: '没有可灌入的 Cookie' }
+  try {
+    const n = await browser.setCookies(parsed).catch(() => 0)
+    if (!n) return { ok: false, reason: 'Cookie 没灌进浏览器' }
+    await browser.goto('https://www.xiaoheihe.cn/')
+    // 前端种 cookie 是异步的（实测首页加载后 3~6 秒出现），轮询等它
+    const deadline = Date.now() + waitMs
+    while (Date.now() < deadline) {
+      const list = await browser.cookies().catch(() => [])
+      const hit = list.find((c) => c && c.name === 'x_xhh_tokenid' && String(c.value || '').trim())
+      if (hit) {
+        log?.info?.('扫码登录：已从网页取回 x_xhh_tokenid（长度 ' + String(hit.value).length + '）')
+        return { ok: true, token: String(hit.value), all: list }
+      }
+      await new Promise((r) => setTimeout(r, 800))
+    }
+    return { ok: false, reason: '网页里没等到 x_xhh_tokenid（' + Math.round(waitMs / 1000) + ' 秒）' }
+  } catch (e) {
+    return { ok: false, reason: '取 token 出错：' + e.message }
+  }
+}
+
+/** "a=1; b=2" → [{name,value}]（给 CDP setCookies 用） */
+export function parseCookiePairs(text) {
+  return String(text || '').split(';').map((kv) => {
+    const i = kv.indexOf('=')
+    if (i <= 0) return null
+    const name = kv.slice(0, i).trim()
+    const value = kv.slice(i + 1).trim()
+    return name ? { name, value } : null
+  }).filter(Boolean)
 }

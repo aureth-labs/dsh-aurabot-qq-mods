@@ -1,0 +1,59 @@
+{
+  "moduleVersion": "1.3.5",
+  "date": "2026-11-13",
+  "host": "WSL x86_64",
+  "docker": "29.1.3",
+  "image": "node:22-bookworm-slim",
+  "debian": "12 (bookworm)",
+  "arm64Execution": "QEMU user-mode 10.2.1, not ARM hardware",
+  "scope": "Standalone module with real rendering workers; host API callbacks capture messages. DSH, NapCat and SnowLuma were not launched.",
+  "assetPreparation": "Platform-independent template assets reused read-only; Linux native libraries, interpreter and Python wheels freshly installed for each architecture. Full first-time asset download was not repeated.",
+  "architectures": [
+    {
+      "ok": true,
+      "uid": 1000,
+      "network": "none",
+      "platform": "linux",
+      "arch": "x64",
+      "node": "v22.23.5",
+      "version": "1.3.5",
+      "total": 1005,
+      "rendered": 3,
+      "extensionCycle": true,
+      "resourceReuse": true,
+      "realQQSends": 0,
+      "timing": {
+        "baseStartup": 18573,
+        "native": 844,
+        "emoji": 377,
+        "extension": 1964
+      }
+    },
+    {
+      "ok": true,
+      "uid": 1000,
+      "network": "none",
+      "platform": "linux",
+      "arch": "arm64",
+      "node": "v22.23.5",
+      "version": "1.3.5",
+      "total": 1005,
+      "rendered": 3,
+      "extensionCycle": true,
+      "resourceReuse": true,
+      "realQQSends": 0,
+      "timing": {
+        "baseStartup": 17628,
+        "native": 1712,
+        "emoji": 1581,
+        "extension": 15542
+      }
+    }
+  ],
+  "managementAccess": {
+    "ok": true,
+    "directPublishedPort": 403,
+    "unauthenticatedProxy": 401,
+    "authenticatedLoopbackProxy": 200
+  }
+}

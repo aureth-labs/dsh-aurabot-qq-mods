@@ -108,7 +108,7 @@ export function createBrowser({ profileDir, browserPath = () => '', log, spawnPr
       }
       if (!egoBackend) egoBackend = createEgoBackend({ getJson, log })
       const { port } = await egoBackend.ensure(check)
-      const target = await acquireEgoTarget(port, getBrowserJson)
+      const target = await acquireEgoTarget(port, getBrowserJson, connect)
       check()
       const c = connect(target.webSocketDebuggerUrl)
       try {
@@ -262,12 +262,65 @@ export function createBrowser({ profileDir, browserPath = () => '', log, spawnPr
     throw new Error('小黑盒页面加载超时')
   }
   async function cookies() { return (await need().send('Network.getAllCookies')).cookies || [] }
+  /**
+   * 把 Cookie 灌进这个浏览器实例（浏览器兜底发帖要带着主人的登录态）。
+   * 只写 xiaoheihe.cn 域；写完刷新一次让服务端重新渲染登录态。
+   */
+  async function setCookies(list) {
+    const c = need()
+    await c.send('Network.enable')
+    let n = 0
+    for (const one of list || []) {
+      if (!one || !one.name) continue
+      try {
+        const r = await c.send('Network.setCookie', {
+          name: String(one.name), value: String(one.value ?? ''),
+          domain: '.xiaoheihe.cn', path: '/', secure: true, sameSite: 'None',
+        })
+        if (r && r.success !== false) n++
+      } catch { /* 单个 Cookie 被拒不影响其它 */ }
+    }
+    return n
+  }
+  /** 在当前页面跑一段脚本（发帖表单全在页面上下文里操作） */
+  async function evaluateInPage(expression) { return evaluate(expression) }
+  /** 等页面里出现某个 CSS 选择器（发帖表单是异步渲染的） */
+  async function waitFor(selector, { timeoutMs = 15000, intervalMs = 250, visible = true } = {}) {
+    const probe = `(() => {
+      const el = document.querySelector(${JSON.stringify(String(selector))})
+      if (!el) return false
+      if (!${visible}) return true
+      const r = el.getBoundingClientRect()
+      return r.width > 0 && r.height > 0
+    })()`
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if (await evaluate(probe).catch(() => false)) return true
+      await wait(intervalMs)
+    }
+    return false
+  }
   async function screenshot() {
     const r = await need().send('Page.captureScreenshot', { format: 'png' })
     return r.data ? 'data:image/png;base64,' + r.data : ''
   }
   async function show(visible) {
-    if (egoTarget) return // 窗口归 DSH，挪不动
+    if (egoTarget) {
+      // 共享窗口归 DSH 管，但「显示浏览器窗口」不能是空操作 —— 主人扫码、做
+      // 安全验证时点它，要把窗口从屏幕外 (-2400,-2400) 挪回屏幕内、带到前台、
+      // 切到本模块的标签页。收起（visible=false）挪回屏幕外并取消置顶焦点。
+      try {
+        const { windowId } = await cdp.send('Browser.getWindowForTarget')
+        if (visible) {
+          await cdp.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } }).catch(() => {})
+          await cdp.send('Browser.setWindowBounds', { windowId, bounds: { left: 80, top: 60, width: 1280, height: 860 } }).catch(() => {})
+        } else {
+          await cdp.send('Browser.setWindowBounds', { windowId, bounds: { left: -2400, top: -2400 } }).catch(() => {})
+        }
+      } catch { /* 挪窗失败不拦着 bringToFront：能带到前台也算数 */ }
+      if (visible) await cdp?.send('Page.bringToFront').catch(() => {})
+      return
+    }
     const c = need()
     const { windowId } = await c.send('Browser.getWindowForTarget')
     if (!visible) {
@@ -290,5 +343,5 @@ export function createBrowser({ profileDir, browserPath = () => '', log, spawnPr
     }).finally(() => { closing = null })
     return closing
   }
-  return { open, connected, evaluate, goto, cookies, screenshot, show, close }
+  return { open, connected, evaluate, goto, cookies, setCookies, evaluateInPage, waitFor, screenshot, show, close }
 }

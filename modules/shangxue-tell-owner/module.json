@@ -1,0 +1,31 @@
+{
+  "id": "shangxue-tell-owner",
+  "name": "转告主人反馈",
+  "version": "1.0.1",
+  "description": "群里/私聊里有人托话，记成工单送达主人；主人处理完，机器人自己找对工单回群引用原消息告诉本人。转述由主模型用自然口吻完成",
+  "category": "social",
+  "tags": [
+    "转告",
+    "工单",
+    "反馈",
+    "主人"
+  ],
+  "platforms": [
+    "qq"
+  ],
+  "author": "shangxue",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "plugin-config",
+    "filesystem",
+    "network",
+    "plugin-internals"
+  ],
+  "panel": "panel.js",
+  "build": {
+    "out": "lib"
+  }
+}
