@@ -1,0 +1,30 @@
+{
+  "id": "shangxue-playmusic",
+  "name": "语音点歌",
+  "version": "1.0.0",
+  "description": "点歌功能：搜哔哩哔哩/网易云的原唱，按匹配度挑最优一首，下载后抽成 mp3 当语音条发到当前会话。这是省算力的点歌通道（不占用唱歌/翻唱）",
+  "category": "social",
+  "tags": [
+    "点歌",
+    "音乐",
+    "哔哩哔哩",
+    "网易云",
+    "语音条"
+  ],
+  "platforms": [
+    "qq"
+  ],
+  "author": "shangxue",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "filesystem",
+    "network",
+    "process"
+  ],
+  "build": {
+    "out": "lib"
+  }
+}

@@ -1,0 +1,213 @@
+<!doctype html>
+<!-- Aurabot 桌宠「小屋场景窗」渲染页（模板/生成物）。
+     来源：布局与样式移植自 zizic04/dsh-pet-home（MIT）的 room.html；
+     素材（底图/姿势帧/栏杆）为 dsh-pet-home 仓库资源，CC BY-NC-SA 4.0，禁止商用；本机自用。
+     由 Electron 主进程 loadFile 打开（query 带 base/token），nodeIntegration:true、contextIsolation:false，
+     渲染逻辑全部在同目录 house.js（只走 IPC 与插件 HTTP API，不引用主进程内部函数）。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' http: https: data: blob:; media-src 'self' http: https: blob:; connect-src 'self' http: https:; font-src 'self' data:"
+    />
+    <title>大肥鱼的家</title>
+    <style>
+      * { box-sizing: border-box; }
+      /* body/根容器底色与 main.js openHouse 的 backgroundColor 统一为 #1d1a17：
+         「页面起来了但场景没数据」时露深色底 + 错误提示，而不是刺眼白屏；
+         黑（没起来，露窗口底色）白（body 白底）两态也就统一成深色系了。 */
+      html, body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #1d1a17;
+        font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei UI', sans-serif;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      /* 世界坐标 = 房屋底图像素（1672×941），整体按窗口等比缩放；人物、家具、气泡同一个变换。 */
+      #world { position: absolute; left: 0; top: 0; width: 1672px; height: 941px; transform-origin: 0 0; }
+      .bg { position: absolute; inset: 0; background-size: 100% 100%; transition: opacity 0.9s ease; }
+      #bg-night, #bg2-night { opacity: 0; }
+      body.night #bg-night, body.night #bg2-night { opacity: 1; }
+      /* 两个镜头：一楼全景 / 二楼广角，交叉淡入。 */
+      .f1, .f2 { position: absolute; inset: 0; transition: opacity 0.5s ease; }
+      .f2,
+      body[data-view='2'] .f1,
+      body[data-view='2'] .rail { opacity: 0; pointer-events: none; }
+      body[data-view='2'] .f2 { opacity: 1; }
+      /* 一楼镜头里二楼压暗一点：视线集中在一楼。 */
+      #dim2 {
+        position: absolute; left: 0; right: 0; top: 0; height: 270px;
+        background: linear-gradient(180deg, rgba(25, 20, 35, 0.3), rgba(25, 20, 35, 0.22) 85%, rgba(25, 20, 35, 0));
+        pointer-events: none;
+      }
+      /* 夜里人物轻微压暗 + 偏暖，避免白天亮度的角色贴在夜景上。 */
+      body.night .rp-figure, body.night .rp-pose { filter: brightness(0.8) saturate(0.9) sepia(0.14); }
+      /* 坐 / 躺姿势帧层：与底图同坐标；帧交替靠 opacity，整体有呼吸起伏（origin 在帧盒底部中点，见 house.js）。 */
+      .rp-pose {
+        position: absolute; left: 0; top: 0; width: 1672px; height: 941px;
+        opacity: 0; pointer-events: none;
+        transition: opacity 0.35s ease, filter 0.9s ease;
+      }
+      .rp-pose.show { opacity: 1; animation: rp-breath 3.6s ease-in-out infinite; }
+      @keyframes rp-breath {
+        0%, 100% { transform: scale(1, 1); }
+        50% { transform: scale(1.004, 1.012); }
+      }
+      img.rp-pose-img {
+        position: absolute;
+        /* 帧是逐像素对齐的：直接切换（像 GIF），不做交叉淡入——半透明叠加会透出背景一闪一闪。 */
+        transition: none;
+        -webkit-user-drag: none;
+      }
+      .rp-pose.show img.rp-pose-img { pointer-events: auto; cursor: grab; }
+      /* 站立 / 走路：原版透明动画 video，A/B 双缓冲。 */
+      .rp { position: absolute; left: 0; top: 0; pointer-events: none; will-change: transform; transition: opacity 0.3s ease; }
+      .rp-shadow {
+        position: absolute; border-radius: 50%;
+        background: radial-gradient(closest-side, rgba(70, 45, 20, 0.32), rgba(70, 45, 20, 0));
+        pointer-events: none;
+      }
+      .rp-figure { position: absolute; left: 0; top: 0; width: 640px; height: 360px; transform-origin: 0 0; transition: filter 0.9s ease; }
+      .rp-flip { position: absolute; inset: 0; transform-origin: 50% 50%; }
+      .rp-flip.right { transform: scaleX(-1); }
+      video.rp-video {
+        position: absolute; inset: 0; width: 100%; height: 100%;
+        object-fit: contain; opacity: 0; transition: opacity 0.18s ease;
+      }
+      video.rp-video.is-front { opacity: 1; }
+      .rp-hit { position: absolute; pointer-events: auto; cursor: grab; touch-action: none; }
+      .rp-hit.dragging { cursor: grabbing; }
+      /* 姿势层被显示时 img 收不到指针，拖拽 / 点击 / 右键走这块透明命中层。 */
+      .rp-pose-hit { position: absolute; display: none; cursor: grab; touch-action: none; }
+      /* 家具补丁（茶几上被拿走的魔方 / 杯子）。 */
+      img.rp-patch { position: absolute; pointer-events: none; }
+      img.rp-patch-night, body.night img.rp-patch-day { display: none; }
+      body.night img.rp-patch-night { display: block; }
+      /* 点地板走路的小涟漪。 */
+      .rp-ripple {
+        position: absolute; width: 46px; height: 16px; margin: -8px 0 0 -23px;
+        border: 2.5px solid rgba(255, 255, 255, 0.9); border-radius: 50%;
+        pointer-events: none; z-index: 3000;
+        animation: rp-ripple 0.7s ease-out forwards;
+      }
+      @keyframes rp-ripple {
+        from { transform: scale(0.3); opacity: 1; }
+        to { transform: scale(1.6); opacity: 0; }
+      }
+      /* 楼梯扶手 / 前景条（日 / 夜两套）。 */
+      .rail { position: absolute; pointer-events: none; transition: opacity 0.9s ease; }
+      .rail-night, body.night .rail-day { opacity: 0; }
+      body.night .rail-night { opacity: 1; }
+      body[data-view='2'] .rail { opacity: 0 !important; }
+      .sf2 { transition: opacity 0.5s ease; }
+      body:not([data-view='2']) .sf2 { opacity: 0 !important; }
+      /* 气泡：圆润白底、锚头顶 / 姿势帧上方（样式口径对齐 index.html 的 #bubble）。 */
+      .rp-bubble {
+        position: absolute; z-index: 5000; left: 0; top: 0;
+        width: max-content; max-width: 300px;
+        padding: 10px 16px 11px;
+        border-radius: 20px;
+        border: 2.5px solid #bcd3ff;
+        background: linear-gradient(180deg, #ffffff 0%, #f4f8ff 100%);
+        color: #4a4466;
+        font-size: 19px;
+        letter-spacing: 0.02em;
+        line-height: 1.5;
+        box-shadow: 0 6px 16px rgba(110, 130, 200, 0.22);
+        transform: translate(-50%, -100%);
+        opacity: 0;
+        transition: opacity 0.2s ease;
+        pointer-events: none;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .rp-bubble.show { opacity: 1; }
+      .rp-bubble::after {
+        content: '';
+        position: absolute; left: 50%; bottom: -7px; margin-left: -7px;
+        border: 7px solid transparent;
+        border-bottom: 0;
+        border-top-color: #bcd3ff;
+      }
+      /* 窗内自绘右键菜单（两级）。 */
+      #menu {
+        position: fixed; z-index: 9000; min-width: 150px; display: none;
+        padding: 5px; border-radius: 12px;
+        background: rgba(252, 253, 255, 0.97);
+        border: 2px solid #bcd3ff;
+        box-shadow: 0 8px 22px rgba(60, 70, 120, 0.28);
+        font-size: 13.5px; color: #3d3a4a;
+      }
+      #menu .mi {
+        padding: 7px 12px; border-radius: 8px; cursor: pointer; white-space: nowrap;
+        display: flex; justify-content: space-between; gap: 14px; align-items: center;
+      }
+      #menu .mi:hover { background: #e8f0ff; }
+      #menu .mi .arrow { color: #9aa8c8; font-size: 11px; }
+      #menu .sep { height: 1px; margin: 4px 8px; background: rgba(120, 140, 190, 0.25); }
+      #menu .sub {
+        position: fixed; z-index: 9001; min-width: 150px; display: none;
+        padding: 5px; border-radius: 12px;
+        background: rgba(252, 253, 255, 0.97);
+        border: 2px solid #bcd3ff;
+        box-shadow: 0 8px 22px rgba(60, 70, 120, 0.28);
+        max-height: 70vh; overflow: auto;
+      }
+      /* 素材未就绪 / 加载失败的居中提示（不白屏、不抛错）。
+         house.js 启动拉 manifest 失败会亮这一层并每 3s 重试（最多 20 次，文案带失败次数），
+         任何一次成功就隐藏本层正常渲染；重试耗尽改口提示重开。 */
+      #fatal {
+        position: fixed; inset: 0; z-index: 9500; display: none;
+        align-items: center; justify-content: center;
+      }
+      /* 加载幕（2026-11-07）：**默认可见**——从窗口第一帧起就是深色底 + 「小屋加载中…」，
+         永远不白（此前页面本身没起来时什么提示都没有，只能露一块死板）。
+         house.js boot 出结果（成功正常渲染 / 失败转 #fatal 错误层）时收掉它。 */
+      #boot {
+        position: fixed; inset: 0; z-index: 9400; display: flex;
+        align-items: center; justify-content: center;
+      }
+      #fatal .card {
+        max-width: 78%;
+        padding: 18px 26px; border-radius: 16px;
+        background: rgba(252, 253, 255, 0.96);
+        border: 2.5px solid #bcd3ff; color: #4a4466;
+        font-size: 16px; line-height: 1.7; text-align: center;
+        box-shadow: 0 10px 28px rgba(60, 70, 120, 0.3);
+      }
+      #hint {
+        position: absolute; left: 16px; bottom: 18px;
+        font-size: 12px; color: rgba(255, 255, 255, 0.92);
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+        z-index: 10; pointer-events: none; max-width: 38%;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .bg, .rp, .rp-figure, video.rp-video { transition: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="world">
+      <div class="f1">
+        <div class="bg" id="bg-day"></div>
+        <div class="bg" id="bg-night"></div>
+      </div>
+      <div class="f2">
+        <div class="bg" id="bg2-day"></div>
+        <div class="bg" id="bg2-night"></div>
+      </div>
+      <div id="dim2"></div>
+      <div id="actors"></div>
+    </div>
+    <div id="hint"></div>
+    <div id="menu"></div>
+    <div id="menu-sub" class="sub"></div>
+    <div id="fatal"><div class="card" id="fatal-text"></div></div>
+    <div id="boot"><div class="card">小屋加载中…</div></div>
+    <script src="house.js"></script>
+  </body>
+</html>

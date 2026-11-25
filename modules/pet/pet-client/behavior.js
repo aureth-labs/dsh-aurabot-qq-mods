@@ -248,6 +248,13 @@ const ACTIONS = {
         : { status: 'failed', reason: 'close-failed', detail: w.title }
     },
   },
+  // 小屋动作（三期）：实际执行在 main.js 的 handleHouseBehavior（开场景窗+跳状态），
+  // 这里只登记元数据（desc/say 与服务端逐字一致，对账测试盯着）+ 兜底 run。
+  enter_house: {
+    desc: '回小屋：打开小屋场景窗，她进屋里过日子；可指定去哪（沙发玩手机/餐桌吃饭/书桌办公/床上睡觉/衣柜换装/阳台吹风/厨房找吃的/客厅玩耍），不指定就自由活动',
+    say: '（回屋里待会儿）',
+    run: notImplemented, // 不会走到这里：main.js 拦截执行；留着防漏网路径报 refused 而不是崩
+  },
 }
 // 留作后续批次占位：新动作先登记 run: notImplemented（回执 refused:not-implemented，面板会置灰）
 function notImplemented() {

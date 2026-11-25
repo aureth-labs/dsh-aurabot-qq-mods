@@ -1,0 +1,15 @@
+{
+  "id": "beliefs",
+  "name": "观点",
+  "version": "1.0.0",
+  "description": "给她自己的看法：核心三观和普通观点分开，按语义匹配（向量召回 + 模型重排），吵起来时不讲大道理",
+  "category": "social",
+  "tags": ["观点", "三观", "人设", "语义匹配"],
+  "author": "YanOnjun",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["network", "filesystem", "plugin-config", "plugin-internals"],
+  "homepage": ""
+}
