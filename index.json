@@ -854,6 +854,35 @@
       "publishedAt": "2026-11-22T12:27:41.222Z"
     },
     {
+      "id": "group-mention-etiquette",
+      "name": "群友互相 @ 时不插话",
+      "version": "1.0.0",
+      "description": "群友 @ 别人时只旁听；也叫到机器人时，仍按原设置回复。",
+      "category": "social",
+      "tags": [
+        "群聊",
+        "插话",
+        "旁听"
+      ],
+      "platforms": [
+        "qq"
+      ],
+      "author": "b1ghawk119",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.1",
+      "requires": [],
+      "capabilities": [],
+      "replacesBuiltin": false,
+      "tag": "group-mention-etiquette-v1.0.0",
+      "file": "group-mention-etiquette-v1.0.0.zip",
+      "path": "group-mention-etiquette-v1.0.0/group-mention-etiquette-v1.0.0.zip",
+      "size": 2215,
+      "sha256": "5c7b937a405b18d4d0c58dc55b5292e507db15bb54f333091389ddebf53c184a",
+      "commit": "60136a58a57ad0882c963c937b433e7975217ebf",
+      "publishedAt": "2026-11-25T04:44:15.493Z"
+    },
+    {
       "id": "group-topic-boundary",
       "name": "群聊话题边界",
       "version": "1.0.0",
@@ -2577,5 +2606,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-24T03:18:06.903Z"
+  "generatedAt": "2026-11-25T04:44:15.493Z"
 }
