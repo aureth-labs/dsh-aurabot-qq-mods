@@ -1,0 +1,14 @@
+{
+  "id": "morning",
+  "name": "每日晚报",
+  "version": "1.0.0",
+  "description": "每晚定时抓多个科技媒体，筛成几条要点私聊推给主人（标注来源），也能随时问她「今天有什么新闻」",
+  "category": "tool",
+  "tags": ["新闻", "晚报", "RSS", "资讯", "定时"],
+  "author": "踏雪",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["network", "filesystem", "plugin-config"]
+}
