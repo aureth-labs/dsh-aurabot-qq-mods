@@ -2308,6 +2308,41 @@
       "publishedAt": "2026-11-25T04:55:43.891Z"
     },
     {
+      "id": "shangxue-tell-owner",
+      "name": "转告主人反馈",
+      "version": "1.0.1",
+      "description": "群里/私聊里有人托话，记成工单送达主人；主人处理完，机器人自己找对工单回群引用原消息告诉本人。转述由主模型用自然口吻完成",
+      "category": "social",
+      "tags": [
+        "转告",
+        "工单",
+        "反馈",
+        "主人"
+      ],
+      "platforms": [
+        "qq"
+      ],
+      "author": "shangxue",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "plugin-config",
+        "filesystem",
+        "network",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "shangxue-tell-owner-v1.0.1",
+      "file": "shangxue-tell-owner-v1.0.1.zip",
+      "path": "shangxue-tell-owner-v1.0.1/shangxue-tell-owner-v1.0.1.zip",
+      "size": 19747,
+      "sha256": "b6f505005f3ae5cda794060add99e84ad102ae6b91c435cbd923c1205dc2da3b",
+      "commit": "a0e31b09ed070c1e1ba5d3f38ee7f8276259fb61",
+      "publishedAt": "2026-11-25T12:05:17.223Z"
+    },
+    {
       "id": "shitu",
       "name": "识图",
       "version": "1.0.0",
@@ -2835,5 +2870,5 @@
       "reason": "作者主动撤回。"
     }
   ],
-  "generatedAt": "2026-11-25T11:40:19.978Z"
+  "generatedAt": "2026-11-25T12:05:17.223Z"
 }
