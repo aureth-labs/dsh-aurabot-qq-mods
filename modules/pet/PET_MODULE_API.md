@@ -317,7 +317,7 @@ modules-data/pet/packs/
 
 素材规格：VP9 透明通道 webm（640×360 左右）。**版权与获取**：dsh-pet 的宠物形象是
 CC BY-NC-SA 4.0 + 禁止商用，**不随本插件分发**。default 包由插件启动时从独立素材仓库
-[dsh-aurabot-qq-mods](https://github.com/accomplish07zrh-eng/dsh-aurabot-qq-mods) 自动下载落位（素材放在该仓库的
+[dsh-aurabot-qq-mods](https://github.com/aureth-labs/dsh-aurabot-qq-mods) 自动下载落位（素材放在该仓库的
 `pet-pack/` 文件夹里：`pet-pack/default-config.json` + `pet-pack/default-manifest.json` + `pet-pack/default-animation/*.webm`；
 文件夹名其实随意，下载端只认「哪一层里有 default-animation/」）。`POST /packs/fetch-default`
 可手动重下；地址在面板「桌宠」页的「素材包」卡里改（写 `ext.pet.petPackUrl`，也可直接改 config.json），
