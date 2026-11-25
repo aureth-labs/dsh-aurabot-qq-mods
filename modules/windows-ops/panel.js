@@ -18,6 +18,14 @@ const DEFAULTS = {
   rateLimit: 60, // 每分钟操作上限
   powershellPath: '', // 留空 = System32 自动
   preferUia: true, // 优先用元素定位（读无障碍树按选择器操作），关了她会更爱点坐标
+  // v1.3.1 QQ 原生共享 / 远程协助
+  qqBotQQ: '', // 机器人 QQ 号（留空用插件配置 botQQ）
+  qqOwnerQQ: '', // 主人 QQ 号（留空用插件配置 ownerQQ）
+  qqBotName: '', // 昵称兜底（OneBot 连不上时手填）
+  qqOwnerName: '', // 昵称兜底
+  qqWindowHwnd: 0, // 高级：机器人 QQ 窗口句柄（0=自动）
+  qqConfirmBeforeStart: true, // 发起前先截图发主人确认
+  shareAutoStopMinutes: 30, // 屏幕共享自动停止（0=不自动）
 }
 
 return function Panel({ settings, save, toast }) {
@@ -25,6 +33,8 @@ return function Panel({ settings, save, toast }) {
   const [st, setSt] = useState(null) // /status 的状态总览
   const [opsList, setOpsList] = useState(null) // /ops 的操作目录（白名单「加入」用）
   const [confirms, setConfirms] = useState(null) // /confirm 的待确认队列
+  const [sh, setSh] = useState(null) // /share QQ 原生屏幕共享状态
+  const [ras, setRas] = useState(null) // /assist QQ 原生远程协助状态
 
   // ---- 编辑草稿：改了先存本地，点「保存设置」一次落盘；null = 与已存值一致（不脏）----
   const [draft, setDraft] = useState(null)
@@ -45,6 +55,10 @@ return function Panel({ settings, save, toast }) {
     setSt(s)
     const c = await call('/confirm')
     if (c.ok) setConfirms(c.confirms || [])
+    const a = await call('/share')
+    setSh(a)
+    const b = await call('/assist')
+    setRas(b)
   })
   useEffect(() => { loadStatus() }, [])
 
@@ -83,6 +97,22 @@ return function Panel({ settings, save, toast }) {
     const r = await call('/confirm', approve ? { approve: true, id } : { reject: true, id })
     if (!r.ok) return toast(r.error || '操作失败')
     toast(approve ? '已批准，下一次同动作直接放行' : '已拒绝', 'ok')
+    await loadStatus()
+  })
+
+  // ---- v1.3.1：QQ 原生共享屏幕 / 远程协助（面板开停；全部在机器人自己的 QQ 客户端里完成）----
+  const actShare = (action) => lock('share:' + action, async () => {
+    const r = await call('/share', { action })
+    if (!r.ok) return toast(r.error || r.message || 'QQ 屏幕共享操作失败')
+    if (r.message) toast(r.message, 'ok')
+    setSh(r)
+    await loadStatus()
+  })
+  const actAssist = (action) => lock('assist:' + action, async () => {
+    const r = await call('/assist', { action })
+    if (!r.ok) return toast(r.error || r.message || 'QQ 远程协助操作失败')
+    if (r.message) toast(r.message, 'ok')
+    setRas(r)
     await loadStatus()
   })
 
@@ -260,7 +290,7 @@ return function Panel({ settings, save, toast }) {
         h('span', { className: 'ab-small ab-muted' }, '总开关'),
         h(ui.Switch, { on: masterOn, disabled: !!busy, title: '总开关', onChange: toggleMaster }),
         h('span', { className: 'ab-badge mine' }, 'windows-ops')),
-      desc: '经 PowerShell 操作这台电脑：窗口枚举/激活/关闭、截屏、剪贴板读写、键鼠模拟，以及 UIA 元素定位（读无障碍树按选择器精确操作控件）。默认仅主人可用。'
+      desc: '经 PowerShell 操作这台电脑：窗口枚举/激活/关闭、截屏、剪贴板读写、键鼠模拟，以及 UIA 元素定位（读无障碍树按选择器精确操作控件）；还能让机器人用自己的 QQ 客户端原生「屏幕共享」/「邀请对方远程协助」。默认仅主人可用。'
         + (masterOn ? ' 总开关开着：AI 工具、/wops 命令都能操作这台电脑。' : ' 总开关关着：她碰不了这台电脑，工具/命令全部停用。'),
     },
     // 状态总览（只读，一键刷新）
@@ -291,9 +321,72 @@ return function Panel({ settings, save, toast }) {
     h('div', { style: { margin: '0 0 12px', padding: '10px 12px', border: '1px solid #e5484d', borderRadius: 8, background: 'rgba(229,72,77,.08)' } },
       h('div', { style: { color: '#e5484d', fontWeight: 700, fontSize: 13 } }, '⚠️ 高权限风险提示'),
       h('div', { className: 'ab-small', style: { color: '#e5484d', marginTop: 4, lineHeight: 1.6 } },
-        '本模块可模拟键鼠、关闭窗口、读写剪贴板、截取全屏——等同于把这台电脑交给 AI 远程控制：她能代你点击任何界面（包括聊天窗口和支付页面）、能读到剪贴板里的密码与验证码、能截走屏幕上的隐私内容。'
-        + '缓解措施：总开关默认关、键鼠模拟单独开关、操作白名单、危险操作确认队列、试运行模式、每分钟限速，且工具只在主人会话放行。'
+        '本模块可模拟键鼠、关闭窗口、读写剪贴板、截取全屏，还能让机器人用自己的 QQ 客户端原生共享屏幕或邀请主人远程协助——等同于把这台电脑交给 AI/主人远程控制：她能代你点击任何界面（包括聊天窗口和支付页面）、能读到剪贴板里的密码与验证码、能截走屏幕上的隐私内容。'
+        + '缓解措施：总开关默认关、键鼠模拟单独开关、操作白名单、危险操作确认队列、试运行模式、每分钟限速，且工具只在主人会话放行；QQ 共享/协助也只在主人私聊发起。'
         + '请只在本人可信设备上开启；不用时把总开关关上，并留意下面的「待确认」列表，防止误批准。')),
+
+    // ===== ①½ QQ 原生屏幕共享（机器人客户端）=====
+    h(ui.Card, {
+      title: 'QQ 屏幕共享（机器人客户端）',
+      desc: '机器人用自己的 QQ 客户端，在聊天工具栏点「屏幕共享」→ 在「选择你想共享的窗口」里选「桌面」→「确定」。主人在 QQ 里看到的是 QQ 原生共享，不是截图发帧。'
+        + ' 发起前会先把当前屏幕截图发到主人私聊，主人回复「确认」后才真正点按钮；要发给机器人好友列表里的某个人，在 QQ 私聊发 `/wops share <QQ号或备注>`。共享不会自己停，可设自动停止分钟数。',
+    },
+    stRow('机器人 QQ', `${d.qqBotQQ || '（用插件配置 botQQ）'}${d.qqBotName ? ' · ' + d.qqBotName : ''}`),
+    stRow('主人 QQ', `${d.qqOwnerQQ || '（用插件配置 ownerQQ）'}${d.qqOwnerName ? ' · ' + d.qqOwnerName : ''}`),
+    sh && sh.pending
+      ? h('div', null,
+        stRow('状态', '等待主人确认（截图已发）'),
+        stRow('目标', `${sh.pending.target?.name || ''}（${sh.pending.target?.qq || ''}）`),
+        stRow('确认码', sh.pending.id || ''))
+      : sh && sh.active
+      ? h('div', null,
+        stRow('状态', 'QQ 原生共享中'),
+        stRow('开始时间', new Date(sh.startedAt).toLocaleTimeString()),
+        sh.remainingMs == null ? stRow('自动停止', '未设（0）') : stRow('自动停止', `约 ${Math.max(0, Math.ceil(sh.remainingMs / 60000))} 分钟后`),
+        sh.lastMessage ? stRow('最近结果', sh.lastMessage) : null)
+      : h('div', { className: 'ab-small ab-muted', style: { marginBottom: 8 } }, '现在没有在共享屏幕。' + (sh && sh.lastMessage ? ' 上次：' + sh.lastMessage : '')),
+    h(ui.Row, { label: '机器人 QQ 号', hint: '留空用插件配置里的 botQQ；窗口按这个号自动识别' },
+      h('input', { className: 'ab-input', style: { width: 180 }, value: d.qqBotQQ || '', placeholder: '机器人 QQ 号', onChange: (e) => upd({ qqBotQQ: e.target.value }) })),
+    h(ui.Row, { label: '主人 QQ 号', hint: '留空用插件配置里的 ownerQQ；用来核对主人私聊' },
+      h('input', { className: 'ab-input', style: { width: 180 }, value: d.qqOwnerQQ || '', placeholder: '主人 QQ 号', onChange: (e) => upd({ qqOwnerQQ: e.target.value }) })),
+    h(ui.Row, { label: '昵称兜底', hint: 'OneBot 没连上时手填：机器人昵称 / 主人昵称；平时留空即可，模块会按 QQ 号自动查' },
+      h('span', { className: 'ab-flex', style: { gap: 6 } },
+        h('input', { className: 'ab-input', style: { width: 140 }, value: d.qqBotName || '', placeholder: '机器人昵称', onChange: (e) => upd({ qqBotName: e.target.value }) }),
+        h('input', { className: 'ab-input', style: { width: 140 }, value: d.qqOwnerName || '', placeholder: '主人昵称', onChange: (e) => upd({ qqOwnerName: e.target.value }) }))),
+    h(ui.Row, { label: '自动停止（分钟）', hint: '原生 QQ 共享不会自己停：到点自动点「停止共享」。0 = 不自动，默认 30' },
+      h('input', { className: 'ab-input', style: { width: 100 }, type: 'number', min: 0, max: 240, value: d.shareAutoStopMinutes, onChange: (e) => upd({ shareAutoStopMinutes: e.target.value }) })),
+    swRow('发起前截图确认', 'qqConfirmBeforeStart', '默认开：发起屏幕共享/远程协助前，先把当前屏幕截图发到主人私聊；主人在 QQ 里回复「确认」后才真正点 QQ 按钮。关掉 = 直接发起，不截确认图。'),
+    h('div', { className: 'ab-flex', style: { marginTop: 10 } },
+      btn('开始共享', () => actShare('start'), 'share:start', true),
+      btn('停止共享', () => actShare('stop'), 'share:stop'),
+      btn('刷新状态', loadStatus, 'status'))),
+
+    // ===== ①¾ QQ 原生「邀请对方远程协助」=====
+    h(ui.Card, {
+      title: '远程协助（QQ 原生邀请）',
+      desc: '机器人用自己的 QQ 客户端，点「远程协助」右侧箭头 → 菜单「邀请对方远程协助」；对方会在 QQ 里收到原生邀请，接受后直接看屏并操作鼠标键盘。'
+        + ' 发起前会先把当前屏幕截图发到主人私聊，主人回复「确认」后才真正发邀请；也可发 `/wops assist <QQ号或备注>` 指定机器人好友。不需要链接、端口或网页；但会把控制权交出去，必须先打开主卡的「允许键鼠模拟」。',
+    },
+    ras && ras.pending
+      ? h('div', null,
+        stRow('状态', '等待主人确认（截图已发）'),
+        stRow('目标', `${ras.pending.target?.name || ''}（${ras.pending.target?.qq || ''}）`),
+        stRow('确认码', ras.pending.id || ''))
+      : ras && ras.active
+      ? h('div', null,
+        stRow('状态', '邀请已发出，等对方在 QQ 里接受'),
+        stRow('发出时间', new Date(ras.startedAt).toLocaleTimeString()),
+        ras.lastMessage ? stRow('最近结果', ras.lastMessage) : null)
+      : h('div', { className: 'ab-small ab-muted', style: { marginTop: 8 } }, '现在没有发出中的远程协助邀请。' + (ras && ras.lastMessage ? ' 上次：' + ras.lastMessage : '')),
+    h(ui.Row, { label: '窗口句柄（高级）', hint: '0 = 按机器人 QQ 号自动找窗口；只有自动识别失败时才手填（用 /wops qq 看句柄）' },
+      h('input', { className: 'ab-input', style: { width: 140 }, type: 'number', min: 0, value: d.qqWindowHwnd, onChange: (e) => upd({ qqWindowHwnd: e.target.value }) })),
+    h('div', { className: 'ab-flex', style: { marginTop: 10 } },
+      btn('发出邀请', () => actAssist('start'), 'assist:start', true),
+      btn('取消邀请', () => actAssist('stop'), 'assist:stop'),
+      btn('刷新状态', loadStatus, 'status')),
+    h('div', { className: 'ab-small', style: { marginTop: 10, color: '#e5484d', lineHeight: 1.7 } },
+      '⚠️ 远程协助等于把这台电脑的键鼠交给对方：只发给主人在 QQ 里点名、且确认在机器人好友列表里的好友；对方接受后请盯着操作，不用时立刻点「取消邀请」或在 QQ 里断开。'
+      + ' 需要主卡「允许键鼠模拟」也开着——没开时邀请会被安全闸门拦下。')),
 
     // ===== ①⅜ 元素定位（UIA）：坐标点击 vs 读无障碍树按选择器操作，默认优先后者 =====
     // 放在高权限风险提示之后、白名单之前：先让主人知道「动」有风险，再告诉他「动」有两种动法。
