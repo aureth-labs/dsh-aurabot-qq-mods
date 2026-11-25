@@ -1,0 +1,8 @@
+{
+  "id": "mijia", "name": "逛米家（米家智控）", "version": "1.1.4",
+  "description": "米家设备列表与开/关控制：扫码登录免账号密码，私聊说「开客厅灯」或用 /米家 命令，也能让她自己调工具",
+  "category": "platform", "tags": ["米家", "智能家居", "小米"],
+  "author": "RookieApe-tao", "license": "MIT", "api": 1,
+  "minPluginVersion": "1.2.0", "requires": [],
+  "capabilities": ["network", "filesystem", "plugin-internals"]
+}

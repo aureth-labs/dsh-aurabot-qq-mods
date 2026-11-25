@@ -112,31 +112,37 @@ test('search 只对没缓存的榜限量真拉，命中按标题过滤', async (
 
 // ---------- browse ----------
 
-function fakeApi(cfg, dataDir) {
+function fakeApi(cfg, dataDir, extra = {}) {
   return {
     dataDir: (...p) => join(dataDir, ...p),
     log: { info() {}, warn() {}, error() {} },
     settings: () => ({ ...cfg }),
+    ...extra,
   }
 }
 
 function fakeBrowse(cfg, overrides = {}) {
   const dir = tmpFetchDir()
-  const sent = [], remembered = [], thinks = []
+  const sent = [], remembered = [], thinks = [], submitted = []
   const fetcher = createFetcher({
     cacheDir: join(dir, 'cache'), gapMs: 0,
     fetchImpl: async () => sixtyOk(overrides.items || ['热点甲', '热点乙', '热点丙']),
   })
+  // proactive 假面：不传就完全没有（模拟旧主仓）；传了按用例决定返回什么
+  const proactive = overrides.proactive
+    ? { submit: async (args) => { submitted.push(args); return overrides.proactive(args) } }
+    : undefined
   const browse = createBrowse({
-    api: fakeApi(cfg, dir),
+    api: fakeApi(cfg, dir, proactive ? { proactive } : {}),
     fetcher,
     memory: { add: (x) => remembered.push(x), recall: () => [] },
     ownerQQ: '10001',
     think: async (prompt) => { thinks.push(prompt); return overrides.thinkOut },
-    sendText: async (chatId, text) => sent.push({ chatId, text }),
+    // 默认当作网关确认发出（旧 sendText 成功返回结果对象）；用例可改成返回 null 模拟被拦
+    sendText: async (chatId, text) => { sent.push({ chatId, text }); return 'sendResult' in overrides ? overrides.sendResult : { message_id: 1 } },
     now: () => overrides.now || new Date('2026-11-02T09:31:00'),
   })
-  return { browse, sent, remembered, thinks, dir }
+  return { browse, sent, remembered, thinks, submitted, dir }
 }
 
 const GOOD_THINK = '[{"node":"微博热搜","feeling":"有点意思","share":"机器人话题很火","remember":"AI 又上热搜了"}]'
@@ -170,6 +176,83 @@ test('tour：同一条感想不重复分享（seen 去重）', async () => {
   const r2 = await browse.tour()
   assert.equal(r2.shared, 0)
   assert.equal(sent.length, 1)
+})
+
+// ---------- 出站治理：发送成功才记 seen（设计稿 §1.4 迁移项）----------
+
+test('tour：网关拦下（sendText 返回 null）时不算分享、也不记 seen，下一场还能再发', async () => {
+  const blocked = fakeBrowse(
+    { enabled: true, nodes: ['微博热搜'], nodesPerTour: 1, itemsPerNode: 15, shareLimit: 2 },
+    { thinkOut: GOOD_THINK, sendResult: null }, // 被拦 / 失败：老调用口返回 null
+  )
+  const r1 = await blocked.browse.tour()
+  assert.equal(r1.ok, true)
+  assert.equal(r1.shared, 0, '没发出去就不能算分享成功')
+  assert.equal(blocked.browse.status().seenCount, 0, '被拦的条目绝不能记进 seen')
+  assert.equal(blocked.browse.history()[0].shared.length, 0, '巡游历史里也不能写成分享成功')
+  // 下一轮同一句话照样会再试一次（因为没记账，不是被去重挡掉）
+  const r2 = await blocked.browse.tour()
+  assert.equal(blocked.sent.length, 2, '两次都真的尝试发了')
+  assert.equal(r2.shared, 0)
+  rmSync(blocked.dir, { recursive: true, force: true })
+})
+
+test('tour：sendText 抛错也按「没发出去」处理，不记 seen', async () => {
+  const dir = tmpFetchDir()
+  const browse = createBrowse({
+    api: fakeApi({ enabled: true, nodes: ['微博热搜'], nodesPerTour: 1, itemsPerNode: 15, shareLimit: 2 }, dir),
+    fetcher: createFetcher({ cacheDir: join(dir, 'cache'), gapMs: 0, fetchImpl: async () => sixtyOk(['热点甲']) }),
+    memory: { add() {}, recall: () => [] },
+    ownerQQ: '10001',
+    think: async () => GOOD_THINK,
+    sendText: async () => { throw new Error('网关炸了') },
+    now: () => new Date('2026-11-02T09:31:00'),
+  })
+  const r = await browse.tour()
+  assert.equal(r.shared, 0)
+  assert.equal(browse.status().seenCount, 0)
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('tour：有 api.proactive 时优先走 proactive.submit，不再直调 sendText', async () => {
+  const got = fakeBrowse(
+    { enabled: true, nodes: ['微博热搜'], nodesPerTour: 1, itemsPerNode: 15, shareLimit: 2 },
+    { thinkOut: GOOD_THINK, proactive: () => ({ deliveryId: 'dlv-1', state: 'sent' }) },
+  )
+  const r = await got.browse.tour()
+  assert.equal(r.shared, 1)
+  assert.equal(got.submitted.length, 1, '走的是治理面')
+  assert.equal(got.submitted[0].channel, 'qq')
+  assert.equal(got.submitted[0].to, 'private:10001')
+  assert.ok(got.submitted[0].itemId.startsWith('tophub:'), 'itemId 用巡游条目的稳定指纹')
+  assert.ok(got.submitted[0].text.includes('机器人话题很火'))
+  assert.equal(got.sent.length, 0, '走了 proactive 就不再重复直发')
+  rmSync(got.dir, { recursive: true, force: true })
+})
+
+test('tour：proactive 回 unsupported / 没投递单号时退回老 sendText 路径', async () => {
+  const fallback = fakeBrowse(
+    { enabled: true, nodes: ['微博热搜'], nodesPerTour: 1, itemsPerNode: 15, shareLimit: 2 },
+    { thinkOut: GOOD_THINK, proactive: () => ({ deliveryId: null, state: 'unsupported' }) },
+  )
+  const r = await fallback.browse.tour()
+  assert.equal(r.shared, 1)
+  assert.equal(fallback.submitted.length, 1, '先问过治理面')
+  assert.equal(fallback.sent.length, 1, '档位不支持就退回旧通道，功能不能缺')
+  assert.equal(fallback.browse.status().seenCount, 1)
+  rmSync(fallback.dir, { recursive: true, force: true })
+})
+
+test('tour：proactive 提交抛错时降级到 sendText，巡游不中断', async () => {
+  const broken = fakeBrowse(
+    { enabled: true, nodes: ['微博热搜'], nodesPerTour: 1, itemsPerNode: 15, shareLimit: 2 },
+    { thinkOut: GOOD_THINK, proactive: () => { throw new Error('策略源炸了') } },
+  )
+  const r = await broken.browse.tour()
+  assert.equal(r.ok, true)
+  assert.equal(r.shared, 1)
+  assert.equal(broken.sent.length, 1)
+  rmSync(broken.dir, { recursive: true, force: true })
 })
 
 test('tour：shareLimit=0 只看不分享；模型输出不是 JSON 也写记忆落记录', async () => {

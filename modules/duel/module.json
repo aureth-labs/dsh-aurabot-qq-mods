@@ -1,0 +1,14 @@
+{
+  "id": "duel",
+  "name": "宝可梦对决",
+  "version": "1.0.0",
+  "description": "群里喊一声，两条鱼当着两个主人的面打一场回合制嘴炮：口令、反应、属性克制全在戏里，胜负只看场面",
+  "category": "social",
+  "tags": ["对决", "群聊", "回合制", "角色扮演"],
+  "author": "PAKA-mowen",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["plugin-config", "plugin-internals"]
+}

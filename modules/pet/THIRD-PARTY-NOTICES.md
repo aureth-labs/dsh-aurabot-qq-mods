@@ -46,3 +46,20 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## dsh-pet-home「大肥鱼的家」—— 小屋（代码 MIT；素材 CC BY-NC-SA 4.0 禁商用）
+
+- 仓库：<https://github.com/zizic04/dsh-pet-home>（`home` 分支，dsh-pet 的二创）
+- 原版（必附）：<https://github.com/PC2005-cloud/dsh-pet>
+
+**小屋功能（`pet-client/house.html`、`pet-client/house.js` 与服务端 `/house/*` 路由）的移植 / 参考范围：**
+
+| 位置 | 来源 | 说明 |
+|---|---|---|
+| `pet-client/house.html` / `house.js` | `runtime/electron-helper/room.html` / `room.js` | 复式小屋场景渲染：世界坐标 1672×941、路网 BFS 走路、上下楼镜头切换、姿势帧轮播/呼吸/补丁、日夜双层、状态机与拖放出屋（去多宠/换装/音效/小游戏，单宠化） |
+| `pet-client/main.js` 小屋段 | `runtime/electron-helper/main/room.js` | 第二窗生命周期与「入屋/出屋」交接（隐藏桌面窗、光标处出屋） |
+| 运行素材（数据目录 `house/`） | `dsh-pet/assets/pic/house/` | 房间日夜底图、姿势帧、栏杆/楼梯前景、manifest.json 坐标清单。**素材不进本仓库**，随数据目录分发，仅限本机自用 |
+
+**许可约束**：代码 MIT；素材（房间图 / 姿势帧 / 人物形象衍生图）为「大肥鱼」CC BY-NC-SA 4.0
+衍生，**禁止任何形式商用**；公开发布须附原仓库与本仓库链接并保持相同方式共享。
+本机当前为自用部署，不构成公开发布。

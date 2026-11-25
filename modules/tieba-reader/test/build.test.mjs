@@ -16,7 +16,7 @@ test('distribution imports from a fresh directory without node_modules or browse
     assert.equal(pkg.scripts,undefined);
     const result=spawnSync(process.execPath,['--input-type=module','-e',`const m=await import(${JSON.stringify(pathToFileURL(join(dir,'index.mjs')).href)}); console.log(m.default.version);`],{cwd:dir,encoding:'utf8',windowsHide:true});
     assert.equal(result.status,0,result.stderr);
-    assert.equal(result.stdout.trim(),'1.5.0');
+    assert.equal(result.stdout.trim(),pkg.version);
     assert.ok(readFileSync(join(dir,'lib','session.cjs'),'utf8').includes('configureCookies'));
     assert.ok(existsSync(join(dir,'lib','browser.cjs')));
     assert.ok(existsSync(join(dir,'lib','login.cjs')));

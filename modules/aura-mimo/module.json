@@ -1,0 +1,25 @@
+{
+  "id": "aura-mimo",
+  "name": "aura-mimo",
+  "version": "1.1.2",
+  "description": "用一段参考音频零训练克隆音色，调小米 MiMo TTS 合成语音。可以单独用，也可以改名为 voice 接管内置语音。",
+  "category": "creative",
+  "tags": [
+    "语音",
+    "TTS",
+    "音色克隆",
+    "MiMo",
+    "接管语音"
+  ],
+  "author": "zcx1021",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "network",
+    "filesystem",
+    "plugin-config",
+    "plugin-internals"
+  ]
+}

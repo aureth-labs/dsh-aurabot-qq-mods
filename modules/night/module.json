@@ -1,0 +1,24 @@
+{
+  "id": "night",
+  "name": "长夜如梦",
+  "version": "1.1.0",
+  "description": "作息、睡眠阶段、REM 做梦、概率唤醒：她会困、会睡、会做梦，睡着时叫不一定醒。1.1.0 修了收线判定的几处误判（白天收到「晚安」会消失一整天、主语不是她也会睡），睡着期间压下的消息改为跨重启保留，睡前道别真正生效；可以让她「待会再睡」并自己记得，困到一定程度会主动说一声。",
+  "category": "social",
+  "tags": [
+    "作息",
+    "睡眠",
+    "做梦",
+    "长夜",
+    "精力"
+  ],
+  "author": "zcx1021",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "filesystem",
+    "plugin-config",
+    "plugin-internals"
+  ]
+}

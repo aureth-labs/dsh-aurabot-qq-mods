@@ -29,12 +29,12 @@ function parseLlmJson(text) {
 
 /**
  * @param {object} o
- * @param {object} o.api        模块 api（用 dataDir/every/log/settings）
+ * @param {object} o.api        模块 api（用 dataDir/every/log/settings；有 proactive 时优先走它发分享）
  * @param {object} o.fetcher    lib/fetch.mjs 的 createFetcher 产物
  * @param {object} o.memory     api.lazy('memory')（可缺）
  * @param {string} o.ownerQQ    主人 QQ
  * @param {Function} o.think    api.think（runSystemTurn 包装，这轮不发聊天）
- * @param {Function} o.sendText api.sendText
+ * @param {Function} o.sendText api.sendText（兜底通道；被拦/失败返回 null）
  * @param {object} [o.now]      注入当前时间（测试用），缺省 () => new Date()
  */
 export function createBrowse({ api, fetcher, memory, ownerQQ, think, sendText, now = () => new Date() }) {
@@ -48,6 +48,41 @@ export function createBrowse({ api, fetcher, memory, ownerQQ, think, sendText, n
   function save() { saveJson(statePath, state); saveJson(seenPath, seen.slice(-2000)) }
 
   const cfg = () => api.settings?.() || {}
+
+  /**
+   * 把一条分享发到主人私聊。宿主提供 api.proactive（出站治理面）且档位开到 broker 时，
+   * 走 proactive.submit 把这条提交进统一账本；旧主仓没有这个面、档位不支持（state='unsupported'）、
+   * 或压根没给投递单号时，退回原来的 sendText 直发。
+   * 返回「确认发出」的真假：被拦（sendText 被拦/失败返回 null）或抛错都是假——
+   * 调用方只能据此决定要不要记 seen（设计稿 §1.4：不许无视返回值无条件记账）。
+   */
+  async function deliverShare({ text, itemId }) {
+    const to = `private:${ownerQQ}`
+    const proactive = api.proactive
+    // 试运行只记日志：别把「本来要发」的东西真提交进宿主账本（账本可能会真投递）
+    const dryRun = Boolean(api.config?.()?.dryRun)
+    if (!dryRun && proactive?.submit) {
+      try {
+        const r = await proactive.submit({ itemId, to, channel: 'qq', text })
+        // 只有真的拿到投递单号才算进了账本；老宿主 / 非 broker 档位会明确回 unsupported + 空单号
+        if (r && r.deliveryId !== null && r.deliveryId !== undefined && r.state !== 'unsupported') {
+          // sent/sending/pending 算已受理（后续由账本负责投递）；被丢弃、失败、过期、状态不确定的都不算发出
+          return ['sent', 'sending', 'pending'].includes(String(r.state || ''))
+        }
+      } catch (e) {
+        // proactive 自己出错不能连累巡游：退回老通道，下次再看
+        api.log?.warn?.(`热榜分享经 api.proactive 提交失败，回退直发：${e?.message || e}`)
+      }
+    }
+    try {
+      const sent = await sendText(to, text)
+      return Boolean(sent)   // 铁律：旧调用口被拦/失败返回 null，不能当真
+    } catch (e) {
+      api.log?.warn?.(`热榜分享直发失败：${e?.message || e}`)
+      return false
+    }
+  }
+
   /** 「09:30,21:00」→ ['09:30','21:00']，脏值全部丢掉 */
   function slots() {
     return String(cfg().tourTimes || '')
@@ -149,12 +184,21 @@ export function createBrowse({ api, fetcher, memory, ownerQQ, think, sendText, n
           remembered++
         }
         const share = String(v.share || '').trim()
-        if (share && shared < limit && !seenSet.has(fp(v.feeling + share))) {
+        if (share && shared < limit) {
+          // 同一条（榜名+感想+要说的话）的稳定指纹既做去重键，也做账本里的 itemId
+          const id = fp(v.feeling + share)
+          if (seenSet.has(id)) continue
           const src = boards.find((b) => b.node === v.node)
           const head = src?.items?.slice(0, 3).map((x) => x.title).join('、') || ''
-          await sendText(`private:${ownerQQ}`, `${share}${head ? `\n（${v.node}：${head}）` : ''}`)
-          seenSet.add(fp(v.feeling + share))
-          seen.push(fp(v.feeling + share))
+          // 必须先确认真发出去了再记 seen：被拦/失败的不记账，下一场还有机会再分享
+          // （设计稿 §1.4 点名的迁移项——旧代码无视 sendText 返回值无条件记 seen）
+          const ok = await deliverShare({
+            itemId: `tophub:${id}`,
+            text: `${share}${head ? `\n（${v.node}：${head}）` : ''}`,
+          })
+          if (!ok) continue
+          seenSet.add(id)
+          seen.push(id)
           shared++
           sharedList.push({ node: v.node, text: share })
         }

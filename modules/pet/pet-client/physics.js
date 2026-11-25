@@ -70,11 +70,38 @@
     var offX = o.offsetX || 0
     var offY = o.offsetY || 0
     var allow = o.sideAllow || 0
+    // 2026-11-07：新增 areaX/areaY（工作区左上角的屏幕绝对 DIP 坐标，缺省 0）。
+    // 传了以后返回的边界就是**绝对坐标**（主进程甩抛每帧按当前窗口中心重算工作区时用），
+    // 缺省 0 与旧口径（工作区相对坐标）完全一致，老测试不受影响。
+    var areaX = o.areaX || 0
+    var areaY = o.areaY || 0
     return {
-      minX: -offX - allow,
-      minY: -offY,
-      maxX: o.W - offX - bodyW + allow,
-      maxY: o.H - offY - bodyH,
+      minX: areaX - offX - allow,
+      minY: areaY - offY,
+      maxX: areaX + o.W - offX - bodyW + allow,
+      maxY: areaY + o.H - offY - bodyH,
+    }
+  }
+  /** 把「身体矩形」夹回屏幕并集（主进程拖拽钳制 / 甩抛收尾 / 30s 逃生网共用，2026-11-07）。
+   *  rect: {x,y,width,height}（可见身体矩形，绝对 DIP）；b: {x,y,w,h}（虚拟桌面 bounds 并集）。
+   *  返回夹回后的 {x,y,width,height}（整数）：身体完整落在并集内；身体比屏幕还大时贴左/上边缘；
+   *  非法输入（NaN/负尺寸）一律收敛成合法值，绝不产生 NaN。 */
+  function clampBodyRect(rect, b) {
+    var w = Math.max(1, Math.round(Number(rect && rect.width) || 1))
+    var h = Math.max(1, Math.round(Number(rect && rect.height) || 1))
+    var bx = Math.round(Number(b && b.x) || 0)
+    var by = Math.round(Number(b && b.y) || 0)
+    var bw = Math.max(w, Math.round(Number(b && b.w) || w))
+    var bh = Math.max(h, Math.round(Number(b && b.h) || h))
+    var x = Number(rect && rect.x)
+    var y = Number(rect && rect.y)
+    if (!Number.isFinite(x)) x = bx
+    if (!Number.isFinite(y)) y = by
+    return {
+      x: Math.round(Math.min(Math.max(x, bx), bx + bw - w)),
+      y: Math.round(Math.min(Math.max(y, by), by + bh - h)),
+      width: w,
+      height: h,
     }
   }
   /** 抛体单步积分与边界反弹。返回 {x,y,vx,vy,bounced,atRest}。 */
@@ -193,6 +220,7 @@
     springStep: springStep,
     softClampSpeed: softClampSpeed,
     throwBounds: throwBounds,
+    clampBodyRect: clampBodyRect,
     throwStep: throwStep,
     throwSubsteps: throwSubsteps,
     trimTrail: trimTrail,

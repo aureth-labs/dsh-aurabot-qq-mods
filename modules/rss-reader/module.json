@@ -1,0 +1,23 @@
+{
+  "id": "rss-reader",
+  "name": "自主上网",
+  "version": "1.0.0",
+  "description": "定时读 RSS 订阅源，把有意思的条目交给主动发言决策（她自己决定要不要跟主人聊）",
+  "category": "platform",
+  "tags": [
+    "RSS",
+    "订阅",
+    "上网",
+    "阅读"
+  ],
+  "author": "RookieApe-tao",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "network",
+    "filesystem"
+  ],
+  "panel": "panel.js"
+}
