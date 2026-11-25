@@ -1,0 +1,23 @@
+{
+  "id": "session-switch",
+  "name": "会话切换",
+  "version": "1.3.1",
+  "description": "让她把一件事带到另一个聊天：那边的她按自己的记忆和方式接住，不是把原话复制过去。认不出称呼是谁时，会把会话清单发到聊天里让对方挑，挑定才记住对应；主人和别人各有开关和可带话的范围，别人的带话默认关。",
+  "category": "social",
+  "tags": [
+    "跨会话",
+    "转达",
+    "穿透",
+    "会话清单"
+  ],
+  "author": "Cinderlia",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "filesystem",
+    "plugin-config",
+    "plugin-internals"
+  ]
+}

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { fixture, json, ok, defer } from './helpers.mjs'
+import { fixture, json, ok, defer, fakeTokenBrowser } from './helpers.mjs'
 
 function qrResponse(handler) {
   return async (url, options) => {
@@ -132,4 +132,45 @@ test('冷却中扫码不自动绕过；429 状态在后续操作中持续生效'
   assert.equal((await f.hb.qrStart()).ok, false)
   assert.equal(f.calls.length, count)
   assert.equal(f.hb.risk().reason, 'ratelimit')
+})
+
+test('扫码成功后补取 x_xhh_tokenid 并写进 Cookie（它是网页前端种的，不在接口里）', async (t) => {
+  // 背景：扫码三步（get_qrcode_url / qr_state / restore_login）都不下发 x_xhh_tokenid，
+  // 实测要用 pkey 打开网页，前端 JS 才会把它种进浏览器。这条守住「必须补取」这件事。
+  const f = fixture({
+    tokenBrowser: fakeTokenBrowser({ token: 'tok-abc-123' }),
+    fetcher: qrResponse(async (path) => {
+      if (path === '/account/qr_state') return ok({ error: 'ok', pkey: 'new' })
+      if (path === '/account/restore_login') return ok({ profile: { heybox_id: '42', username: '盒友' } })
+      throw new Error(path)
+    }),
+  })
+  t.after(() => f.close())
+  await f.hb.qrStart()
+  const r = await f.hb.qrPoll()
+  assert.equal(r.ok, true)
+  assert.equal(r.hasToken, true, '结果里要标明有发帖令牌')
+  assert.match(f.cfg.heybox.cookie, /pkey=new/, 'pkey 要留下')
+  assert.match(f.cfg.heybox.cookie, /x_xhh_tokenid=tok-abc-123/, 'tokenid 要补进 Cookie')
+  assert.match(r.message, /含发帖令牌/)
+})
+
+test('补取不到 tokenid 时照样登录成功，但如实提示缺令牌', async (t) => {
+  // 取 token 失败不能把整个扫码判死：pkey 是有效的，只是写操作会受限。
+  const f = fixture({
+    tokenBrowser: fakeTokenBrowser({ token: null }),   // 前端一直没种
+    fetcher: qrResponse(async (path) => {
+      if (path === '/account/qr_state') return ok({ error: 'ok', pkey: 'new' })
+      if (path === '/account/restore_login') return ok({ profile: { heybox_id: '42' } })
+      throw new Error(path)
+    }),
+  })
+  t.after(() => f.close())
+  await f.hb.qrStart()
+  const r = await f.hb.qrPoll()
+  assert.equal(r.ok, true, '取不到 token 也要算登录成功')
+  assert.equal(r.hasToken, false)
+  assert.match(f.cfg.heybox.cookie, /pkey=new/)
+  assert.doesNotMatch(f.cfg.heybox.cookie, /x_xhh_tokenid=/)
+  assert.match(r.message, /缺 x_xhh_tokenid/)
 })

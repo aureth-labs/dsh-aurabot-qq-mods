@@ -1,0 +1,23 @@
+{
+  "id": "github-assistant",
+  "name": "GitHub 助手",
+  "version": "1.0.0",
+  "description": "私聊盯 CI 失败、待审 PR 和被 @；群聊 #项目 看仓库状态，显示细项可调",
+  "category": "tool",
+  "tags": [
+    "GitHub",
+    "CI",
+    "PR",
+    "仓库状态"
+  ],
+  "author": "HDB-Studio",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "network",
+    "filesystem",
+    "plugin-config"
+  ]
+}
