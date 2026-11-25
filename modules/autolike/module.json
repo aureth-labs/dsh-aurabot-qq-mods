@@ -1,0 +1,20 @@
+{
+  "id": "autolike",
+  "name": "自动回赞",
+  "version": "1.0.0",
+  "description": "有人给大肥鱼的资料点赞时，悄悄给对方回一个赞；说「赞我」也能点，同一个号一天只点一次。",
+  "category": "social",
+  "tags": [
+    "点赞",
+    "回赞",
+    "自动"
+  ],
+  "author": "DFH-clouds",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "plugin-config"
+  ]
+}

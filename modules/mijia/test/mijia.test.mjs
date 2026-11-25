@@ -664,7 +664,10 @@ describe('设备列表与 miot 指令（新网关）', () => {
     await cloud.setOnOff(dev, true)
     const t0 = Date.now()
     await cloud.setOnOff(dev, false)
-    assert.ok(Date.now() - t0 >= 1200, '第二次指令应被节流到至少 1.2 秒后')
+    // setTimeout 只有 1~2ms 的计时精度，实测间隔会落在 1198~1199ms，用 1200 卡死
+    // 会在 CI 上随机红。留 20ms 容差，节流本身还是 CMD_GAP_MS=1200。
+    const gap = Date.now() - t0
+    assert.ok(gap >= 1200 - 20, '第二次指令应被节流到至少 1.2 秒后，实际 ' + gap + 'ms')
   })
 })
 

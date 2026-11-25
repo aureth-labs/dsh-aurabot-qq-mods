@@ -1,0 +1,1541 @@
+import { createLogger, attachLogFile, detachLogFile } from './logger.js';
+import { TokenManager } from './token.js';
+import { QQApi } from './api.js';
+import { Gateway } from './gateway.js';
+import { Registry } from './plugin/context.js';
+import { PluginManager } from './plugin/loader.js';
+import { orderListeners, skipBecauseClaimed } from './plugin/dispatch.js';
+import { GroupStore } from './groups.js';
+import { RoleStore, LEVEL, NO_PERM, levelName, parseLevel, parseScope, scopeOf } from './roles.js';
+import { Outbound } from './outbound.js';
+import { SessionManager } from './session.js';
+import { createDefaultPipeline } from './pipeline.js';
+import { buildMessage, isMessageEvent } from './message.js';
+import { EVENTS, isKnownEvent } from './events.js';
+import { BotMetrics } from './runtime.js';
+import { claimInstance, releaseInstance } from './instance.js';
+import { botPaths, DIRS, rel } from './paths.js';
+import { StatsStore } from './storage/index.js';
+import { createReach } from './reach.js';
+import { createLedger } from './ledger.js';
+import { createGate } from './gate.js';
+import { createDeliveryLedger } from './delivery.js';
+import { sharedIdentity } from './identity.js';
+import { OneBotBridge } from './onebot/index.js';
+import { onebotAllowsCore } from './onebot/keep.js';
+import { HostBridge } from './host/index.js';
+
+/**
+ * 一个机器人的完整运行时。
+ *
+ * 多机器人 = 多个 BotRuntime 实例并存。每个实例独占：
+ *   凭证 / HTTP API / WebSocket / 命令表 / 权限 / 群档案 / 额度账本 / 会话 / 插件管理器
+ *
+ * 共享的只有：插件**代码**目录、全局日志、面板服务。
+ *
+ * 为什么必须这么隔离：openid 是每个机器人独立的，共享权限或存档等于全部对不上。
+ */
+export class BotRuntime {
+  /**
+   * @param {object} p
+   * @param {object} p.cfg       该机器人的配置
+   * @param {object} p.globalCfg 全局配置
+   * @param {object} p.guards    前置拦截用的配置（从 cfg 派生）
+   * @param {boolean} p.mock     是否 mock 模式
+   * @param {object} [p.webhook]  全局 WebhookServer，webhook 模式下注册到这里
+   * @param {(runtime:BotRuntime)=>void} [p.registerCore] 注册内核命令的回调
+   * @param {()=>object} [p.makeMockApi] mock 模式下造 API 的函数
+   */
+  constructor({ cfg, globalCfg, mock = false, webhook = null, registerCore = null, makeMockApi = null, onMessage = null }) {
+    this.cfg = cfg;
+    this.globalCfg = globalCfg;
+    this.mock = mock;
+    this.webhook = webhook;
+    this.id = cfg.id;
+    this.name = cfg.name || cfg.id;
+    /** 该机器人独占的运行时指标（连接态 + 计数），多机器人互不干扰 */
+    this.metrics = new BotMetrics(this.id);
+    this.paths = botPaths(this.id);
+    this.log = createLogger(`bot:${this.id}`);
+
+    this.registerCore = registerCore;
+    this.makeMockApi = makeMockApi;
+    /**
+     * 收到消息时的外部回调（面板 SSE、AI 宿主订阅）。
+     * 传的是**规范化后的 Message**，不是原始事件体——原始体里有 auth_token。
+     */
+    this.onMessage = onMessage;
+
+    this.claim = { code: '' };
+    this.tokens = null;
+    this.api = null;
+    this.gateway = null;
+    this.registry = new Registry();
+    this.groups = new GroupStore(this.paths.groups);
+    /**
+     * 身份对照表（QQ号 / 群号 ↔ openid）。
+     *
+     * **进程级单例、不按机器人拆**——它的全部意义就是横跨机器人。
+     * 在这里建而不是在 `init()` 里：`buildMessage()` 要用它，
+     * 不能依赖「init 已经跑过」。真正的读盘在 `init()` 里 `await load()`。
+     */
+    this.identity = sharedIdentity();
+
+    /**
+     * 最近说过话的人：openid -> { openid, name, chatId, scope, at }
+     *
+     * **只放内存，不落盘。** 用途只有一个：面板「权限」页让人点一下就能加权限，
+     * 不用去日志里翻 openid——openid 是每个机器人独立的长串，用户根本记不住。
+     * 重启后清空，重新说句话就又有了。
+     */
+    this.recentPeople = new Map();
+    /**
+     * 群名 / 群档案缓存：groupOpenid -> { name, memberNum, fingerMemo, …, at, ttl }
+     *
+     * **官方事件里没有群名**（实测 GROUP_AT_MESSAGE_CREATE 的字段只有
+     * author/content/group_id/group_openid/id/message_scene/message_type/timestamp），
+     * 而面板上只显示 `577C4A90…` 这种截断的 openid，用户根本认不出是哪个群。
+     *
+     * 所以在入群 / 首次收到消息时异步拉一次 `getGroupInfo` 补上，
+     * 之后面板直接读缓存。
+     *
+     * 现在会往群档案里写一份（带 `infoAt`）。以前是「不落盘」，理由是
+     * 「群名会变，存下来反而错」——但那样重启后第一屏永远是一串 openid。
+     * 改成落盘 + 时间戳后，TTL 仍按 `at` 算：过期就重新拉，存的只是
+     * 上一次问到的结果，不是权威值。
+     */
+    this.groupNames = new Map();
+    /** 同群并发补名时复用同一个请求，避免一条消息打两次接口 */
+    this.groupNameInflight = new Map();
+    /**
+     * 群名接口的**全局**并发闸（`getGroupInfo` 是 30 QPM）。
+     *
+     * 原来只在 `fetchGroupNames` 里限流，那是「每次调用」的上限：
+     * 面板批量拉一次、消息链路每条群消息又拉一次，两条并发就翻倍。
+     */
+    this.groupNameActive = 0;
+    this.groupNameWaiters = [];
+    /**
+     * 群信息接口的节奏控制：`getGroupInfo` 是 **30 QPM**。
+     *
+     * 并发上限（4）只防「同一瞬间打太多」，防不住「一分钟打了 40 次」——
+     * 面板一次补 20 个群就能撞上去。所以另存一个「下一个请求最早什么时候发」，
+     * 默认 2.2 秒一个（27 次/分钟，留 10% 余量）。
+     */
+    this.groupInfoNextAt = 0;
+    this.groupInfoGapMs = 2200;
+    /**
+     * 启动预载：档案里存过群名的，直接灌进缓存。
+     *
+     * 不预载的话，重启后面板第一屏必然是一串 openid，要等群里有人说句话
+     * 才会慢慢补上。`at` 存的是上次真拉到的时间，所以过期条目第一次用到
+     * 就会按正常 TTL 重新拉，不会永远吃旧名字。
+     *
+     * 不 await：这是显示用的，挡在启动路径上没意义；失败就当时没有。
+     */
+    this.groups.list().then((list) => {
+      for (const g of list) {
+        const id = g?.groupOpenid;
+        if (!id || this.groupNames.has(id)) continue;
+        /** 一条信息都没有就别占位（有名字/人数/简介任一项就值得预载） */
+        if (!g.name && !g.memberNum && !g.fingerMemo) continue;
+        this.groupNames.set(id, {
+          name: g.name || '',
+          memberNum: Number(g.memberNum) || 0,
+          fingerMemo: g.fingerMemo || '',
+          classText: g.classText || '',
+          tags: Array.isArray(g.tags) ? g.tags : [],
+          at: Number(g.infoAt) || 0,
+          ttl: 10 * 60_000,
+        });
+      }
+    }).catch(() => {});
+    this.roles = new RoleStore(this.paths.roles);
+    /**
+     * 可达性：谁能私聊、哪个群能主动推。
+     *
+     * 官方没有查好友的接口，只能靠 6 个事件维护（FRIEND_ADD/DEL、
+     * C2C_MSG_REJECT/RECEIVE、GROUP_MSG_REJECT/RECEIVE）。
+     * 插件可以通过 `bot.reach` 直接问，不用自己监听一遍。
+     */
+    this.reach = createReach({ file: this.paths.reach });
+    /**
+     * 暂停闸：三级（全局 / 这只鸟 / 单个会话）+ 静默。
+     *
+     * 这是**唯一的刹车**。以前配错一只鸟只能关进程，那连别的鸟一起停了。
+     * 闸状态按鸟拆文件（`data/gate/<id>.json`），跨鸟只有 `global.json` 一个。
+     */
+    this.gate = createGate({
+      dir: DIRS.gate,
+      botId: this.id,
+      log: (m) => this.log.warn(m),
+    });
+    this.outbound = null;
+    this.session = null;
+    this.pipeline = null;
+    this.plugins = null;
+    /**
+     * OneBot v11 兼容层（对外协议，后端仍是官方接口）。
+     *
+     * 这里只**构造**，不启动——`start()` 里等 api / outbound / identity 都就绪
+     * 再 `onebot.start()`。缺 `ws` 依赖时它自己是 `missing-deps` 状态，
+     * 不影响机器人本体。
+     */
+    this.onebot = new OneBotBridge({
+      runtime: this,
+      cfg: cfg.onebot ?? {},
+      botId: this.id,
+      identity: this.identity,
+    });
+    /**
+     * 宿主协议 v1（roost-host/1）：框架自己的能力总线，和 OneBot 并列。
+     * 同样只构造不启动，缺 `ws` / 没 token 都只是这一层不可用。
+     */
+    this.host = new HostBridge({
+      runtime: this,
+      cfg: cfg.host ?? {},
+      botId: this.id,
+    });
+
+    this.state = 'idle'; // idle | starting | online | offline | stopped | error
+    this.lastError = '';
+    this.startedAt = 0;
+  }
+
+  get online() {
+    return this.state === 'online';
+  }
+
+  /** 该机器人的状态摘要，面板用 */
+  get status() {
+    return {
+      id: this.id,
+      name: this.name,
+      state: this.state,
+      online: this.online,
+      appId: this.cfg.appId,
+      intents: this.cfg.intents,
+      /**
+       * **当前连接实际用的** intents（构造 Gateway 时的快照）。
+       *
+       * `intents` 是配置值，`config.set` 改完就变了，但没重建 Gateway 之前
+       * 线上跑的还是旧值（`gateway.js` 的 `this.intents` 不变）。面板要显示
+       * 「当前连接 / 待生效」两栏，必须区分这两个，不能拿配置值冒充。
+       * 未连接时为 null。
+       */
+      gatewayIntents: this.gateway?.intents ?? null,
+      plugins: this.plugins ? this.plugins.list() : [],
+      uptimeMs: this.startedAt ? Date.now() - this.startedAt : 0,
+      error: this.lastError,
+      botName: this.mock ? `${this.name}（mock）` : this.metrics.botName,
+      counters: { ...this.metrics.counters },
+    };
+  }
+
+  /* ---------------- 初始化 ---------------- */
+
+  /**
+   * 建好所有组件但不连网关。
+   * @returns {Promise<void>}
+   */
+  async init() {
+    const { cfg } = this;
+
+    // 每个机器人一个日志文件
+    if (this.globalCfg.logs?.enabled !== false) {
+      await attachLogFile(`bot:${this.id}`, this.paths.log, {
+        maxBytes: this.globalCfg.logs?.maxBytes,
+      });
+    }
+
+    /**
+     * 身份表要在**插件加载和收消息之前**读好。
+     *
+     * 晚一步的话，启动后第一批消息就没有 `uin`，AI 会把老朋友当陌生人；
+     * 插件 setup 里想用 `ctx.identity` 也会查到空。
+     * 载入失败不拦启动——`load()` 内部已经把坏文件降级成空表并留了档。
+     */
+    await this.identity.load().catch((e) => this.log.warn(`身份表载入失败：${e.message}`));
+
+    if (this.mock) {
+      this.api = this.makeMockApi ? this.makeMockApi(this) : null;
+    } else {
+      this.tokens = new TokenManager(cfg);
+      this.api = new QQApi({ tokenManager: this.tokens, baseUrl: cfg.baseUrl, metrics: this.metrics });
+    }
+    this.outbound = new Outbound({
+      api: this.api,
+      cfg,
+      isOnline: () => this.mock || this.online,
+      quotaFile: this.paths.quota,
+    });
+
+    /**
+     * OneBot 兼容层在这里起（api / outbound / identity 都就绪了）。
+     *
+     * 失败**不拦启动**：缺 `ws` 依赖、端口被占、token 没填，都只是这一层不可用，
+     * 机器人本体和插件照常跑。错误挂在 `onebot.error` 上，面板能看见。
+     */
+    await this.onebot.start().catch((e) => {
+      this.log.warn(`OneBot 兼容层启动失败（不影响机器人本体）：${e.message}`);
+    });
+    /** 同理：外接协议失败不许拖垮机器人本体，错误挂在 host.error 上面板能看见 */
+    await this.host.start().catch((e) => {
+      this.log.warn(`宿主协议启动失败（不影响机器人本体）：${e.message}`);
+    });
+
+    // 群管内邀开关：api 层有自己的副本，配置变了由面板接口同步过来。
+    // mock 的 api 也实现了同名方法，一起同步，方便本地验证插件的群管逻辑
+    this.api.setGroupInvited?.(cfg.groupManage?.invited);
+    // 发图带空格：只影响真实 QQApi 的最终报文；mock api 不拼官方报文、
+    // 没实现这个 setter，?. 会直接跳过（演示模式下开关不适用）
+    this.api.setMediaPlaceholderSpace?.(cfg.media?.placeholderSpace);
+
+    this.session = new SessionManager({
+      stickyMs: Math.max(0, (cfg.session?.stickySec ?? 180) * 1000),
+      waitTimeoutMs: Math.max(1000, (cfg.session?.promptTimeoutSec ?? 120) * 1000),
+    });
+
+    this.pipeline = createDefaultPipeline(cfg, {
+      isSticky: (chatId) => this.session.isSticky(chatId),
+      metrics: this.metrics,
+      gate: this.gate,
+    });
+
+    /**
+     * 统计库：每个机器人一份 stats.db。
+     * 没装 SQLite 或版本太低时 available=false，record() 直接返回，不影响收消息。
+     */
+    this.stats = new StatsStore({
+      file: this.paths.stats,
+      enabled: cfg.stats?.enabled !== false,
+      retentionDays: cfg.stats?.retentionDays ?? 90,
+    });
+
+    /**
+     * 事件账本：官方没有历史消息接口，这是**唯一的历史来源**。
+     *
+     * 和 `stats` 是两个库、两套保留策略：统计留 90 天聚合且不存正文，
+     * 账本只留 7 天但存原文。混一个库的话「这个库会不会被拷走」就说不清了。
+     */
+    this.ledger = createLedger({
+      file: this.paths.events,
+      botId: this.id,
+      enabled: cfg.ledger?.enabled !== false,
+      retentionDays: cfg.ledger?.retentionDays ?? 0,
+    });
+
+    /**
+     * 后置注入：`outbound` 在 193 行就构造好了（它不依赖账本），
+     * 而账本要等 `paths.events` 就绪，所以只能在这里补引用。
+     *
+     * 照 278 行 `this.outbound.delivery = this.delivery` 的同一做法——
+     * 走构造函数参数的话拿到的是 `undefined`，表现是「出站永远不记，也不报错」。
+     */
+    if (this.outbound) this.outbound.ledger = this.ledger;
+
+    this.plugins = new PluginManager({
+      pluginsDir: DIRS.plugins,
+      paths: this.paths,
+      registry: this.registry,
+      api: this.api,
+      cfg,
+      goBin: this.globalCfg.plugins?.goBin || null,
+      groups: this.groups,
+      roles: this.roles,
+      outbound: this.outbound,
+      session: this.session,
+      pipeline: this.pipeline,
+      reach: this.reach,
+      ledger: this.ledger,
+      gate: this.gate,
+      /** 身份对照表：插件通过 ctx.identity 只读查询（QQ号 → openid） */
+      identity: this.identity,
+      isOwner: (uid) => cfg.owners.includes(uid),
+      /** 外接协议桥：给插件 `ctx.ext.*`，让它能调 DSH 侧已装扩展的能力 */
+      host: this.host,
+      // 插件声明了 frameworkVersion 就做兼容校验；作者本地调试可以关掉
+      ignoreCompat: this.globalCfg.plugins?.ignoreFrameworkVersion === true,
+    });
+
+    if (this.registerCore) {
+      this.registerCore(this);
+    }
+
+    // 统计库要在插件之前打开：插件上报的运行数据也算统计的一部分
+    this.stats.open();
+
+    /**
+     * 投递账本（阶段 5）放在统计库里，所以必须等 `stats.open()` 之后。
+     *
+     * `outbound` 在更早的地方就构造好了（它不依赖库），这里补上引用——
+     * 账本是**增强**，`stats` 打不开时 `db` 是 null，账本自己会退回「照发」。
+     */
+    this.delivery = createDeliveryLedger({
+      db: this.stats.db,
+      botId: this.id,
+      log: (m) => this.log.warn(m),
+    });
+    if (this.outbound) this.outbound.delivery = this.delivery;
+    /** 插件管理器更早构造（那时还没有库），这里补上引用 */
+    if (this.plugins) this.plugins.delivery = this.delivery;
+    /**
+     * 崩溃恢复：上次进程死掉时还在 `pending` 的，全部标 `unknown`。
+     *
+     * 现在还没有任何发送在跑，所以那些 `pending` 一定是崩溃残留——
+     * 我们不知道发没发出去，只能标未知，等人核对。**不能当失败重发。**
+     */
+    this.delivery.recoverPending();
+    // 账本更要在插件之前开：插件一加载就可能开始收消息，漏一条就永久没了
+    this.ledger.open();
+
+    /**
+     * 闸要在插件加载之前读好，否则插件 setup 里发的第一条主动消息就漏过了闸。
+     *
+     * `pauseOnStart` 只在**首次运行**生效（闸文件还不存在）。
+     * 每次启动都暂停会让人以为坏了——重启之后不说话，第一反应是「出故障了」，
+     * 不是「等我确认」。方案里那条「安装时自动暂停」靠这个分支实现。
+     */
+    const { botExisted } = await this.gate.open();
+    if (cfg.gate?.pauseOnStart && !botExisted) {
+      await this.gate.setBot(true, {
+        by: 'config',
+        reason: '首次启动自动暂停（gate.pauseOnStart），确认配置无误后在面板放开',
+      });
+      this.log.warn('首次启动已自动暂停，确认配置无误后在面板「运行」页放开');
+    }
+
+    // 按配置过滤要加载的插件
+    await this.plugins.scan({ filter: pluginFilterOf(cfg.plugins) });
+  }
+
+  /* ---------------- 启动 / 停止 ---------------- */
+
+  async start() {
+    this.startedAt = Date.now();
+    return this.goOnline();
+  }
+
+  /**
+   * 上线：连网关。已经在线就什么都不做。
+   * 面板的「上线」按钮走这里，和 start() 的区别只是不重置 startedAt。
+   */
+  async goOnline() {
+    if (this.state === 'online' || this.state === 'starting') return this.state;
+    const { cfg } = this;
+    this.state = 'starting';
+    this.lastError = '';
+
+    // mock 模式：不连网关，直接算在线
+    if (this.mock) {
+      this.state = 'online';
+      this.log.info('mock 模式已就绪');
+      return this.state;
+    }
+
+    if (!cfg.appId || !cfg.appSecret) {
+      this.state = 'error';
+      this.lastError = '缺少 AppID / AppSecret';
+      this.log.error(this.lastError);
+      return this.state;
+    }
+
+    // Webhook 模式：不连网关，把回调注册到全局 Webhook 服务即可。
+    // 发消息仍然走 HTTP API，所以后续所有发送逻辑不受影响。
+    if (cfg.connection?.mode === 'webhook') {
+      const wh = this.webhook;
+      if (!wh) {
+        this.state = 'error';
+        this.lastError = '配置选了 webhook 模式，但 Webhook 服务没启动（检查全局配置 webhook.enabled）';
+        this.log.error(this.lastError);
+        return this.state;
+      }
+      try {
+        wh.register(cfg.appId, {
+          secret: cfg.appSecret,
+          onEvent: (event, d, payload) => this.dispatch(event, d, payload),
+          onError: (e) => this.log.error(`Webhook 事件处理失败: ${e.message}`),
+        });
+        this.state = 'online';
+        if (!this.startedAt) this.startedAt = Date.now();
+        this.log.info(`已上线（Webhook 模式，回调 ${wh.path}）`);
+      } catch (e) {
+        this.state = 'error';
+        this.lastError = e.message;
+        this.log.error(`Webhook 注册失败: ${e.message}`);
+      }
+      return this.state;
+    }
+
+    // 同一个 AppID 不能有两个实例连网关
+    const claimed = await claimInstance({ appId: cfg.appId });
+    if (!claimed.ok) {
+      this.state = 'error';
+      /**
+       * 文案得能指导下一步。
+       *
+       * 以前只有「AppID xxx 已有实例在运行（PID 2816）」——用户既不知道 2816
+       * 是谁，也没有任何地方能查。后来改成一律让用户去面板手动清，但现在
+       * 实例锁带心跳租约：进程真的没了、或 pid 被复用给别的程序时，残留记录
+       * 会在认领时自动清掉。所以「去清记录」只能是兜底，不能当成第一步。
+       */
+      const cpid = Number(claimed.conflict?.pid) || 0;
+      const who = cpid === process.pid ? '本进程里的另一个机器人配置' : `PID ${cpid}`;
+      this.lastError =
+        `AppID ${cfg.appId} 已被${who}占用。` +
+        '如果那个进程确实还在跑，先把另一个停掉；' +
+        '如果已经关了，残留记录通常会在下次上线时自动清理，仍被拦住再去「设置 → 实例锁」清掉这条记录';
+      this.log.error(this.lastError);
+      return this.state;
+    }
+
+    this.gateway = new Gateway({
+      api: this.api,
+      tokens: this.tokens,
+      intents: cfg.intents,
+      metrics: this.metrics,
+      onDispatch: (event, d, p) => this.dispatch(event, d, p),
+    });
+
+    try {
+      await this.gateway.start();
+      this.state = 'online';
+      if (!this.startedAt) this.startedAt = Date.now();
+      this.log.info('已上线');
+    } catch (e) {
+      this.state = 'error';
+      this.lastError = e.message;
+      this.log.error(`连接失败: ${e.message}`);
+      /**
+       * 连接失败就把认领还回去。
+       *
+       * 不还的话会留下一条「我这个 pid 还占着这个 AppID」的记录——而实际上
+       * 我根本没连上网关。那个 pid 之后被系统复用，就变成一条永远清不掉的脏记录。
+       */
+      if (!this.mock) await releaseInstance(cfg.appId).catch(() => {});
+    }
+    return this.state;
+  }
+
+  /**
+   * 下线：断开网关，但**不卸载插件、不清存档**。
+   * 和 stop() 的区别是这里可以随时再 goOnline() 回来。
+   */
+  async goOffline() {
+    if (this.state === 'offline') return this.state;
+    try {
+      this.gateway?.stop();
+    } catch {}
+    this.gateway = null;
+    // webhook 模式没有长连接，注销回调才算真的下线
+    try {
+      this.webhook?.unregister(this.cfg.appId);
+    } catch {}
+    if (!this.mock) await releaseInstance(this.cfg.appId).catch(() => {});
+    this.state = 'offline';
+    this.log.info('已下线（插件与存档保留）');
+    return this.state;
+  }
+
+  /**
+   * 记下「这个人刚说过话」，给面板权限页用。
+   * 只留最近 200 个，超了按最后发言时间淘汰——内存里的一点索引，不值得落盘。
+   */
+  #rememberPerson(msg) {
+    if (!msg?.userId) return;
+    const prev = this.recentPeople.get(msg.userId);
+    this.recentPeople.set(msg.userId, {
+      openid: msg.userId,
+      // 有的场景拿不到昵称（频道事件），保留上一次的
+      name: msg.userName || prev?.name || '',
+      /** 群名片 / QQ 昵称分开存：面板上「群里的名字」和「QQ 昵称」经常不一样 */
+      card: msg.userCard || prev?.card || '',
+      nickname: msg.userNickname || prev?.nickname || '',
+      /** 头像原图；2026-11-16 起事件里直接带，面板能显示人脸比一串 openid 好认得多 */
+      avatar: msg.userAvatar || prev?.avatar || '',
+      /** 跨应用统一 id（绑 3 方应用才有），多机器人对齐同一个人靠它 */
+      unionOpenid: msg.unionUserId || prev?.unionOpenid || '',
+      /** QQ号（面板绑过才有）：宿主认人时号码比 openid 可靠，换机器人也不变 */
+      uin: msg.uin || prev?.uin || '',
+      scope: msg.kind,
+      chatId: msg.chatId,
+      at: Date.now(),
+    });
+
+    if (this.recentPeople.size > 200) {
+      const keep = [...this.recentPeople.values()]
+        .sort((a, b) => b.at - a.at)
+        .slice(0, 200);
+      this.recentPeople = new Map(keep.map((p) => [p.openid, p]));
+    }
+  }
+
+  /** 面板「权限」页的候选人列表，最近的排前面 */
+  listRecentPeople(limit = 40) {
+    return [...this.recentPeople.values()]
+      .sort((a, b) => b.at - a.at)
+      .slice(0, limit);
+  }
+
+  /** 查群名，没有就 undefined（面板自己退回显示 openid） */
+  groupName(groupOpenid) {
+    if (!groupOpenid) return undefined;
+    return this.groupNames.get(groupOpenid)?.name || undefined;
+  }
+
+  /**
+   * 查群档案缓存（名字 / 人数 / 简介 / 标签 / 跨应用群标识）。
+   *
+   * 和 `groupName()` 是同一份缓存，只是把整份给出去。没有就 null——
+   * 调用方自己决定是显示 openid 还是先触发一次补拉（`fetchGroupNames`）。
+   */
+  groupInfo(groupOpenid) {
+    if (!groupOpenid) return null;
+    return this.groupNames.get(groupOpenid) ?? null;
+  }
+
+  /**
+   * 用 6 个事件维护可达性。
+   *
+   * 官方**没有查好友列表的接口**（sitemap 里 `friend` 只有两个事件页），
+   * 所以「接入之前就存在的关系」永远是未知的，只能维护「接入之后的变化」。
+   * 三态语义与判定顺序见 `src/reach.js` 头注释。
+   */
+  async #noteReach(eventName, d) {
+    const openid = d?.openid ?? '';
+    switch (eventName) {
+      case 'FRIEND_ADD':
+        await this.reach.noteFriendAdd({
+          openid,
+          unionOpenid: d?.author?.union_openid ?? '',
+          scene: d?.scene ?? 0,
+        });
+        break;
+      case 'FRIEND_DEL':
+        await this.reach.noteFriendDel({ openid });
+        break;
+      case 'C2C_MSG_REJECT':
+        await this.reach.noteC2cPush({ openid, on: false });
+        break;
+      case 'C2C_MSG_RECEIVE':
+        await this.reach.noteC2cPush({ openid, on: true });
+        break;
+      case 'GROUP_MSG_REJECT':
+        await this.reach.noteGroupPush({
+          groupOpenid: d?.group_openid,
+          on: false,
+          by: d?.op_member_openid,
+        });
+        break;
+      case 'GROUP_MSG_RECEIVE':
+        await this.reach.noteGroupPush({
+          groupOpenid: d?.group_openid,
+          on: true,
+          by: d?.op_member_openid,
+        });
+        break;
+      default:
+        break;
+    }
+  }
+
+  /**
+   * 补一个群的名字（给面板调的公开入口，内部走带缓存的那份）。
+   * 不会抛异常，调用方不用 try/catch。
+   */
+  ensureGroupNameCached(groupOpenid) {
+    this.#ensureGroupName(groupOpenid).catch(() => {});
+  }
+
+  /**
+   * 批量补群名，最多等 `timeoutMs`。
+   *
+   * 面板要的是「打开就能认出是哪个群」，让用户先看一串 `577C4A90…`
+   * 再自己刷新一次很别扭；但也不能为了几个群名把面板卡住（接口有频控，
+   * 群多了还会串行超时）。所以给一个总超时，到点有多少用多少。
+   *
+   * **并发要限**：`getGroupInfo` 是 30 QPM。以前这里是 `allSettled` 全并行，
+   * 群多的用户一次打开面板就打 30+ 个请求，正好撞在限频上——
+   * 结果是**一个群名都拿不到**，面板继续显示一串 openid。
+   *
+   * @param {string[]} ids
+   * @param {{timeoutMs?:number, concurrency?:number}} [opts]
+   */
+  async fetchGroupNames(ids = [], { timeoutMs = 2500, concurrency = 4 } = {}) {
+    /** NaN / 0 / 负数都退回默认值：`Math.min(NaN, n)` 是 NaN，`Array.from({length:NaN})` 是空数组，一个群都不拉 */
+    const limit = Number.isFinite(concurrency) && concurrency >= 1 ? Math.floor(concurrency) : 4;
+    /**
+     * 不能只拉「还没有名字」的群：那样群改名后缓存永远不刷新。
+     * 统一交给 #ensureGroupName 按 10 分钟 TTL 判断——缓存新的时候它直接返回，不打接口。
+     */
+    const todo = [...new Set(ids.filter(Boolean))];
+    if (!todo.length) return;
+
+    const queue = todo.slice();
+    /** 到点之后不再派新的：已经发出去的请求收不回来，但尾巴不能一直延长 */
+    let stopped = false;
+    const worker = async () => {
+      for (;;) {
+        if (stopped) return;
+        const id = queue.shift();
+        if (!id) return;
+        // #ensureGroupName 自己吞异常，这里再兜一层只为保险
+        await this.#ensureGroupName(id).catch(() => {});
+      }
+    };
+    const n = Math.max(1, Math.min(limit, queue.length));
+    const work = Promise.all(Array.from({ length: n }, worker));
+
+    let timer;
+    const cap = new Promise((r) => {
+      timer = setTimeout(r, timeoutMs);
+      timer.unref?.();
+    });
+    await Promise.race([work, cap]);
+    stopped = true;
+    clearTimeout(timer);
+  }
+
+  /**
+   * 批量补群名：排进后台，按 30 QPM 慢慢拉，**不等结果**。
+   *
+   * 为什么需要它：`getGroupInfo` 是 30 QPM，补 20 个群要 40 多秒。面板请求
+   * 不可能等那么久（`fetchGroupNames` 自带 2.5 秒超时，到点就不再派活，
+   * 没派出去的会丢）。所以面板那边「先显示能显示的」，剩下的交给这里：
+   * 全部丢进 `#ensureGroupName`（并发 4 + 时间闸），它自己排队、自己落盘，
+   * 下次打开面板就都是名字了。
+   *
+   * 重复调用安全：`#ensureGroupName` 有 in-flight 去重，缓存未过期时直接返回。
+   *
+   * @param {string[]} ids
+   * @returns {number} 真正排进去的数量（已缓存的不算）
+   */
+  prefetchGroupNames(ids = []) {
+    let queued = 0;
+    for (const raw of Array.isArray(ids) ? ids : []) {
+      const id = String(raw ?? '').trim();
+      if (!id) continue;
+      const hit = this.groupNames.get(id);
+      if (hit && Date.now() - hit.at < (hit.ttl ?? 10 * 60_000)) continue;
+      // 过期就删键：面板每刷一次都会走到这里，只在读时跳过会让键永久堆积。
+      if (hit) this.groupNames.delete(id);
+      if (this.groupNameInflight.has(id)) continue;
+      queued += 1;
+      this.#ensureGroupName(id).catch(() => {});
+    }
+    return queued;
+  }
+
+  /**
+   * groupNames 封顶：群数有上限，但「查过一次就再也不见的群」没有。
+   * 超了就按缓存时间淘汰最旧的一条；已落盘的名字重启还能从档案读回。
+   */
+  #capGroupNames() {
+    if (this.groupNames.size <= 2000) return;
+    let oldestKey = null;
+    let oldest = Infinity;
+    for (const [k, v] of this.groupNames) {
+      if (v.at < oldest) {
+        oldest = v.at;
+        oldestKey = k;
+      }
+    }
+    if (oldestKey !== null) this.groupNames.delete(oldestKey);
+  }
+
+  /**
+   * 补一个群的名字。
+   *
+   * 带 10 分钟缓存：群名不会总变，但每个群每次启动查一次就够，
+   * 没必要每条消息都打接口（`getGroupInfo` 是公开接口，但也有频控）。
+   *
+   * **拉不到也要记一笔空名字**（负缓存）。否则面板每刷新一次就重打一遍
+   * 接口——机器人没权限查、群已解散这类情况会一直失败，变成持续的空转。
+   *
+   * **永远不抛异常**——它是在消息处理链路里被调的，为了一个显示用的名字
+   * 把消息搞丢是不可能的。
+   */
+  async #ensureGroupName(groupOpenid) {
+    if (!groupOpenid) return;
+    const hit = this.groupNames.get(groupOpenid);
+    /** ttl 由写入时决定：成功 10 分钟；11253（无权限）一天；其它失败 30 秒 */
+    if (hit && Date.now() - hit.at < (hit.ttl ?? 10 * 60_000)) return;
+    if (hit) this.groupNames.delete(groupOpenid);
+
+    /**
+     * 同一条群消息可能触发两次（消息事件里一次、面板补一次），
+     * 两次都在 `await getGroupInfo` 之前查缓存 → 都判 miss → 打两次接口。
+     * 用 in-flight Map 让同 key 复用同一个 promise。
+     */
+    const flying = this.groupNameInflight.get(groupOpenid);
+    if (flying) return flying;
+
+    const job = (async () => {
+      /** 全局闸：不管从哪条链路进来，同时在飞的群名请求不超过 4 个 */
+      await this.#groupNameSlot();
+      try {
+        const info = await this.api.getGroupInfo(groupOpenid);
+        const profile = groupProfileOf(info);
+        this.groupNames.set(groupOpenid, { ...profile, at: Date.now(), ttl: 10 * 60_000 });
+        this.#capGroupNames();
+
+        /**
+         * 顺手落盘一份。
+         *
+         * 群名 / 人数 / 简介 / 标签以前只在内存里活 10 分钟，重启就没了，
+         * 面板第一屏永远是一串 openid。档案里存一份，重启直接读。
+         *
+         * **只写非空字段**：接口少给某个字段时不能把已有值覆盖成空串
+         * （`upsert` 是浅合并，空串会盖掉旧值）。
+         */
+        const patch = { infoAt: Date.now() };
+        if (profile.name) patch.name = profile.name;
+        if (profile.memberNum) patch.memberNum = profile.memberNum;
+        if (profile.fingerMemo) patch.fingerMemo = profile.fingerMemo;
+        if (profile.classText) patch.classText = profile.classText;
+        if (profile.tags.length) patch.tags = profile.tags;
+        await this.groups?.upsert?.(groupOpenid, patch);
+      } catch (e) {
+        // 拉不到就算了：openid 也能认，只是没那么好认
+        /** api.js 抛的是 `qqCode`，不是 code；读错字段会让 11253 永远按 30 秒重试 */
+        const code = Number(e?.qqCode ?? e?.code ?? e?.errCode ?? e?.errcode ?? 0);
+        this.groupNames.set(groupOpenid, {
+          name: '',
+          at: Date.now(),
+          // 11253 = 应用无接口访问权限（仅白名单机器人可用），别每 30 秒重试
+          ttl: code === 11253 ? 24 * 3600_000 : 30_000,
+        });
+        this.#capGroupNames();
+      } finally {
+        this.#freeGroupNameSlot();
+        this.groupNameInflight.delete(groupOpenid);
+      }
+    })();
+
+    this.groupNameInflight.set(groupOpenid, job);
+    return job;
+  }
+
+  /** 拿一个群名请求的名额（最多 4 个同时在飞），再按 30 QPM 放行时间点 */
+  async #groupNameSlot() {
+    if (this.groupNameActive < 4) {
+      this.groupNameActive += 1;
+    } else {
+      await new Promise((resolve) => this.groupNameWaiters.push(resolve));
+    }
+    /**
+     * 并发上限只管「同时在飞几个」，不管「一分钟打了多少次」。
+     *
+     * 一次刷新面板拉 20 个群，4 并发几秒钟就能打满 30 次，然后整批 429。
+     * 所以拿到名额后还要过一道**时间闸**：默认 2.2 秒一个（27 次/分钟，
+     * 留 10% 余量）。代价是 20 个群要补 40 多秒——但这是显示用的，
+     * 面板等不到就先显示 openid，后台继续补，下次打开就是名字了。
+     *
+     * `groupInfoGapMs` 可以调（测试里设小值），0 = 不限制。
+     */
+    const gap = Math.max(0, Number(this.groupInfoGapMs) || 0);
+    if (!gap) return;
+    const now = Date.now();
+    const at = Math.max(now, this.groupInfoNextAt || 0);
+    this.groupInfoNextAt = at + gap;
+    if (at > now) await new Promise((r) => setTimeout(r, at - now));
+  }
+
+  #freeGroupNameSlot() {
+    const next = this.groupNameWaiters.shift();
+    // 有人排队就把名额直接转给它（active 不变），没人排队才真的空出来
+    if (next) next();
+    else this.groupNameActive = Math.max(0, this.groupNameActive - 1);
+  }
+
+  async stop() {
+    try {
+      this.gateway?.stop();
+    } catch {}
+    try {
+      this.webhook?.unregister(this.cfg.appId);
+    } catch {}
+    this.session?.clear();
+    // 先关两个对外出口：端口要尽快释放，客户端重连时不该打到一个正在退出的进程上
+    await this.host?.stop().catch(() => {});
+    await this.onebot?.stop().catch(() => {});
+    await this.plugins?.shutdown().catch(() => {});
+    await this.outbound?.flush().catch(() => {});
+    await this.groups?.flush().catch(() => {});
+    await this.roles?.flush().catch(() => {});
+    await this.reach?.flush().catch(() => {});
+    await this.gate?.flush().catch(() => {});
+    this.stats?.close();
+    this.ledger?.close();
+    if (!this.mock) await releaseInstance(this.cfg.appId).catch(() => {});
+    /**
+     * 释放这只鸟的日志文件句柄。
+     * init() 里 attach 过，原来 stop/删除都没有 detach —— 面板每建一次再删一次，
+     * 就永久残留一个 WriteStream；Windows 上还占着 logs/bots/<id> 让 purge 删不干净。
+     * detachLogFile 内部 closeSink 已带 catch，不抛、无需 await。
+     */
+    detachLogFile(`bot:${this.id}`);
+    this.state = 'stopped';
+  }
+
+  /**
+   * 这只鸟现在能不能对 `chatId` 说话，以及不能的**原因**。
+   *
+   * 故障排查从「猜」变成「读」：面板直接把 `reasons` 列成中文，
+   * 用户不用去翻日志猜「为什么她不说话」。
+   *
+   * 归到这里的四类状态：闸（三级 + 静默）、网关在线、日额度、分钟限流。
+   * 没放 `Outbound` 里的理由：outbound 是发送执行器，只知道额度和离线，
+   * 不知道闸；而这个方法要回答的是「这只鸟现在能不能开口」，
+   * 是**运行时诊断**，不是发送动作。
+   *
+   * @param {string} chatId
+   * @param {{kind?:'group'|'c2c'}} [opts] 给了就按对应口径查额度；
+   *   不给就取两种里用得多的那个（chatId 在群和私聊里不会撞）
+   * @returns {Promise<{ok:boolean, reasons:{code:string,text:string}[]}>}
+   */
+  async canSpeak(chatId, { kind = '' } = {}) {
+    const reasons = [...this.gate.check(chatId).reasons];
+
+    /**
+     * 可达性：只对**主动消息**有意义。
+     *
+     * 用户刚说完话时的被动回复不受这两道门限制——他就在这儿，回一句当然收得到。
+     * 所以必须传 `kind` 才查：不知道是群还是私聊就查不了，而「不知道」不该变成「不能」。
+     *
+     * `unknown` 一律放行：群里聊过的人很可能早就加了好友，只是还没私聊过。
+     */
+    if (kind === 'c2c') {
+      const v = await this.reach?.canC2C?.(chatId).catch(() => null);
+      if (v?.verdict === 'no') {
+        reasons.push({
+          code: v.reason || 'reach:not-friend',
+          text:
+            v.reason === 'reach:push-off'
+              ? '对方在资料卡里关掉了主动消息推送'
+              : '对方没有加机器人好友',
+        });
+      }
+    } else if (kind === 'group') {
+      const v = await this.reach?.canGroupPush?.(chatId).catch(() => null);
+      if (v?.verdict === 'no') {
+        reasons.push({
+          code: v.reason || 'reach:push-off',
+          text: '群管理员关闭了机器人的主动消息推送',
+        });
+      }
+    }
+
+    if (!this.mock && this.state !== 'online') {
+      reasons.push({
+        code: 'gateway:offline',
+        text: `没连上 QQ（当前状态：${this.state}）`,
+      });
+    }
+
+    if (this.outbound) {
+      const keys = kind ? [`${kind}:${chatId}`] : [`group:${chatId}`, `c2c:${chatId}`];
+      const q = await this.outbound.quotaSnapshot().catch(() => ({}));
+      const used = Math.max(0, ...keys.map((k) => Number(q[k] ?? 0)));
+      if (used >= this.outbound.dailyActive) {
+        reasons.push({
+          code: 'quota:daily',
+          text: `今天的主动消息额度用完了（${used}/${this.outbound.dailyActive} 条）`,
+        });
+      }
+      /**
+       * 分钟限流也列出来，但它是**瞬时**状态——面板上看到这条通常
+       * 等一分钟就自己好了。列它的价值是「不用怀疑别的」，
+       * 而不是让用户去改配置。
+       */
+      const burst = Math.max(0, ...keys.map((k) => this.outbound.rateUsed(k)));
+      if (burst >= this.outbound.activePerMin && this.outbound.activePerMin > 0) {
+        reasons.push({
+          code: 'quota:permin',
+          text: `这一分钟发得太密（${burst}/${this.outbound.activePerMin} 条），等一分钟就好`,
+        });
+      }
+    }
+
+    return { ok: reasons.length === 0, reasons };
+  }
+
+  /* ---------------- 事件分发 ---------------- */
+
+  /**
+   * 非消息频道事件入账。
+   *
+   * 消息事件在下面走 `ledger.append(msg)`，但非消息分支以前完全不写账本，
+   * 只有内存里的 `metrics.bumpEvent` —— GUILD_CREATE / CHANNEL_* / FORUM_* /
+   * MESSAGE_REACTION_* 这些频道事件重启后连「发生过」都查不到。
+   *
+   * 这里补一条 `kind:'notice'` 记录：`raw` 完整保留事件体，`recent()` /
+   * `timeline()` 能查到，面板与宿主协议也读得到。用 `notice` 而不是四态会话
+   * 类型，避免和聊天消息的 kind 语义混淆；content 带 `[事件]` 前缀，AI 邻文里
+   * 也能一眼认出那不是用户说的话。
+   *
+   * id 用事件名 + 场景 + 操作人 + 时间戳拼出**稳定**值，官方重推同一条时
+   * `ledger.append` 的 dedupe 唯一约束会把它挡掉，不会记重。
+   */
+  #recordNotice(eventName, d) {
+    if (!this.ledger?.append) return;
+    const CHANNEL_NOTICE = /^(GUILD|CHANNEL|FORUM|AUDIO|MESSAGE_REACTION|MESSAGE_AUDIT|PUBLIC_MESSAGE_DELETE|DIRECT_MESSAGE_DELETE)/;
+    if (!CHANNEL_NOTICE.test(eventName)) return;
+    /**
+     * 账本是增强，不是主链路：这里任何异常都不能把事件分发带崩
+     * （`ledger.append` 自己会吞写入异常，但拼 id 时的 JSON.stringify 在它之外）。
+     */
+    try {
+      /**
+       * 和 dsh-roost 的 `sessionKey` 同口径：同一个频道的文字子频道、
+       * 论坛、公告等事件的账本键也按 guild_id 聚合，别散在各子频道里。
+       */
+      const guildId = String(d?.guild_id ?? (eventName.startsWith('GUILD_') ? d?.id : '') ?? '');
+      const chatId = guildId ? `guild:${guildId}` : String(d?.channel_id ?? '');
+      const sub = d?.channel_id ? ` @子频道 ${String(d.channel_id).slice(0, 32)}` : '';
+      const stable = [
+        eventName,
+        chatId,
+        String(d?.op_user_id ?? d?.author_id ?? ''),
+        String(d?.timestamp ?? d?.joined_at ?? ''),
+        JSON.stringify(d ?? {}).length,
+      ].join(':');
+      this.ledger.append({
+        kind: 'notice',
+        chatId,
+        id: `notice:${stable}`,
+        userId: String(d?.op_user_id ?? d?.author_id ?? ''),
+        userName: '',
+        content: `[事件] ${eventName}${sub}${d?.name ? ` ${String(d.name).slice(0, 80)}` : ''}`,
+        raw: d,
+      });
+    } catch (e) {
+      this.log.warn(`频道事件入账失败（不影响分发）：${e?.message ?? e}`);
+    }
+  }
+
+  /**
+   * 这个方法和单机器人时的逻辑一致，只是绑到了某个实例上。
+   * 所有事件都会转交给插件，未知事件也不例外。
+   */
+  async dispatch(eventName, d) {
+    const { cfg, registry, roles, groups, session, pipeline, outbound } = this;
+
+    this.metrics.lastEventAt = Date.now();
+    this.metrics.messageEvent = eventName;
+    /**
+     * 事件计数按「已知事件名」收敛：未知类型统一记到 __unknown__，
+     * 否则平台每加一种新事件、或来一个拼错的类型，就会在 eventCounts 里
+     * 永久多一个键。计数仍保留，面板 /status 能看出收到过未知事件。
+     * 归并放这里而不是 runtime.js —— 后者是零依赖模块，isKnownEvent 已在本文件导入。
+     */
+    this.metrics.bumpEvent(isKnownEvent(eventName) ? eventName : '__unknown__');
+
+    /* ---- 非消息事件 ---- */
+    if (!isMessageEvent(eventName)) {
+      /** 和消息事件一样「入账第一」，放在任何处理/过滤之前 */
+      this.#recordNotice(eventName, d);
+      if (!isKnownEvent(eventName)) {
+        this.log.warn(`收到未登记的事件 ${eventName}，已转交插件。建议在 src/events.js 补登记`);
+      }
+
+      if (eventName === 'GROUP_ADD_ROBOT') {
+        const gid = d?.group_openid;
+        const inviter = d?.op_member_openid || '';
+        await groups.onAdded(gid, inviter);
+        // 顺便把群名拉下来，面板上就不用显示一串 openid 了
+        this.#ensureGroupName(gid).catch(() => {});
+        if (inviter && gid) {
+          const gScope = `group:${gid}`;
+          if ((await roles.levelIn(gScope, inviter)) >= NO_PERM) {
+            await roles.set(gScope, inviter, LEVEL.admin);
+            this.log.info(`邀请人 ${inviter} 已设为 ${gScope} 的管理员`);
+          }
+        }
+      } else if (eventName === 'GROUP_DEL_ROBOT') {
+        await groups.onRemoved(d?.group_openid);
+      }
+
+      // 可达性：官方没有查询接口，只能靠这 6 个事件维护（见 src/reach.js）
+      // 放在插件监听器之前，插件读到的就是最新状态
+      await this.#noteReach(eventName, d).catch((e) => {
+        this.log.warn(`可达性更新失败: ${e.message}`);
+      });
+
+      const meta = EVENTS[eventName] ?? null;
+
+      /**
+       * OneBot 兼容层：非消息事件（入群、退群、加好友…）。
+       *
+       * 放在插件监听器之前——客户端看到的状态应该是最新的，和可达性更新
+       * 同一条理由。它自己吞异常，不会影响插件。
+       */
+      this.onebot?.onEvent(eventName, d);
+      /** 宿主协议：事件名与 data 原样带出去，不猜结构、不翻译 */
+      this.host?.onEvent(eventName, d);
+      for (const l of registry.listeners.get(eventName) ?? []) {
+        // 事件里的群：有 group_openid 就按群开关过滤，没有（如私聊事件）就放行
+        if (d?.group_openid && !pluginAllowedIn(cfg.plugins, d.group_openid, l.pluginId)) continue;
+        try {
+          await l.handler(d, {
+            event: eventName,
+            intent: meta?.intent ?? null,
+            desc: meta?.desc ?? '',
+            api: this.api,
+            bot: this,
+          });
+        } catch (e) {
+          /** 事件监听器也算运行期错误；以前只有消息 listener 留痕，这里会静默丢。
+           *  发送侧的已知限制不是插件写错，别刷运行期错误卡。 */
+          if (!['offline', 'expired', 'quota', 'rate'].includes(e?.code)) {
+            this.plugins?.noteRuntimeError?.(l.pluginId, e);
+          }
+          this.metrics.bump('errors');
+          this.log.error(`监听器 ${l.pluginId} 处理 ${eventName} 出错:`, e.stack || e.message);
+        }
+      }
+      return;
+    }
+
+    /* ---- 消息事件 ---- */
+    const msg = buildMessage(eventName, d, { api: this.api, cfg, outbound, session, identity: this.identity });
+
+    /**
+     * 群名不在官方事件里（只有 `group_openid`），但框架有缓存。
+     *
+     * 以前只缓存不挂到消息上，ai-chat 取不到群名就回退成**发消息人的昵称**——
+     * 结果群会话的标题显示成「我的昵称」，和私聊分不开。
+     * 这里挂上缓存值，并异步补拉（不阻塞这条消息）。补拉按 TTL 去重，
+     * 所以群改名后最多 10 分钟能刷到。
+     */
+    if (msg.kind === 'group' && msg.groupId) {
+      msg.groupName = this.groupName(msg.groupId) || '';
+      /** 每条群消息都问一次（内部按 TTL 去重）：群改名后能刷到，没权限时也不会反复打接口 */
+      this.fetchGroupNames([msg.groupId]).catch(() => {});
+    }
+
+    /**
+     * 入账：**第一件要做的事**，在去重 / 白名单 / 限流 / 暂停之前。
+     *
+     * 顺序是有讲究的。账本记的是「发生过什么」，不是「我们怎么处理的」：
+     *   - 被去重拦下的那条，官方确实推了两次，事实是「推了两次」，只是我们处理了一次；
+     *   - 暂停期间的消息如果不记，恢复后就永久消失了——官方没有历史消息接口，补不回来。
+     *
+     * 重复推送由 `dedupe` 唯一约束兜底（官方明说「相同 msg_id 可能重复推送」），
+     * 所以放在最前面也不会记重。
+     *
+     * 同步写：`node:sqlite` 是同步 API，一条 INSERT 在 WAL 下是微秒级，
+     * 比「攒批 + 定时刷」更安全——进程被 kill 时不会丢最后一批。
+     */
+    /**
+     * 入账的返回值挂到消息上：`msg.eventId` / `msg.eventSeq`。
+     *
+     * dsh-roost 写记忆时要记「这条记忆从哪条消息来」（场景片段，阶段 4），
+     * 而它是另一个进程，只能靠转发时带过去的 id 反查原文。
+     *
+     * 撞 dedupe（官方重推同一条）时 `append` 也返回已有那条的 id，
+     * 所以重推的消息一样有出处。
+     */
+    const rec = this.ledger?.append(msg);
+    if (rec) {
+      msg.eventId = rec.id;
+      msg.eventSeq = rec.seq;
+    }
+
+    // 收到私聊 = 好友关系存在的强证据。不置 c2cPush：他能发不等于他允许机器人主动推
+    if (msg.kind === 'c2c' && msg.userId) {
+      this.reach
+        .noteC2cObserved({ openid: msg.userId, unionOpenid: d?.author?.union_openid })
+        .catch(() => {});
+    }
+
+    /**
+     * 先播出去，再做业务处理。
+     *
+     * 放在 pipeline 之前是有意的：外部订阅者（AI 宿主）关心的是「群里说了什么」，
+     * 不管这条消息有没有被去重/白名单/限流拦下——拦下是**本框架的**处理策略，
+     * 不该影响订阅者看到的事实。
+     * 回调抛错必须吞掉：订阅者是外挂代码，不能让它把收消息搞崩。
+     */
+    try {
+      this.onMessage?.(msg);
+
+      /**
+       * OneBot 兼容层收消息。
+       *
+       * 传的是**完整 msg**（含 uin / msgIdx / attachments），不走 message-bus——
+       * 那条通道的 payload 是对外契约，故意脱敏过，拿不到 ID 映射要的东西。
+       */
+      this.onebot?.onMessage(msg);
+      /** 宿主协议：传完整 msg（原生结构），它自己挑字段 */
+      this.host?.onMessage(msg);
+    } catch (e) {
+      this.log.warn(`消息广播失败: ${e.message}`);
+    }
+    try {
+      this.metrics.bump('recv');
+      this.metrics.touchChat(msg.chatId, msg.kind);
+      if (msg.kind === 'group' && msg.groupId) await groups.touch(msg.groupId);
+      /**
+       * 在这个群第一次说话时顺手把群名拉下来（内部有 10 分钟缓存，
+       * 只有第一次真的会打接口），面板上就不用显示一串 openid 了。
+       * 不 await：这是显示用的信息，不值得让消息多等一次网络往返。
+       */
+      if (msg.kind === 'group' && msg.groupId) this.ensureGroupNameCached(msg.groupId);
+
+      if (msg.kind === 'group' && msg.raw?.author?.member_role === 'owner') {
+        await groups.setOwner(msg.groupId, msg.userId);
+        const gScope = `group:${msg.groupId}`;
+        if ((await roles.levelIn(gScope, msg.userId)) >= NO_PERM) {
+          await roles.set(gScope, msg.userId, LEVEL.admin);
+          this.log.info(`群主 ${msg.userId} 自动获得 ${gScope} 的管理员权限`);
+        }
+      }
+
+      this.logIncoming(msg);
+
+      if (msg.mentioned || msg.isCommand) session.markAddressed(msg.chatId);
+
+      /**
+       * 兼容模式「独占」：**插件**不再回话，内核命令也只留绑定那四条。
+       *
+       * 为什么不能直接 `return`（第一版就是这么写的，被主人指出来）：
+       * `绑定qq` / `绑定群号` / `绑定成员` 这些是**内核命令**（pluginId `__core`），
+       * 而 OneBot 的 ID 映射要靠绑定表才能给真 QQ 号。独占模式一刀切掉管线，
+       * 用户就再也绑不了号——于是所有人在客户端里永远是一串 13 位合成号，
+       * 主人权限、群号都对不上。这是个死循环，必须在管线里解决而不是绕过它。
+       *
+       * 所以这里**不提前 return**，只打一个标记：
+       *   - 管线照跑（去重 / 白名单 / 限流 / 暂停闸都还在，别的地方也别想绕过）
+       *   - 命令只放 `onebot/keep.js` 里那四条绑定，其余（含 `/help`）静默忽略
+       *   - 插件监听器整段跳过
+       */
+      const coreOnly = Boolean(this.onebot?.exclusive);
+      if (coreOnly) msg.coreOnly = true;
+
+      const commandEntry = msg.isCommand ? registry.commands.get(msg.command) ?? null : null;
+      const passed = await pipeline.run({ msg, cfg, commandEntry });
+      if (!passed) return;
+
+      /**
+       * 统计：只记「谁、在哪、什么时候、是不是命令」，**不记正文**。
+       *
+       * 放在 pipeline 之后是有意的：被去重 / 白名单 / 限流拦下的消息不计入，
+       * 统计出来的是「实际处理量」。QQ 偶尔会重推同一条消息，
+       * 计进去会让数字虚高，用户还以为是自己的群突然热闹了。
+       * （想看得更全可以看概览页的「收到消息」，那个是 pipeline 之前计数的。）
+       *
+       * record() 只进内存缓冲，1 秒批量落盘，不会拖慢回复。
+       */
+      this.stats?.record({
+        scope: msg.kind,
+        chatId: msg.chatId,
+        userId: msg.userId,
+        isCommand: msg.isCommand,
+        command: msg.command,
+      });
+
+      this.#rememberPerson(msg);
+
+      if (msg.isCommand && commandEntry) {
+        /**
+         * 独占模式只放行「绑定四件套」，其余内核命令一律静默。
+         *
+         * 以前是把整个 `__core` 都放行：绑定命令挂在 `__core` 上，而 OneBot 的
+         * ID 映射又离不开绑定表，为了不挡住那四条，把 help / ping / status /
+         * admin 这些一起放了出去。副作用是群里任何人发一句 `/help`，机器人都回
+         * 一大段菜单——而独占的语义恰恰是「对话交给客户端」，这条回复纯属噪音。
+         *
+         * 现在收窄成白名单（见 `onebot/keep.js`）：绑定必须留，其余全静默，包括
+         * `/help`。要查命令或改配置去面板、或去客户端，那里有完整上下文。
+         */
+        if (coreOnly && !onebotAllowsCore(commandEntry.name)) {
+          this.metrics.bump('ignored');
+          return;
+        }
+        /**
+         * 分群插件开关：这个群没启用这个插件就不执行。
+         *
+         * 回复与否**看人**：
+         *   - 普通成员一个字都不回——机器人在多个群里，被禁用的命令如果
+         *     在群里回一句提示，等于把这个开关变成了噪音源，从他们视角
+         *     这个功能就该不存在。
+         *   - 管理员/主人必须回一句——否则「本群把这个插件关了」和
+         *     「机器人坏了」在他眼里完全一样，只能去翻配置文件才知道原因。
+         *     这是「找不到在哪开关插件」的一半来源：开关生效得太安静。
+         */
+        if (!pluginAllowedIn(cfg.plugins, msg.chatId, commandEntry.pluginId)) {
+          this.metrics.bump('ignored');
+          try {
+            const lv = await roles.effective(scopeOf(msg), msg.userId, { owners: cfg.owners });
+            if (lv <= LEVEL.admin) {
+              const P = cfg.commandPrefix || '/';
+              await msg
+                .reply(
+                  `本群已关闭插件「${commandEntry.pluginId}」。\n` +
+                    `恢复：${P}群插件 开 ${commandEntry.pluginId}`,
+                )
+                .catch(() => {});
+            }
+          } catch {
+            /* 权限查不出来就当普通成员处理 */
+          }
+          return;
+        }
+        const scope = scopeOf(msg);
+        if (commandEntry.admin || commandEntry.globalAdmin) {
+          const lv = await roles.effective(scope, msg.userId, { owners: cfg.owners });
+          if (commandEntry.admin && lv > LEVEL.admin) {
+            return msg
+              .reply(
+                `需要管理员权限才能用这个命令（你当前是${levelName(lv)}）。\n` +
+                  `发 ${cfg.commandPrefix || '/'}admin me 查看自己的权限。`,
+              )
+              .catch(() => {});
+          }
+          if (commandEntry.globalAdmin) {
+            const gl = cfg.owners.includes(msg.userId)
+              ? LEVEL.owner
+              : await roles.levelIn('global', msg.userId);
+            if (gl > LEVEL.admin) {
+              return msg.reply('这个命令影响全局，需要「全局管理员」权限。').catch(() => {});
+            }
+          }
+        }
+        const required = (commandEntry.pattern?.match(/<[^>]+>/g) ?? []).length;
+        if (msg.args.length < required) {
+          return msg.reply(`参数不够\n用法: ${commandEntry.usage}`).catch(() => {});
+        }
+        this.metrics.bump('commands');
+        /**
+         * 标上「现在是哪个插件在回」，合并回复时要用它加标题。
+         *
+         * 命令是排他的（同一个命令名只属于一个插件），本来不会冲突；
+         * 但命令和监听器可能都往这条消息里回，所以一样要标。
+         */
+        msg.pluginId = commandEntry.pluginId ?? '';
+        msg.pluginName = commandEntry.plugin ?? '';
+        try {
+          await commandEntry.handler(msg, { args: msg.args, raw: msg.content, bot: this });
+        } catch (e) {
+          this.metrics.bump('errors');
+          // 这几种是发送侧的已知限制，不是插件写错了，只 warn 不报堆栈
+          if (['offline', 'expired', 'quota', 'rate'].includes(e?.code)) {
+            this.log.warn(`命令 ${commandEntry.name} 回复失败: ${e.message}`);
+            return;
+          }
+          /** 命令 handler 抛错也要在面板留痕（已知发送限制不记，免得刷屏） */
+          this.plugins?.noteRuntimeError?.(commandEntry.pluginId, e);
+          this.log.error(
+            `命令 ${commandEntry.name}（插件 ${commandEntry.pluginId}）执行出错:`,
+            e.stack || e.message,
+          );
+          await msg.reply(`执行出错: ${e.message}`).catch(() => {});
+        }
+        return;
+      }
+
+      if (!coreOnly && session.deliver(msg)) return;
+
+      if (msg.isCommand && !coreOnly) {
+        const P = cfg.commandPrefix || '/';
+        return msg.reply(`没有这个命令：${P}${msg.command}\n发 ${P}help 查看全部命令`).catch(() => {});
+      }
+
+      /** 独占模式：插件监听器整段跳过（内核命令上面已经处理完） */
+      if (coreOnly) return;
+
+      let handled = false;
+      for (const evt of ['message', eventName]) {
+        /**
+         * 按插件优先级排序：**高的先跑**，同优先级保持注册顺序。
+         *
+         * 为什么需要：`msg.claim()` 是「这条我接了，别人别管」，
+         * 而谁先跑决定了谁能认领。专门干某件事的插件（关键词、群管）
+         * 应该先跑；像「AI 对话」这种什么都想接的，priority 调低排最后，
+         * 别人认领了它就不吭声。
+         */
+        const ordered = orderListeners(registry.listeners.get(evt), (id) => this.plugins?.loaded?.get(id)?.meta);
+
+        for (const l of ordered) {
+          // 分群开关对被动触发同样生效，否则「禁用了还在回关键词」
+          if (!pluginAllowedIn(cfg.plugins, msg.chatId, l.pluginId)) continue;
+
+          /**
+           * 这条已经被别的插件认领了。
+           *
+           * 默认跳过——避免「两个插件同时回答一句」。
+           * 确实需要看的插件可以在 meta 里声明 `seeClaimed: true`，
+           * 它照样能收到，并且能通过 `msg.claimedBy` 知道是谁接的。
+           */
+          if (skipBecauseClaimed(msg, l.pluginId, this.plugins?.loaded?.get(l.pluginId)?.meta)) continue;
+
+          /**
+           * 标上当前插件，让 msg.reply 知道这句是谁说的。
+           *
+           * 没被认领时**不是排他分发**：所有 listener 都会被调用，
+           * 各自往 replyBuf 里攒，最后合并成一条发出，按插件分组加标题。
+           */
+          msg.pluginId = l.pluginId ?? '';
+          msg.pluginName = this.plugins?.loaded?.get(l.pluginId)?.meta?.name ?? l.pluginId ?? '';
+          try {
+            const ret = await l.handler(msg);
+            // 返回 true 等于认领：这条我处理了，后面的别管
+            if (ret === true) msg.claim();
+            if (ret === true || msg.replied) handled = true;
+          } catch (e) {
+            // 运行期错误也要留痕：以前只进日志，面板上看不出插件在反复抛错。
+            // 发送侧的已知限制不算插件异常，跟命令 handler 保持同一口径。
+            if (!['offline', 'expired', 'quota', 'rate'].includes(e?.code)) {
+              this.plugins?.noteRuntimeError?.(l.pluginId, e);
+            }
+            this.metrics.bump('errors');
+            this.log.error(`监听器 ${l.pluginId} 处理 ${evt} 出错:`, e.stack || e.message);
+          }
+        }
+      }
+      if (!handled) this.metrics.bump('ignored');
+    } finally {
+      // 本次处理里所有插件攒下的回复，合并成一条发出去
+      await msg.flushReplies?.();
+    }
+  }
+
+  logIncoming(msg) {
+    const ml = this.cfg.messageLog ?? {};
+    if (ml.enabled === false) return;
+    if ((ml.muteKinds ?? []).includes(msg.kind)) return;
+
+    /**
+     * 把正文里的 `<@openid>` 换回 `@昵称` 再打。
+     *
+     * 官方在 content 里把 @ 写成 `<@member_openid>`，而 `msg.content` 为了能
+     * 解析命令已经把 @ 全删掉了——直接打出来是「/禁言 1m」，看不出这条消息
+     * @ 了谁。排查群管、点名类问题时这点很关键。
+     *
+     * 原始正文在 `msg.raw.content`；昵称从 `msg.allMentions` 拿（官方在 mentions
+     * 里给了 username）。这里必须用 allMentions 而不是 mentions——后者把机器人
+     * 自己过滤掉了，而 `@机器人 /禁言 1m` 里被 @ 的机器人恰恰是最常出现的那个。
+     * 认不出昵称就退到 openid 前 8 位，总比一串尖括号好读。
+     */
+    let text = String(msg.raw?.content ?? msg.content ?? '');
+    for (const m of msg.allMentions ?? msg.mentions ?? []) {
+      if (!m.id) continue;
+      const shown = m.name || `${m.id.slice(0, 8)}…`;
+      text = text.split(`<@${m.id}>`).join(`@${shown}`);
+    }
+    if (text.length > 120) text = `${text.slice(0, 120)}…`;
+
+    const who = msg.userName
+      ? `${msg.userName}(${msg.userId.slice(0, 8)})`
+      : msg.userId.slice(0, 8) || '-';
+    const where = msg.groupId ? msg.groupId.slice(0, 10) : '-';
+    this.log.info(`收到 ${msg.kind} 会话:${where} 来自:${who} 内容:${describeForLog(msg, text)}`);
+  }
+}
+
+/**
+ * 日志里怎么显示这条消息。
+ *
+ * 官方接口里**纯图片 / 纯语音消息的 `content` 是空串**，内容全在 `attachments`。
+ * 之前直接打 `text || '(空)'`，日志里就只有「内容:(空)」——
+ * 看不出用户到底发了图还是发了语音，排查时全靠猜。
+ *
+ * 现在按附件类型给出人话：`[图片消息]`、`[语音消息: 转写内容]`、`[视频消息]`…
+ * 文本和附件都有时一起显示（图文消息很常见）。
+ */
+export function describeForLog(msg, text = '') {
+  const parts = [];
+  const said = String(text ?? '').trim();
+  if (said) parts.push(said);
+
+  const atts = Array.isArray(msg?.attachments) ? msg.attachments : [];
+  const count = (type) => atts.filter((a) => a?.type === type).length;
+
+  const imgs = count('image');
+  if (imgs) parts.push(imgs > 1 ? `[图片消息×${imgs}]` : '[图片消息]');
+
+  for (const v of atts.filter((a) => a?.type === 'voice')) {
+    // 官方 ASR 是白给的，有就带上——排查「它到底听没听清」全靠这个
+    parts.push(v?.asrText ? `[语音消息: ${String(v.asrText).trim()}]` : '[语音消息]');
+  }
+
+  const vids = count('video');
+  if (vids) parts.push(vids > 1 ? `[视频消息×${vids}]` : '[视频消息]');
+
+  for (const f of atts.filter((a) => a?.type === 'file')) {
+    parts.push(`[文件消息: ${f?.filename || '未命名'}]`);
+  }
+
+  return parts.join(' ') || '(空)';
+}
+
+/**
+ * 把插件启用配置翻译成过滤函数。
+ *   all     → 全部
+ *   include → 只留名单内的
+ *   exclude → 去掉名单内的
+ */
+export function pluginFilterOf(spec) {
+  const mode = spec?.mode ?? 'include';
+  const list = new Set(spec?.list ?? []);
+  if (mode === 'all') return () => true;
+  if (mode === 'exclude') return (id) => !list.has(id);
+  return (id) => list.has(id); // include
+}
+
+/**
+ * 群基本信息接口的返回 → 框架内部形状。
+ *
+ * 2026-11-16 官方把 `/v2/groups/{openid}/info` 从「只给群名」扩成一份完整档案
+ * （人数 / 简介 / 分类 / 标签）。字段都取一遍，缺的给空值——接口少给不该让
+ * 调用方拿到 undefined。
+ *
+ * **`union_group_openid` 不要**：跨机器人的群关联走 `identity` 的「群号 ↔ openid」
+ * 绑定，那个字段只在同一开发者 + 同一个 3 方应用下才有值，还换不出对方的 openid。
+ */
+function groupProfileOf(info) {
+  const src = info && typeof info === 'object' ? info : {};
+  return {
+    name: String(src.group_name ?? src.name ?? '').trim(),
+    memberNum: Number(src.group_member_num) || 0,
+    fingerMemo: String(src.group_finger_memo ?? '').trim(),
+    classText: String(src.group_class_text ?? '').trim(),
+    tags: Array.isArray(src.group_tags) ? src.group_tags.map(String).filter(Boolean) : [],
+  };
+}
+
+/**
+ * 这个会话里能不能用某个插件（分群开关）。
+ *
+ * 全局配置 `plugins.mode/list` 决定**加载**哪些插件——那是进程级的，
+ * 装了就是装了。但一个机器人常在好几个群里，有的群想要骰子、有的群嫌吵，
+ * 所以再加一层**按会话的覆盖**：
+ *
+ *   cfg.plugins.groups = {
+ *     "<群 openid>": { mode: "include", list: ["dice", "kun"] }
+ *   }
+ *
+ * 语义：配了的会话用自己那份，没配的跟着全局走。
+ * 面板上「恢复跟随全局」= 把这个键删掉。
+ *
+ * 键是 `chatId`，群聊就是群 openid，私聊是用户 openid——同一套逻辑。
+ *
+ * 内核命令（pluginId = `__core`）永远放行：否则群里连 /help 都没了，
+ * 用户还没法用面板，等于把自己锁在门外。
+ *
+ * @param {object} spec   cfg.plugins
+ * @param {string} chatId 会话 id
+ * @param {string} pluginId 插件 id
+ * @returns {boolean}
+ */
+export function pluginAllowedIn(spec, chatId, pluginId) {
+  if (!pluginId || pluginId === '__core') return true;
+  const own = spec?.groups?.[chatId];
+  if (!own) return true; // 这个会话没单独配，跟着全局
+  const mode = own.mode ?? 'include';
+  const list = new Set(own.list ?? []);
+  if (mode === 'all') return true;
+  if (mode === 'exclude') return !list.has(pluginId);
+  return list.has(pluginId); // include
+}
