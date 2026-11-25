@@ -20,11 +20,13 @@
 //   · api.use('pet').dispatch({ text, modality?, purpose?, force?, anim? }) → { ok, via:'pet'|'qq', ... }
 //   · focus.json 开着时自动轮次一律不发（也不回落）；force=true（面板手动测试）可绕过
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkSync, renameSync, copyFileSync, cpSync, rmSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkSync, renameSync, copyFileSync, cpSync, rmSync } from 'node:fs'
 import { join, dirname, sep, basename, extname } from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto'
-import { inflateRawSync } from 'node:zlib'
+import { createRequire } from 'node:module'
+import { homedir } from 'node:os'
+import { deflateRawSync, inflateRawSync } from 'node:zlib'
 
 const ONLINE_TTL = 60_000        // 心跳超时：60 秒内没轮询过 /events 就算离线
 const EVENT_LIMIT = 200          // 事件内存队列上限
@@ -34,14 +36,14 @@ const MIN_MS = 60_000            // 一分钟（碎碎念间隔/静默窗口都�
 export default {
   id: 'pet',
   name: '桌宠',
-  version: '1.0.3',
+  version: '1.1.0',
   api: 1,
-  description: '把大肥鱼请到桌面上：会冒气泡、做小动作，你在干活时也陪着你。',
+  description: '把大肥鱼请到桌面上：会冒气泡、做小动作，你在干活时也陪着她，还能用全局热键语音对讲（按一下开听、再按一下发送，ASR→对话→语音合成外放）。',
 
   defaults: {
     carrier: 'qq', modality: 'text', petFallbackToQQ: true, pack: 'default',
     // 默认素材包下载地址（「大肥鱼」形象包不进插件仓库，从素材仓库拉；网络不佳可换成任意镜像直链）
-    petPackUrl: 'https://github.com/accomplish07zrh-eng/dsh-aurabot-qq-mods/archive/refs/heads/main.zip',
+    petPackUrl: 'https://github.com/aureth-labs/dsh-aurabot-qq-mods/archive/refs/heads/main.zip',
     // Electron 下载镜像（末尾带 /；留空 = 用内置默认）。npm 与 zip 直装两条路都读它
     electronMirror: 'https://npmmirror.com/mirrors/electron/',
     // 碎碎念（桌宠自己的气泡流，与「主动搭话」完全独立：载体选 QQ 时她也会在桌面上自己嘟囔）
@@ -74,12 +76,51 @@ export default {
     chatBehaviorCooldownMinutes: 5,    // 两次聊天联动之间的全局冷却（分钟，1~1440）
     chatBehaviorMaxPerDay: 20,         // 聊天联动每日上限
     petScale: 1,                       // 人物大小倍率（0.5~2.0，1 = 原始 240px；客户端按窗口宽等比缩放）
+    petReleaseLand: true,              // 松手后落地：开 = 按甩出速度抛出去并落回屏幕底部（原行为）；关 = 松手停在哪就在哪
+    // 甩抛物理（1.0.14，面板 PR #284 六键中的两键）：客户端把服务端下发的 physics 叠在素材包默认之上
+    petGravity: 1400,                  // 下落加速度 px/s²（200~4000；1400 = dsh-pet 原版手感）
+    petRestitution: 0.78,              // 落地反弹保留速度比例（0.3~0.95；0.78 = Q 弹不疯跳）
+    petAnimRate: 1,                    // 动画节奏倍率（0.5~2）：>1 更活泼（空闲轮播间隔 ÷ 它）
+    petShowBalance: true,              // 右键菜单「查看余额」：开才显示菜单项
+    petClickChase: false,              // 点击扑上来抓鼠标（默认关；关 = 点了只播点击动画不追）
+    petTeaseChase: false,              // 晃鼠标勾引追（默认关；关 = 晃鼠标不扑）
+    // 对话框（主人找她聊的小窗，与碎碎念/聊天联动是三码事；永不发 QQ）
+    petChatEnabled: false,             // 总开关：默认关（仿行为大脑，面板手动打开）
+    petChatHotkey: 'Alt+P',            // 全局快捷键（单键 toggle）；留空 = 不启用；被占用保持关闭
+    petChatCloseKeyword: '关闭',        // 关闭对话框的关键字：输入框发送前命中直接关窗、不请求模型
+    petChatBlurHide: true,             // 失焦自动收起
+    petChatMaxEntries: 200,            // 历史最多保留条数（超限从头部截断）
+    petChatRetentionDays: 30,          // 历史保留天数（0 = 永久）
+    // 天气（一期，服务端接入）：城市留空 = 不接入；接口留空用内置默认（wttr.in，免 key）
+    petWeatherCity: '',
+    petWeatherUrl: '',                 // 接口地址模板，{city} 会被替换成编码后的城市名；返回纯文本即可
+    // 对外公网地址（远端直连，2026-11-02 起）：填了 http(s) 完整地址（如 https://bot.example.com），
+    // host.json 的 baseUrl 就写它，桌宠客户端可在用户自己电脑直连服务器插件。留空 = 全部行为与旧版一致（同机零退化）
+    publicBaseUrl: '',
+    // 安全项（2026-11-02）：明文 http 跨机默认阻断；令牌过期天数（0 = 不过期，老用户零退化）
+    allowInsecureRemote: false,
+    tokenTtlDays: 0,
+    // 可信反向代理（2026-11-02 安全审查 P1-1）：只有 socket 是回环、且来源地址命中这个列表时，
+    // 才相信 X-Forwarded-For 的**最后一跳**作为真实来源。留空 = 从不相信任何转发头（最安全）。
+    // 反代部署时填反代自己的地址，如 127.0.0.1（本机 nginx）或 172.17.0.1（容器网关）。
+    trustedProxy: '',
+    // 语音对讲（1.2.0，替代 1.1.2 打电话）：全局热键 toggle 触发，单轮 ASR→think→TTS→可选 RVC，协议见 /voice/talk
+    callEngine: 'native',                  // native = 插件自带合成（edge 锁定，失败退 Windows 语音）；sovits = 本地 GPT-SoVITS；voice = 「语音」页接管（豆包，用户自选才碰）
+    sovitsUrl: 'http://127.0.0.1:9880',    // GPT-SoVITS 服务地址（callEngine=sovits 时用；参考音频沿用「语音」页的 gptsovits 配置）
+    callRvc: false,                        // TTS 出稿后用「翻唱」模块的 RVC 音色变声（翻唱没就绪自动降级为不变声）
+    callRvcVoice: '',                      // 翻唱音色名（清单见翻唱模块 status().voices）
+    callTalkMode: 'toggle',                // toggle = 按一下开听、再按一下发送（globalShortcut 只有按下事件，故不用 PTT/VAD）
+    voiceHotkey: 'Alt+Space',              // 语音对讲全局热键（Electron globalShortcut 格式；留空 = 不启用）
+    callMaxChars: 120,                     // 一次对讲最多说多少字（口语要短）
+    callAsrUrl: 'http://127.0.0.1:8000',   // 备选耳朵：本地 faster-whisper（POST /v1/audio/transcriptions）
+    callMicDeviceId: '',                   // 对讲麦克风（客户端上报后存这里；空 = 系统默认）
+    callSpeakerDeviceId: '',               // 对讲扬声器（客户端上报后存这里；空 = 系统默认）
   },
   settings: [
     { key: 'carrier', label: '主动搭话载体', type: 'select', options: [{ value: 'qq', label: 'QQ 私聊' }, { value: 'pet', label: '桌宠气泡' }], hint: 'pet 时桌宠不在线会按下面的开关回落到 QQ；两边永不双发' },
     { key: 'modality', label: '气泡形式', type: 'select', options: [{ value: 'text', label: '文字气泡' }, { value: 'voice', label: '文字 + 语音' }], hint: '语音失败自动降级为纯文字' },
     { key: 'petFallbackToQQ', label: '桌宠离线回落 QQ', type: 'switch' },
-    { key: 'petPackUrl', label: '素材包下载地址', type: 'text', hint: '「大肥鱼」形象包 zip 直链（默认走 GitHub 素材仓库 dsh-aurabot-qq-mods；国内网络可换成 Gitee 等镜像直链）。zip 里素材要放文件夹（如 pet-pack/default-animation/），archive 自带的单层仓库目录会自动剥。装完插件后缺包自动下载，也可在面板手动重下' },
+    { key: 'petPackUrl', label: '素材包下载地址', type: 'text', hint: '「大肥鱼」形象包 zip 直链（默认走 GitHub 素材仓库 dsh-aurabot-qq-mods；国内网络可换成 Gitee 等镜像直链）。zip 里素材要放文件夹（如 pet-pack/default-animation/），archive 自带的单层仓库目录会自动剥。装完插件后缺包自动下载，也可在面板手动重下；zip 里带 pet-home/ 时小屋素材（manifest.json+图片）一并落位到 house/' },
     { key: 'electronMirror', label: 'Electron 下载镜像', type: 'text', hint: '装 Electron 时从哪下（末尾带 /）。默认 npmmirror（国内快）；连不上可换 https://github.com/electron/electron/releases/download/ 等。npm 装失败会自动改用 zip 直装' },
     { key: 'whisperEnabled', label: '碎碎念', type: 'switch', hint: '只出现在桌宠气泡里，不会发到 QQ；载体是 QQ 时照常生效' },
     { key: 'whisperSource', label: '碎碎念内容', type: 'select', options: [{ value: 'model', label: '她自己想一句（工作区看得到思考）' }, { value: 'pool', label: '用现成文案' }] },
@@ -109,6 +150,45 @@ export default {
     { key: 'chatBehaviorCooldownMinutes', label: '聊天联动冷却（分钟）', type: 'number', min: 1, max: 1440 },
     { key: 'chatBehaviorMaxPerDay', label: '聊天联动每日上限', type: 'number', min: 0, max: 9999 },
     { key: 'petScale', label: '人物大小（倍）', type: 'number', min: 0.5, max: 2, hint: '桌宠整体缩放倍率：0.5 = 一半大，2 = 两倍大，1 = 原始大小。面板「桌宠」卡的大小滑条改的也是这一项' },
+    { key: 'petReleaseLand', label: '松手后落地', type: 'switch', hint: '拖动松手后按甩出速度抛出去、落回屏幕底部（带 Q 弹挤压）；关掉则松手停在哪就在哪，不抛也不落' },
+    // 甩抛物理与互动开关（1.0.14，与面板 PR #284 六键同步：宿主白名单已登记，这里补模块侧声明与下发）
+    { key: 'petGravity', label: '下落加速度', type: 'number', min: 200, max: 4000, hint: '甩抛后往下掉的加速度（px/s²）。默认 1400（原版手感）；调小飘得慢（月球感），调大掉得快更利落' },
+    { key: 'petRestitution', label: '落地反弹系数', type: 'number', min: 0.3, max: 0.95, hint: '落地时保留多少速度反弹（0~1 取小数）。默认 0.78（Q 弹）；调小像砸在地上，调大接近 0.95 会停不下来地跳' },
+    { key: 'petAnimRate', label: '动画节奏倍率', type: 'number', min: 0.5, max: 2, hint: '空闲小动作的节奏快慢：1 = 正常，2 = 间隔减半更活泼，0.5 = 更慵懒。只影响动画间隔，不改变物理与移动速度' },
+    { key: 'petShowBalance', label: '右键「查看余额」', type: 'switch', hint: '开 = 桌宠右键菜单显示「查看余额」菜单项（点了向插件查询 DeepSeek 账户余额，气泡展示）。默认开；关 = 菜单里不出现这一项' },
+    { key: 'petClickChase', label: '点击扑鼠标', type: 'switch', hint: '点击桌宠时扑上来抓鼠标（带冷却）。默认关：关 = 只播点击动画，不追鼠标' },
+    { key: 'petTeaseChase', label: '晃鼠标勾引追', type: 'switch', hint: '在桌宠旁边快速晃鼠标时她可能扑上来追（带冷却）。默认关：关 = 晃鼠标不触发追逐' },
+    // 对话框（桌宠旁的小窗聊天：快捷键/右键菜单唤出，按碎碎念同款人格+记忆+当下状态回答，永不发 QQ）
+    { key: 'petChatEnabled', label: '对话框', type: 'switch', hint: '开桌宠旁的对话小窗：快捷键或右键菜单唤出，只聊在小窗/气泡里，绝不发 QQ' },
+    { key: 'petChatHotkey', label: '对话框快捷键', type: 'text', hint: '全局快捷键，按一次开、再按一次关（如 Alt+P）。留空 = 不启用；被别的程序占用时注册失败，桌宠会气泡提醒一次、功能保持关闭，此处的当前注册状态看「状态」卡' },
+    { key: 'petChatCloseKeyword', label: '关闭对话框的关键字', type: 'text', hint: '在对话框输入框里发送这句话 → 直接关窗、不请求模型。留空 = 不启用关键字关闭' },
+    { key: 'petChatBlurHide', label: '失焦自动收起', type: 'switch', hint: '点别处（对话框失焦）时自动收起小窗' },
+    { key: 'petChatMaxEntries', label: '对话历史最多保留条数', type: 'number', min: 10, max: 2000, hint: '本地小窗历史只存桌宠数据目录（不进 QQ、不进聊天记录），超限从头部截断；界面默认显示最近 50 条。注意：对话内容会作为模型请求发出去，模型自己决定记进长期记忆的条目另存，不受这里的条数/天数限制' },
+    { key: 'petChatRetentionDays', label: '对话历史保留天数', type: 'number', min: 0, max: 3650, hint: '0 = 永久保留；否则启动时 + 每日清理本地小窗历史（只管小窗历史，管不到模型记下的长期记忆）' },
+    // 小屋（复式场景窗）：素材/布局在数据目录 house/（目录即数据），开关只管入口显隐
+    { key: 'petHouseEnabled', label: '小屋', type: 'switch', hint: '右键桌宠「回小屋」打开复式小屋场景窗（移植自开源项目 dsh-pet-home，形象 CC BY-NC-SA 禁商用）。小屋素材（manifest.json 与图片）放数据目录 pet/house/ 里才有画面；没放素材时进屋会提示「素材未就绪」' },
+    // 天气（一期）：进 prompt 的「现在」段，她聊到出门/穿衣/下雨时接得上
+    { key: 'petWeatherCity', label: '天气城市', type: 'text', hint: '填城市名（如 上海）才接入天气；留空 = 不接入，所有天气逻辑静默跳过。填了之后插件会向天气接口（默认 wttr.in，可在下方替换地址）请求这个城市的天气，结果只进 prompt 和本地缓存，不会发给聊天对象；天气接口本身会看到城市名' },
+    { key: 'petWeatherUrl', label: '天气接口地址', type: 'text', hint: '高级：接口模板，{city} 会被替换成编码后的城市名，返回纯文本即可（如 https://wttr.in/{city}?format=%C+%t）。留空 = 用内置默认（wttr.in，免 key）；请求失败保留上一次缓存、不打扰' },
+    { key: 'publicBaseUrl', label: '对外公网地址（远端直连）', type: 'text', hint: '服务器部署（无桌面）时填插件对外地址，如 https://bot.example.com（带 https:// 前缀，末尾斜杠可省）。填了之后：host.json 的 baseUrl 写它，桌宠客户端可在你自己的电脑上直连服务器；面板「桌宠」页会出现「下载客户端包」按钮，服务器上的 Electron 安装/启动按钮自动隐藏。留空 = 同机模式，一切照旧。⚠ 跨机必须 https：明文 http 会被直接阻断（令牌与气泡在公网明文传输等于送人）' },
+    { key: 'allowInsecureRemote', label: '允许明文 http 跨机（不推荐）', type: 'switch', hint: '⚠ 仅内网自测：打开后允许 http:// 的非回环地址跨机连接，令牌与气泡内容明文传输，公网上等于把令牌送人。正常部署请用 https 反向代理，别开这个' },
+    { key: 'tokenTtlDays', label: '桌宠令牌有效期（天）', type: 'number', min: 0, max: 3650, hint: '0 = 永不过期（默认，老用户零影响）。设了天数后令牌到期即要求重新下发；到期后在面板点「轮换令牌」并重新下载客户端包' },
+    { key: 'trustedProxy', label: '可信反向代理地址', type: 'text', hint: '⚠ 只有放在反向代理后面才需要填。填反代自己的地址（如 127.0.0.1 = 本机 nginx，172.17.0.1 = 容器网关），多个用逗号分隔。只有「请求是从这个地址进来的」才会采信 X-Forwarded-For 的最后一跳作为真实来源，用于令牌失败限速与明文判定。留空 = 从不相信任何转发头（最安全）' },
+    // 语音对讲（1.2.0）：全局热键 toggle 触发，服务端 ASR→think→TTS→可选 RVC，永不发 QQ、无通话窗
+    { key: 'voiceHotkey', label: '对讲热键', type: 'text', hint: '全局热键，按一下开始听、再按一下发送（如 Alt+Space）。留空 = 不启用；被别的程序占用时桌宠会气泡提醒一次' },
+    { key: 'callEngine', label: '回答声音（嘴）', type: 'select', options: [
+      { value: 'native', label: '系统原生（默认，edge 合成，失败退 Windows 语音，不依赖豆包）' },
+      { value: 'sovits', label: '本地 GPT-SoVITS（参考音频音色）' },
+      { value: 'voice', label: '「语音」页接管（豆包；你自选接管时才碰）' },
+    ], hint: '只影响对讲里的声音；不改全局语音设置' },
+    { key: 'sovitsUrl', label: 'GPT-SoVITS 地址', type: 'text', hint: '回答声音选「本地 GPT-SoVITS」才用；参考音频沿用「语音」页里的 gptsovits 配置（ref_audio_path / prompt_text）' },
+    { key: 'callRvc', label: '回答变声（RVC）', type: 'switch', hint: 'TTS 出稿后用「翻唱」模块导入的音色再变一次声，说话唱歌同一个声音；翻唱没就绪时自动不变声并在状态里说明' },
+    { key: 'callRvcVoice', label: '回答变声音色', type: 'text', hint: '翻唱模块里导入的音色名（翻唱页能看到清单）；变声开关打开才生效' },
+    { key: 'callTalkMode', label: '对讲方式', type: 'select', options: [{ value: 'toggle', label: '按一下开听、再按一下发送（toggle）' }], hint: '热键只有按下事件，固定 toggle 模式：第一下开始录音、第二下发出去' },
+    { key: 'callMaxChars', label: '一次最多说多少字', type: 'number', min: 20, max: 300, hint: '口语回答别太长，长了反而不像人。默认 120' },
+    { key: 'callAsrUrl', label: '备选识别地址', type: 'text', hint: '优先用 DSH「语音输入」插件识别；它没开或音频不是 WAV 时退回这里（本地 faster-whisper，POST /v1/audio/transcriptions）。默认 http://127.0.0.1:8000；面板会显示识别是否就绪' },
+    { key: 'callMicDeviceId', label: '对讲麦克风', type: 'text', hint: '由客户端「设备选择」上报后存这里；留空 = 系统默认' },
+    { key: 'callSpeakerDeviceId', label: '对讲扬声器', type: 'text', hint: '由客户端「设备选择」上报后存这里；留空 = 系统默认' },
   ],
 
 
@@ -124,32 +204,199 @@ export default {
         return raw.trim() ? JSON.parse(raw) : fallback
       } catch { return fallback }
     }
-    const writeJsonAtomic = (file, data) => {
+    // 【安全审查 P1】host.json / host-token 里装着长期 bearer 令牌，落盘权限必须收紧到 0600
+    // （仅属主可读写）。Windows 上 chmod 基本无效（ACL 那套不认 mode），包在 try 里静默跳过即可；
+    // 真正起作用的场景是 Linux / macOS 服务器部署——多用户机器上别的账号不该读到令牌。
+    const chmodPrivate = (file) => {
+      try { chmodSync(file, 0o600) } catch { /* Windows 或不支持 mode 的文件系统：忽略 */ }
+    }
+    const writeJsonAtomic = (file, data, { private: isPrivate = false } = {}) => {
       mkdirSync(dirname(file), { recursive: true })
       const tmp = `${file}.${randomBytes(3).toString('hex')}.tmp`
-      writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8')
-      try { renameSync(tmp, file) } catch { writeFileSync(file, JSON.stringify(data, null, 2), 'utf8') }
+      const text = JSON.stringify(data, null, 2)
+      writeFileSync(tmp, text, 'utf8')
+      if (isPrivate) chmodPrivate(tmp)
+      try { renameSync(tmp, file) } catch { writeFileSync(file, text, 'utf8') }
+      if (isPrivate) chmodPrivate(file)
     }
 
     // ---------- 令牌（host-token：32~80 位 hex，已生成过就直接复用） ----------
+    // 【安全】令牌是长期 bearer，跨机部署时它就是唯一防线（Host/Origin 闸只防浏览器跨站，
+    // 不防直接发请求的脚本）。因此补三件事：
+    //   ① 轮换（rotateToken）：一键换新，旧的立即失效，客户端需重新下载包；
+    //   ② 过期（tokenTtlDays，默认 0 = 不过期，老用户零退化）；
+    //   ③ 签发时间落盘（host-token.json），供过期判定与界面展示。
     let tokenCache = ''
+    let tokenIssuedAt = 0 // 签发时间（ms）；0 = 老令牌文件没有记录，按「不过期」处理
+    const tokenMetaFile = () => api.dataDir('host-token.json')
     function token() {
       if (tokenCache) return tokenCache
       try {
         const raw = readFileSync(tokenFile(), 'utf8').trim()
-        if (/^[a-f0-9]{32,80}$/.test(raw)) { tokenCache = raw; return raw }
+        if (/^[a-f0-9]{32,80}$/.test(raw)) {
+          tokenCache = raw
+          try { tokenIssuedAt = Number(readJson(tokenMetaFile(), {})?.issuedAt) || 0 } catch { tokenIssuedAt = 0 }
+          return raw
+        }
       } catch {}
       const next = randomBytes(24).toString('hex') // 48 位 hex
+      tokenCache = next
+      tokenIssuedAt = Date.now()
       try {
         mkdirSync(dirname(tokenFile()), { recursive: true })
         writeFileSync(tokenFile(), next, 'utf8')
+        chmodPrivate(tokenFile()) // 只要属主可读写
+        writeJsonAtomic(tokenMetaFile(), { issuedAt: tokenIssuedAt }, { private: true })
       } catch (error) { api.log.warn('写 host-token 失败：', String(error.message || error)) }
-      tokenCache = next
       return next
+    }
+    /** 令牌是否已过期。tokenTtlDays 默认 0（永不过期）；老令牌无签发时间时按不过期处理。 */
+    function tokenExpired() {
+      const ttl = Number(api.settings().tokenTtlDays) || 0
+      if (ttl <= 0 || !tokenIssuedAt) return false
+      return Date.now() - tokenIssuedAt > ttl * 86400_000
+    }
+    /** 轮换令牌：生成新的、旧的立即失效，并重写 host.json（客户端必须重新下载包才能连上）。 */
+    function rotateToken() {
+      const next = randomBytes(24).toString('hex')
+      const prev = tokenCache
+      tokenCache = next
+      tokenIssuedAt = Date.now()
+      try {
+        mkdirSync(dirname(tokenFile()), { recursive: true })
+        writeFileSync(tokenFile(), next, 'utf8')
+        chmodPrivate(tokenFile()) // 只要属主可读写
+        writeJsonAtomic(tokenMetaFile(), { issuedAt: tokenIssuedAt }, { private: true })
+      } catch (error) {
+        tokenCache = prev // 写盘失败就回滚，别让运行中的令牌与磁盘不一致
+        return { ok: false, message: '轮换令牌失败：' + String(error?.message || error).slice(0, 120) }
+      }
+      try { writeHostFile(true) } catch {}
+      api.log.info('桌宠令牌已轮换：旧令牌立即失效，请在面板重新下载客户端包')
+      return { ok: true, message: '令牌已轮换：旧客户端会连不上，需重新下载客户端包', issuedAt: tokenIssuedAt }
     }
     const safeEqual = (a, b) => {
       if (!a || !b || a.length !== b.length) return false
       try { return timingSafeEqual(Buffer.from(a), Buffer.from(b)) } catch { return false }
+    }
+
+    // ---------- 令牌鉴权限速（公网部署防暴力猜） ----------
+    // 48 位 hex 的暴力空间本来就够大，但「无限次尝试」本身就是不该留的口子：
+    // 按来源 IP 记失败次数，超阈值后指数退避封禁（10 分钟窗口内 20 次失败 → 封 1 分钟，
+    // 每多 10 次失败封禁翻倍，上限 30 分钟）。只对「令牌错」计数，Host 闸拒绝不计。
+    const AUTH_FAIL_WINDOW_MS = 10 * 60 * 1000
+    const AUTH_FAIL_LIMIT = 20
+    const AUTH_BAN_MAX_MS = 30 * 60 * 1000
+    const authFails = new Map() // ip → { count, firstAt, bannedUntil }
+
+    // ---------- 真实来源判定（2026-11-02 安全审查 P1-1 / P1-2）----------
+    // 铁律：**socket 地址才是唯一可信的来源**。X-Forwarded-For 是请求方随便写的头，
+    // 直连暴露时客户端自带 `X-Forwarded-For: 1.2.3.4` 就能把自己伪装成任意 IP（绕过封禁、
+    // 或伪造受害者 IP 让正常人被封）。所以：
+    //   1) socket 不是回环 → 一律按 socket 判，转发头完全不看；
+    //   2) socket 是回环 → 如果来源命中 trustedProxy，才采信 XFF 的**最后一跳**
+    //      （最后一跳是反代自己追加的真实直连来源；前面几跳是客户端自报的，绝不采信）；
+    //   3) socket 是回环且未配 trustedProxy → 就是本机直连，按回环处理。
+    const normAddr = (a) => String(a || '').trim().replace(/^::ffff:/i, '').replace(/^\[|\]$/g, '')
+    const settingsList = (key) => String(api.settings()[key] || '').split(',').map((s) => normAddr(s)).filter(Boolean)
+    /** 请求的 socket 地址（剥离 IPv6-mapped 前缀，便于和回环/白名单比较）。 */
+    const socketAddr = (req) => normAddr(req?.socket?.remoteAddress || req?.connection?.remoteAddress || '')
+    /** socket 是否来自本机（含进程内直调：没有 socket 信息时按本机处理）。 */
+    function socketIsLoopback(req) {
+      const sock = socketAddr(req)
+      if (!sock) return true // 进程内直调（测试 / 内部转发）；真实 HTTP 一定有 remoteAddress
+      return isLoopbackHost(sock) || sock === '::1'
+    }
+    /** 这个请求是不是从「我们信任的反向代理」进来的（socket 命中 trustedProxy）。 */
+    function fromTrustedProxy(req) {
+      const list = settingsList('trustedProxy')
+      if (!list.length) return false
+      return list.includes(socketAddr(req))
+    }
+    /** 真实来源 IP：只用于限速计数与「是否本机」判定，绝不用于鉴权放行。 */
+    function clientIp(req) {
+      // 1) 直连（socket 非回环）：只信 socket，转发头一律不看
+      if (!socketIsLoopback(req)) return socketAddr(req) || 'unknown'
+      // 2) socket 回环：只有确认来源是可信反代，才看 XFF 最后一跳
+      if (fromTrustedProxy(req)) {
+        const hops = String(req?.headers?.['x-forwarded-for'] || '').split(',').map((x) => normAddr(x)).filter(Boolean)
+        if (hops.length) return hops[hops.length - 1] // 最后一跳 = 反代追加的真实来源
+      }
+      // 3) 本机直连（或配置了反代但请求没走它）
+      return socketAddr(req) || '127.0.0.1'
+    }
+    /** 请求是否算「本机来源」：给明文阻断、Host 闸等地方用，口径与 clientIp 一致。 */
+    function requestIsLocal(req) {
+      if (!socketIsLoopback(req)) return false
+      if (fromTrustedProxy(req)) {
+        const ip = clientIp(req)
+        return isLoopbackHost(ip)
+      }
+      return true
+    }
+    /** 返回封禁剩余毫秒（0 = 未封禁）。 */
+    function authBanRemaining(ip) {
+      const rec = authFails.get(ip)
+      if (!rec || !rec.bannedUntil) return 0
+      const left = rec.bannedUntil - Date.now()
+      if (left <= 0) { rec.bannedUntil = 0; return 0 }
+      return left
+    }
+    function recordAuthFail(ip) {
+      const now = Date.now()
+      let rec = authFails.get(ip)
+      if (!rec || now - rec.firstAt > AUTH_FAIL_WINDOW_MS) { rec = { count: 0, firstAt: now, bannedUntil: 0 }; authFails.set(ip, rec) }
+      rec.count += 1
+      if (rec.count >= AUTH_FAIL_LIMIT) {
+        const over = Math.floor((rec.count - AUTH_FAIL_LIMIT) / 10)
+        const ban = Math.min(AUTH_BAN_MAX_MS, 60_000 * Math.pow(2, over))
+        rec.bannedUntil = now + ban
+        api.log.warn(`桌宠：来源 ${ip} 令牌连续失败 ${rec.count} 次，封禁 ${Math.round(ban / 1000)} 秒`)
+      }
+      // 定期清理过期记录，防 Map 无限增长（低开销：只在写入时顺手清）
+      if (authFails.size > 512) {
+        for (const [k, v] of authFails) { if (now - v.firstAt > AUTH_FAIL_WINDOW_MS && !(v.bannedUntil > now)) authFails.delete(k) }
+      }
+    }
+    function recordAuthOk(ip) {
+      const rec = authFails.get(ip)
+      if (rec) authFails.delete(ip) // 成功即清空该 IP 的失败记录
+    }
+
+    // ---------- 远端直连（publicBaseUrl，2026-11-02）----------
+    // 单一真相：ext.pet.publicBaseUrl（api.settings() = defaults ∪ ext.pet，host.js 面板写入通道同键）。
+    // 合法 http(s) URL 才生效；显式配置优先于 X-Forwarded 兜底学习。未配置（空串/坏值）时
+    // writeHostFile / learnHost / guard 的行为与旧版逐字节一致——这是「同机零退化」的实现点。
+    const LOOPBACK_HOSTS = ['127.0.0.1', 'localhost', '::1']
+    let learnedPublic = '' // 反代 X-Forwarded-Proto/Host 兜底学习的对外地址（只在没显式配置时用）
+    /** 明文 http 是否被允许用于跨机直连。默认**不允许**：令牌与气泡内容在公网明文传输等于送人。
+     *  内网自测（如 http://192.168.1.5）可显式开 ext.pet.allowInsecureRemote 放行，
+     *  但那只适合「自己知道自己在内网」的场景。回环地址永远允许（不跨机）。 */
+    const insecureRemoteAllowed = () => api.settings().allowInsecureRemote === true
+    /** 当前生效的对外地址：{ url, host } 或 null（未配置且未学到 → 纯同机模式）。 */
+    function publicBase() {
+      const raw = String(api.settings().publicBaseUrl || '').trim().replace(/\/+$/, '')
+      if (/^https?:\/\//i.test(raw)) {
+        try { const u = new URL(raw); if (u.hostname) return { url: raw, host: u.hostname.toLowerCase().replace(/^\[|\]$/g, '') } } catch {}
+      }
+      if (learnedPublic) {
+        try { const u = new URL(learnedPublic); if (u.hostname) return { url: learnedPublic, host: u.hostname.toLowerCase().replace(/^\[|\]$/g, '') } } catch {}
+      }
+      return null
+    }
+    /** 对外地址是否是不安全的明文（http 且非回环）。用于 host.json 写盘警告与面板提示。 */
+    function publicBaseInsecure() {
+      const pb = publicBase()
+      if (!pb) return false
+      return /^http:\/\//i.test(pb.url) && !isLoopbackHost(pb.host)
+    }
+    const isLoopbackHost = (h) => LOOPBACK_HOSTS.includes(String(h || '').toLowerCase().replace(/^\[|\]$/g, ''))
+    /** Host/Origin 主机名是否放行：回环 或 与对外地址主机名一致（端口段忽略，真正鉴权交给 x-pet-token）。 */
+    const hostAllowed = (hostname) => {
+      const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '')
+      if (isLoopbackHost(h)) return true
+      const pb = publicBase()
+      return Boolean(pb && h === pb.host)
     }
 
     // ---------- host.json（baseUrl 端口会漂移：从请求 Host 头学习） ----------
@@ -163,15 +410,44 @@ export default {
         version: 1,
         // 端口未就绪写 null（客户端 readHost 的正则不匹配就一直等，不再写假的 :0 造成自举死锁）；
         // 真实端口由宿主启动时经 setWebPort() 注入，Host 头学习保留作漂移纠正。
-        baseUrl: knownPort ? `http://127.0.0.1:${knownPort}` : null,
+        // 远端直连：配置了 publicBaseUrl 时 baseUrl 一律写它（api 字段照旧）；未配置时与旧版逐字节一致。
+        baseUrl: publicBase() ? publicBase().url : (knownPort ? `http://127.0.0.1:${knownPort}` : null),
         token: token(),
         api: `/aurabot/api`,
         pluginVersion: api.version,
         updatedAt: new Date(now).toISOString(),
       }
-      try { writeJsonAtomic(hostFile(), data) } catch (error) { api.log.warn('写 host.json 失败：', String(error.message || error)) }
+      // 明文跨机警告：不让它静悄悄地跑（令牌与气泡在公网明文传输 = 送人）
+      if (publicBaseInsecure()) {
+        if (insecureRemoteAllowed()) {
+          api.log.warn(`桌宠对外地址是明文 http（${data.baseUrl}）：已按 allowInsecureRemote 放行，仅建议内网使用`)
+        } else {
+          api.log.error(`桌宠对外地址是明文 http（${data.baseUrl}）：**已阻断跨机访问**。请在反向代理上启用 https，或在配置里显式打开 allowInsecureRemote（只建议内网自测）`)
+        }
+      }
+      // host.json 内含 bearer 令牌，落盘权限收紧到 0600（POSIX 平台生效）
+      try { writeJsonAtomic(hostFile(), data, { private: true }) } catch (error) { api.log.warn('写 host.json 失败：', String(error.message || error)) }
     }
-    /** 从请求 Host 头学习真实端口（回环校验也看它）；变了就重写 host.json。 */
+    /** 反代 X-Forwarded-Proto/Host 兜底学习对外地址（只在未显式配置 publicBaseUrl 时生效）。
+     *  安全铁律：**只能在 token 鉴权通过之后调用**——学习会改写 host.json 的 baseUrl，
+     *  若在鉴权前调用，任何未鉴权的外部请求都能投毒 host.json，还能借 hostAllowed() 绕过 Host 闸，
+     *  最终把桌宠客户端的 bearer 令牌引到攻击者服务器。 */
+    function learnForwardedPublic(req) {
+      // 显式配置优先：面板填了 publicBaseUrl 就完全不认反代头（防伪造头覆盖真实配置）
+      if (String(api.settings().publicBaseUrl || '').trim()) return false
+      const fwdHost = String(req?.headers?.['x-forwarded-host'] || '').split(',')[0].trim()
+      const fwdProto = String(req?.headers?.['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase()
+      if (!fwdHost || !['http', 'https'].includes(fwdProto)) return false
+      const candidate = `${fwdProto}://${fwdHost}`.replace(/\/+$/, '')
+      if (candidate === learnedPublic) return true
+      learnedPublic = candidate
+      if (publicBase()) writeHostFile(true)
+      return true
+    }
+    /** 从请求 Host 头学习真实端口（回环校验也看它）；变了就重写 host.json。
+     *  远端直连模式下：① 回环 Host 的端口学习停用（一次经反代的请求会把 host.json 的远端地址冲掉）；
+     *  ② 非回环 Host 这里只做解析不做任何写入——X-Forwarded 对外地址学习已搬到
+     *     learnForwardedPublic()，且必须等 token 鉴权通过后才允许调用（见 guard）。 */
     function learnHost(req) {
       const raw = String(req?.headers?.host || '')
       // IPv6 字面量 [::1]:端口 或 普通主机:端口；贪婪匹配会把端口吃进主机名，这里显式分分支
@@ -179,7 +455,9 @@ export default {
       if (!m) return null
       const host = String(m[1] || '').toLowerCase()
       const port = m[2] || ''
-      if (!['127.0.0.1', 'localhost', '::1'].includes(host)) return { host, port, loopback: false }
+      if (!isLoopbackHost(host)) return { host, port, loopback: false }
+      // 远端模式：Host 头端口学习停用（写远端地址时不看本机端口）；同机模式照旧学习漂移
+      if (publicBase()) return { host, port, loopback: true }
       if (port && port !== knownPort) { knownPort = port; writeHostFile(true) }
       return { host, port, loopback: true }
     }
@@ -196,29 +474,62 @@ export default {
     }
     const portReady = () => Boolean(knownPort)
 
-    // ---------- 准入：回环 Host → 非 GET 同源 + JSON → 定长令牌比对 ----------
+    // ---------- 准入：回环/对外地址 Host → 非 GET 同源 + JSON → 定长令牌比对 ----------
+    // 远端直连（2026-11-02）：Host/Origin 的主机名 ∈ {回环, publicBaseUrl 主机名} 即放行（端口段忽略）；
+    // x-pet-token 定长比对一字不动——跨机场景它就是唯一防线。
     function deny(res, code, message) {
       api.core.http.send(res, code, { ok: false, message })
       return { ok: false, code, message }
     }
     function guard(req, res, { queryTokenOk = false } = {}) {
+      // learnHost 只保留「回环 Host 的端口漂移学习」（同机模式原样工作）；它不再碰对外地址。
       const learned = learnHost(req)
-      if (!learned || !learned.loopback) return deny(res, 403, '只接受本机回环访问（Host 头必须指向 127.0.0.1）')
+      // Host 闸保持严格：放行集合只来自两处——回环，或显式配置的 publicBaseUrl。
+      // 绝不「Host 与请求自报的 X-Forwarded-Host 一致就放行」：X-Forwarded-* 不是浏览器禁设头，
+      // 页面 JS 用 fetch 就能伪造，那样 DNS rebinding 场景下一发就绕过 Host 闸。
+      if (!learned || !hostAllowed(learned.host)) return deny(res, 403, '只接受本机回环或已配置对外地址（publicBaseUrl）的访问（Host 头不匹配）')
+      // 明文 http 的跨机访问默认阻断：令牌与气泡内容在公网明文传输，等于把唯一防线送出去。
+      // 【安全审查 P1-2】判定必须看**连接来源**（socket / 可信反代末跳），绝不能看 Host 头——
+      // 远端只要发 `Host: 127.0.0.1` 就能把 learned.loopback 骗成 true 从而跳过明文阻断。
+      // 回环请求不受影响（同机零退化）；内网自测可用 allowInsecureRemote 显式放行。
+      if (!requestIsLocal(req) && publicBaseInsecure() && !insecureRemoteAllowed()) {
+        return deny(res, 403, '拒绝明文 http 的跨机访问：请给插件配上 https（反向代理）后再用远端直连；仅内网自测可显式打开 allowInsecureRemote')
+      }
       const isGet = (req.method || 'GET').toUpperCase() === 'GET'
       if (!isGet) {
+        // 【安全审查 P1-4 / P2】CSRF 双保险：
+        // ① Origin 有值就必须是白名单主机（回环 / 已配置对外地址），否则跨站拒绝；
+        // ② 强制 application/json——浏览器发 `text/plain` 的「简单请求」不触发预检，
+        //    是 CSRF 最常用的手法；要求 JSON 后跨站请求必须过 CORS 预检，直接卡死。
+        // 注意：GET 的客户端包下载没有令牌泄露风险（要带 x-pet-token 才能过鉴权），
+        //      但它另有一道「只允许 GET + no-store」，见 /client-package 路由。
         const origin = String(req.headers?.origin || '')
         if (origin) {
           try {
             const o = new URL(origin)
-            if (!['127.0.0.1', 'localhost', '[::1]'].includes(o.hostname.toLowerCase())) return deny(res, 403, '跨站请求被拒绝')
+            if (!hostAllowed(o.hostname)) return deny(res, 403, '跨站请求被拒绝')
           } catch { return deny(res, 403, '跨站请求被拒绝') }
         }
         const ct = String(req.headers?.['content-type'] || '')
         if (!ct.includes('application/json')) return deny(res, 415, '写操作必须是 application/json')
       }
       const q = api.core.http.query(req)
+      const ip = clientIp(req)
+      // 先看这个 IP 是否正处于令牌暴力尝试的封禁期（公网部署必需：无限次试令牌的口子不能留）
+      const banned = authBanRemaining(ip)
+      if (banned > 0) return deny(res, 429, `令牌连续失败次数过多，请 ${Math.ceil(banned / 1000)} 秒后再试`)
       const given = String(req.headers?.['x-pet-token'] || (queryTokenOk ? q.token || '' : '') || '')
-      if (!safeEqual(given, token())) return deny(res, 401, '桌宠令牌无效：先运行一次桌宠客户端（令牌在数据目录 pet/host-token）')
+      if (!safeEqual(given, token())) {
+        recordAuthFail(ip)
+        return deny(res, 401, '桌宠令牌无效：先运行一次桌宠客户端（令牌在数据目录 pet/host-token）')
+      }
+      // 令牌本身对但已过期：提示轮换，不当作普通鉴权失败计数（持有正确令牌的人不是攻击者）
+      if (tokenExpired()) return deny(res, 401, '桌宠令牌已过期（tokenTtlDays）：请在面板点「轮换令牌」并重新下载客户端包')
+      recordAuthOk(ip)
+      // 鉴权已通过才允许「学习并写盘」。顺序不能反：学习会改写 host.json 的 baseUrl，而 hostAllowed()
+      // 又读它——一旦挪到 token 校验之前，任何未鉴权的伪造 Host/X-Forwarded 请求都能把 baseUrl 投毒成
+      // 攻击者地址，同时借被污染的 publicBase() 绕过 Host 闸，最终把桌宠客户端的 bearer 令牌引到攻击者服务器。
+      learnForwardedPublic(req)
       return { ok: true, query: q }
     }
 
@@ -260,6 +571,41 @@ export default {
     function petScale() {
       const s = Number(api.settings().petScale)
       return Number.isFinite(s) && s > 0 ? Math.min(2, Math.max(0.5, s)) : 1
+    }
+
+    /** 松手后落地开关：读不到一律当开（保持原物理行为），别让配置坏了把抛掷弄丢。 */
+    function petReleaseLand() {
+      return api.settings().petReleaseLand !== false
+    }
+
+    // ---------- 甩抛物理与互动开关（1.0.14，面板 PR #284 六键的服务端口径） ----------
+    /** 甩抛物理参数：从设置读 gravity/restitution，坏值回落 defaults 口径（gravity 1400 / restitution 0.78）。
+     *  客户端把它叠在素材包 physics 默认之上（设置优先于素材包默认），见 pet-client/main.js 的 pet:throw。 */
+    function petPhysics() {
+      const def = { gravity: 1400, restitution: 0.78 }
+      const g = Number(api.settings().petGravity)
+      const r = Number(api.settings().petRestitution)
+      return {
+        gravity: Number.isFinite(g) && g > 0 ? Math.min(4000, Math.max(200, g)) : def.gravity,
+        restitution: Number.isFinite(r) && r > 0 ? Math.min(0.95, Math.max(0.3, r)) : def.restitution,
+      }
+    }
+    /** 动画节奏倍率（0.5~2）：坏值回落 1（正常节奏），客户端把空闲轮播间隔除以它。 */
+    function petAnimRate() {
+      const v = Number(api.settings().petAnimRate)
+      return Number.isFinite(v) && v > 0 ? Math.min(2, Math.max(0.5, v)) : 1
+    }
+    /** 右键「查看余额」开关：`!== false` 口径 —— 默认开，只有明确写 false 才关（与 petReleaseLand 同口径）。 */
+    function petShowBalance() {
+      return api.settings().petShowBalance !== false
+    }
+    /** 点击扑鼠标开关：`=== true` 口径 —— 默认关，明确写 true 才开（高危偏好默认关，与 behaviorCloseWindowEnabled 同口径）。 */
+    function petClickChase() {
+      return api.settings().petClickChase === true
+    }
+    /** 晃鼠标勾引追开关：`=== true` 口径，同上。 */
+    function petTeaseChase() {
+      return api.settings().petTeaseChase === true
     }
 
     // ---------- pet pack（换形象，仿 dsh-pet 目录约定；运行数据只写数据目录） ----------
@@ -478,7 +824,19 @@ export default {
      * @param {boolean} o.noFallback  桌面独占内容（碎碎念）用：桌宠离线时宁可不发，也绝不回落 QQ
      * @returns {Promise<{ok:boolean, via?:'pet'|'qq', reason?:string, fallback?:boolean, message?:object}>}
      */
-    async function dispatch({ text, modality = '', purpose = '', force = false, anim = '', via = '', noFallback = false } = {}) {
+    // emotionProfile（情绪画像 {valence -1~1, arousal 0~1}）：目的引擎/调用方随消息带来，
+    // 只做钳制透传；客户端用它给气泡上「辉光」（冷暖色随 valence、强弱随 arousal）。
+    const sanitizeProfile = (p) => {
+      const v = Number(p?.valence)
+      const a = Number(p?.arousal)
+      if (!Number.isFinite(v) && !Number.isFinite(a)) return null
+      return {
+        valence: Number.isFinite(v) ? Math.min(1, Math.max(-1, v)) : 0,
+        arousal: Number.isFinite(a) ? Math.min(1, Math.max(0, a)) : 0.4,
+      }
+    }
+
+    async function dispatch({ text, modality = '', purpose = '', force = false, anim = '', via = '', noFallback = false, emotion = '', emotionProfile = null } = {}) {
       const t = String(text || '').trim()
       if (!t) return { ok: false, reason: 'empty' }
       const s = api.settings()
@@ -503,6 +861,8 @@ export default {
           audio,
           voiceError: audio ? '' : voiceError,
           mood: moodNow(),
+          emotion: String(emotion || '').slice(0, 20),
+          emotionProfile: sanitizeProfile(emotionProfile),
           purpose: String(purpose || '').slice(0, 40),
           messageId: randomBytes(6).toString('hex'),
         }
@@ -515,6 +875,10 @@ export default {
       }
       if (!noFallback && s.petFallbackToQQ !== false) {
         try {
+          // 注意：这条是「桌宠离线时回落 QQ」的主动私聊主人，已经被宿主出站门闸覆盖
+          // （api.sendText 会带 sourceModule 进门闸，被策略拦下时返回 null）。
+          // 不要改成 api.proactive.submit：桌宠回落是即时兜底，被拦时代码会静默丢掉这条，
+          // 主人会以为她没说话。保持直发的旧写法，由宿主门闸决定放不放。
           await api.sendText(ownerChatId(), t)
           api.log.info(`桌宠离线，主动发言回落 QQ：${t.slice(0, 40)}`)
           return { ok: true, via: 'qq', fallback: true }
@@ -566,7 +930,7 @@ export default {
     // 表现是「行为层整体不生效」而面板一切正常，极难发现。这里拿「模板签名」和「生成时记下的签名」
     // 对账：缺文件 / 内容不符 / 模板比生成物新，一律在 status 里明说，面板据此提示重新生成。
     // 只读对账，绝不自动覆盖用户手改过的 app/（生成走 installClient，由面板按钮触发）。
-    const CLIENT_FILES = ['main.js', 'preload.js', 'index.html', 'physics.js', 'packmeta.js', 'behavior.js']
+    const CLIENT_FILES = ['main.js', 'preload.js', 'index.html', 'physics.js', 'packmeta.js', 'behavior.js', 'chat.html', 'voice-talk.html', 'voice-talk.js', 'house.html', 'house.js', 'package.json']
     const CLIENT_OPTIONAL = ['README.md'] // 只复制不校验：文档缺失不影响运行
     const CLIENT_STAMP = 'client-stamp.json' // 生成时写进 app/ 的签名凭据
     const fileHash = (p) => {
@@ -668,6 +1032,32 @@ export default {
       }
     }
 
+    /** 反算 app/ 现状的模板签名（算法与 clientTemplate 一致）：与生成凭据里的 sig 相等 = 生成后没被人手改过。 */
+    function installedSig() {
+      const dest = appDir()
+      const files = CLIENT_FILES.map((f) => ({ name: f, hash: fileHash(join(dest, f)) })).filter((f) => f.hash)
+      if (!files.length) return ''
+      return createHash('sha1').update(files.map((f) => `${f.name}:${f.hash}`).join('|')).digest('hex').slice(0, 12)
+    }
+
+    /** 自动重装过期客户端（治「市场升级到新版后，点小屋还是白屏/黑屏」）：
+     *  用户端升级模块只换插件里的模板，数据目录 app/ 这个客户端副本不会跟着更新，
+     *  旧壳没有新修复照样白屏，而很多人不会去看面板提示。这里在模块启动时兜一道：
+     *  只覆盖「生成后没被手改」的 app/（现状签名 == 生成凭据签名）；手改过的一律不动，
+     *  维持只读对账由面板提示。 */
+    function autoRegenClient() {
+      try {
+        const stamp = readJson(join(appDir(), CLIENT_STAMP), null)
+        if (!stamp || typeof stamp.sig !== 'string' || !stamp.sig) return null // 没凭据的老安装：不猜，交给面板
+        const tpl = clientTemplate()
+        if (!tpl.sig || stamp.sig === tpl.sig) return null // 已一致 / 没模板：不动
+        if (installedSig() !== stamp.sig) return null // 被手改过：绝不自动覆盖
+        const r = installClient()
+        if (r?.ok) api.log.info('客户端模板有更新且 app/ 未被手改：已自动重新生成（正在运行的 Electron 重启后生效）')
+        return r
+      } catch (error) { api.log.warn('客户端自动重装失败（不影响使用）：', String(error?.message || error)); return null }
+    }
+
     // ---------- Electron 三键（面板按钮 / HTTP 路由共用）：安装 → 启动 → 停止 ----------
     // 安装走 npmmirror 镜像（真机直连 github release 会 fetch failed）；启动前必须清掉
     // 子进程环境的 ELECTRON_RUN_AS_NODE（宿主环境必带，不清则 Electron 以纯 Node 模式启动即崩）。
@@ -696,7 +1086,23 @@ export default {
     // 测试钩子：测试注入 fake spawn/kill，不打真网络、不真启动 Electron
     const petHooks = api.__petTestHooks || {}
     const spawnFn = petHooks.spawn || nodeSpawn
-    const killFn = petHooks.kill || ((pid) => { process.kill(Number(pid), 'SIGTERM'); return true })
+    const killFn = petHooks.kill || ((pid) => process.kill(pid, 'SIGTERM'))
+    const probePid = petHooks.probePid || ((pid) => process.kill(pid, 0))
+    function processAlive(pid) {
+      try { return probePid(pid) } catch (error) { return error?.code === 'EPERM' }
+    }
+    // Electron 宿主保险（真机踩过）：DSH 跑在 Electron 里，**主进程的 fs 带 asar 补丁**——路径里只要出现
+    // `.asar`，openSync 就先按「打开 asar 包」处理，去读文件头；读不到直接抛
+    // `Invalid package <path>`（Electron 45 实测，堆栈落在 node:electron/js2c/node_init 的 openSync 包装）。
+    // 官方 electron zip 里恰好有 `resources/default_app.asar`，所以纯 Node 下没问题的解压/清理/搬运
+    // 一旦放进插件宿主就全炸在写这个文件上（历史上的「zip 直装失败：Invalid package …」就是它）。
+    // 解法：所有可能碰到 `.asar` 的写/删/复制都走 Electron 暴露的 original-fs（未打补丁的 node fs）；
+    // 纯 Node（测试、裸机 CLI）没有 original-fs，退回 node:fs 即可。测试可用 petHooks.fsRaw 注入假 fs 断言。
+    const rawFs = () => {
+      if (petHooks.fsRaw) return petHooks.fsRaw
+      try { return createRequire(import.meta.url)('original-fs') } catch { return null }
+    }
+
     const cleanElectronEnv = () => {
       const env = { ...process.env }
       delete env.ELECTRON_RUN_AS_NODE
@@ -705,11 +1111,23 @@ export default {
     }
     const procFile = () => api.dataDir('process.json')
     let electronProc = null // { pid, startedAt }
-    const recordedPid = () => {
-      if (electronProc) return electronProc
-      const p = readJson(procFile(), null)
-      if (p && Number.isInteger(p.pid) && p.pid > 0) electronProc = p
-      return electronProc
+    let electronStartup = null
+    function forgetProcess(proc) {
+      if (electronProc === proc) electronProc = null
+      const saved = readJson(procFile(), null)
+      if (saved?.pid === proc.pid && saved.startedAt === proc.startedAt) {
+        try { unlinkSync(procFile()) } catch {}
+      }
+    }
+    function recordedPid() {
+      const proc = electronProc || readJson(procFile(), null)
+      if (!Number.isSafeInteger(proc?.pid) || proc.pid <= 0) return null
+      if (!processAlive(proc.pid)) {
+        forgetProcess(proc)
+        return null
+      }
+      electronProc = proc
+      return proc
     }
 
     // ---------- zip 直装（无 npm 环境的兜底，自动化优先） ----------
@@ -733,13 +1151,44 @@ export default {
         if (m) ver = m[0]
       } catch {} // package.json 读不到就用兜底版本
       const platform = process.platform === 'darwin' ? 'darwin' : process.platform === 'win32' ? 'win32' : 'linux'
-      return { ver, url: `${electronMirror()}${ver}/electron-v${ver}-${platform}-${process.arch}.zip` }
+      const file = `electron-v${ver}-${platform}-${process.arch}.zip`
+      return { ver, platform, arch: process.arch, file, url: `${electronMirror()}${ver}/${file}` }
+    }
+
+    // 【安全审查 P1 闭环】Electron zip 的 sha256 校验：zip 从镜像下，但校验清单**优先从 GitHub 官方**拉
+    // （防「镜像被整体篡改，zip 和 SHASUMS 一起换」）；官方不可达（国内网络常见）再降级用镜像自己的
+    // SHASUMS，并打警告。两处都拿不到 → 中止安装（宁可装不上，不装一个没验过签的运行时）。
+    async function electronSha256({ ver, platform, arch, file }) {
+      const sources = [
+        { url: `https://github.com/electron/electron/releases/download/v${ver}/SHASUMS256.txt`, tag: '官方' },
+        { url: `${electronMirror()}${ver}/SHASUMS256.txt`, tag: '镜像' },
+      ]
+      let lastError = null
+      for (const { url, tag } of sources) {
+        try {
+          const buf = await fetchZipTo(url, join(appDir(), `SHASUMS256.${tag}.txt`), { maxBytes: 1024 * 1024 })
+          const text = buf.toString('utf8')
+          const line = text.split(/\r?\n/).find((l) => l.trim().endsWith(file))
+          if (!line) throw new Error(`清单里没有 ${file}（版本/平台对不上？）`)
+          const sha = line.trim().split(/\s+/)[0]
+          if (!/^[a-f0-9]{64}$/i.test(sha)) throw new Error('清单里的 sha256 格式不对')
+          if (tag === '镜像') api.log.warn(`Electron 校验清单来自镜像（官方 GitHub 拉取失败：${lastError ? String(lastError.message || lastError).slice(0, 120) : '未知原因'}），完整性保证降级`)
+          return sha
+        } catch (error) { lastError = error }
+      }
+      throw new Error(`官方与镜像的 SHASUMS256.txt 都没拿到（${String(lastError?.message || lastError).slice(0, 160)}）`)
     }
 
     // 纯 JS zip 解压（支持存储/deflate 两种压缩法；带 zip-slip 防护；unix 上恢复可执行位）
     function unzipTo(zip, destDir) {
       const u32 = (o) => zip.readUInt32LE(o)
       const u16 = (o) => zip.readUInt16LE(o)
+      // 写文件/改权限必须走未打补丁的 fs：官方 zip 里的 resources/default_app.asar，在 Electron 宿主里
+      // 用 node:fs 写会抛 `Invalid package <path>`（见 rawFs 注释）。测试钩子可注入 fsRaw 验证这一点。
+      const fsx = rawFs()
+      const writeRaw = fsx?.writeFileSync ? fsx.writeFileSync.bind(fsx) : writeFileSync
+      const chmodRaw = fsx?.chmodSync ? fsx.chmodSync.bind(fsx) : chmodSync
+
       // 从尾部往前找 EOCD（0x06054b50），兼容最长 64KB 的 zip 注释区
       let eocd = -1
       for (let i = zip.length - 22; i >= Math.max(0, zip.length - 22 - 65535); i--) {
@@ -771,19 +1220,143 @@ export default {
         const dataOff = localOff + 30 + u16(localOff + 26) + u16(localOff + 28)
         const data = method === 0 ? Buffer.from(zip.subarray(dataOff, dataOff + csize)) : inflateRawSync(zip.subarray(dataOff, dataOff + csize))
         mkdirSync(dirname(target), { recursive: true })
-        writeFileSync(target, data)
-        if (process.platform !== 'win32' && ((externAttr >>> 16) & 0o111)) chmodSync(target, 0o755) // unix 可执行位
+        writeRaw(target, data)
+        if (process.platform !== 'win32' && ((externAttr >>> 16) & 0o111)) chmodRaw(target, 0o755) // unix 可执行位
       }
     }
 
     // 下载（可被测试钩子 petHooks.fetchZip 覆盖，不打真网络）
-    async function fetchZipTo(url, file) {
+    // 【安全审查 P1】补三件事：
+    //   ① 只允许 https（镜像地址里写 http:// 一律拒绝——下载的是要执行的二进制/素材包，
+    //      明文信道可被中间人换包；本机回环地址除外，方便自测）；
+    //   ② 大小上限（防止被超大响应撑爆磁盘/内存）；
+    //   ③ 可选 sha256 校验：调用方给了期望值就逐字节校验，不匹配直接丢弃。
+    const DOWNLOAD_MAX_BYTES = 512 * 1024 * 1024 // 512MB：官方 electron zip 目前 ~110MB，留足余量
+    function assertDownloadUrl(url) {
+      let u
+      try { u = new URL(String(url)) } catch { throw new Error(`下载地址不是合法 URL：${String(url).slice(0, 120)}`) }
+      if (u.protocol === 'https:') return u
+      // 明文只放行本机回环（自测/本地镜像），公网一律要求 https
+      const host = String(u.hostname || '').toLowerCase().replace(/^\[|\]$/g, '')
+      if (u.protocol === 'http:' && (LOOPBACK_HOSTS.includes(host) || host === '::1')) return u
+      throw new Error(`拒绝从明文 http 下载（${u.protocol}//${u.hostname}）：请把镜像地址改成 https，或改用本机镜像`)
+    }
+    async function fetchZipTo(url, file, { sha256: expectSha = '', maxBytes = DOWNLOAD_MAX_BYTES } = {}) {
+      assertDownloadUrl(url) // 先挡明文，再发请求
       const fetchZip = petHooks.fetchZip || ((u) => fetch(u))
       const res = await fetchZip(url)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      // Content-Length 能提前拒绝超大响应（拿不到也没关系，下面还有实际字节数兜底）
+      const declared = Number(res.headers?.get?.('content-length') || 0)
+      if (declared > maxBytes) throw new Error(`响应过大（${declared} 字节 > 上限 ${maxBytes}）`)
       const buf = Buffer.from(await res.arrayBuffer())
+      if (buf.length > maxBytes) throw new Error(`下载内容过大（${buf.length} 字节 > 上限 ${maxBytes}）`)
+      if (expectSha) {
+        const got = createHash('sha256').update(buf).digest('hex')
+        if (got.toLowerCase() !== String(expectSha).toLowerCase()) {
+          throw new Error(`sha256 校验失败（期望 ${String(expectSha).slice(0, 12)}…，实际 ${got.slice(0, 12)}…）：文件可能被篡改，已丢弃`)
+        }
+      }
       writeFileSync(file, buf)
       return buf
+    }
+
+    // ---------- 客户端包分发（远端直连，2026-11-02）----------
+    // 服务器部署（配了 publicBaseUrl）时用户在自己电脑跑桌宠：把 app/ 目录 + 当前 host.json
+    // （远端模式下 baseUrl 已是远端地址、内含 token）打成一个 zip 供面板下载。
+    // zip 打包用 Node 自带 zlib 纯 JS 实现（deflate + CRC32，零依赖、零外部命令），不引第三方大件。
+    const CRC32_TABLE = (() => {
+      const t = new Int32Array(256)
+      for (let n = 0; n < 256; n++) {
+        let c = n
+        for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+        t[n] = c
+      }
+      return t
+    })()
+    const crc32 = (buf) => {
+      let c = -1
+      for (let i = 0; i < buf.length; i++) c = CRC32_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8)
+      return (c ^ -1) >>> 0
+    }
+    /** entries: [{ name(用 / 分隔), data(Buffer|string) }] → zip Buffer（deflate + CRC32；条目带 UTF-8 名字标志）。 */
+    function zipBuffer(entries) {
+      const parts = []
+      const centrals = []
+      let offset = 0
+      for (const e of entries) {
+        const name = Buffer.from(String(e.name), 'utf8')
+        const raw = Buffer.isBuffer(e.data) ? e.data : Buffer.from(e.data)
+        let def = null
+        try { def = deflateRawSync(raw) } catch { def = null } // 压不动就按存储法写
+        const useDeflate = def && def.length < raw.length
+        const data = useDeflate ? def : raw
+        const crc = crc32(raw)
+        const lh = Buffer.alloc(30)
+        lh.writeUInt32LE(0x04034b50, 0)     // local file header 签名
+        lh.writeUInt16LE(20, 4)             // 解压所需版本
+        lh.writeUInt16LE(0x0800, 6)         // 标志位 bit11：UTF-8 文件名
+        lh.writeUInt16LE(useDeflate ? 8 : 0, 8)
+        lh.writeUInt16LE(0, 10)             // 时间 / 日期（0 即可，解压端不校验）
+        lh.writeUInt16LE(0, 12)
+        lh.writeUInt32LE(crc, 14)
+        lh.writeUInt32LE(data.length, 18)   // 压缩后大小
+        lh.writeUInt32LE(raw.length, 22)    // 原始大小
+        lh.writeUInt16LE(name.length, 26)
+        lh.writeUInt16LE(0, 28)             // extra 长度
+        parts.push(lh, name, data)
+        const cd = Buffer.alloc(46)
+        cd.writeUInt32LE(0x02014b50, 0)     // central directory 签名
+        cd.writeUInt16LE(20, 4)             // 创建用版本
+        cd.writeUInt16LE(20, 6)             // 解压所需版本
+        cd.writeUInt16LE(0x0800, 8)         // UTF-8 名字
+        cd.writeUInt16LE(useDeflate ? 8 : 0, 10)
+        cd.writeUInt32LE(crc, 16)
+        cd.writeUInt32LE(data.length, 20)
+        cd.writeUInt32LE(raw.length, 24)
+        cd.writeUInt16LE(name.length, 28)
+        // extra/comment/磁盘号/内部外部属性全 0（普通文件；unzipTo 只靠类型位判符号链接，0 安全）
+        cd.writeUInt32LE(offset, 42)        // local header 偏移
+        centrals.push(Buffer.concat([cd, name]))
+        offset += lh.length + name.length + data.length
+      }
+      const cdBuf = Buffer.concat(centrals)
+      const eocd = Buffer.alloc(22)
+      eocd.writeUInt32LE(0x06054b50, 0)
+      eocd.writeUInt16LE(entries.length, 8)
+      eocd.writeUInt16LE(entries.length, 10)
+      eocd.writeUInt32LE(cdBuf.length, 12)
+      eocd.writeUInt32LE(offset, 16) // central directory 起始偏移
+      return Buffer.concat([...parts, cdBuf, eocd])
+    }
+    /** 打客户端包：installClient() 先生成 app/，只收客户端源码文件 + 附 host.json。
+     *  【为什么不再递归整目录】app/ 里可能有 electronInstall() 装的 node_modules/electron/dist/
+     *  （win 平台 electron.exe 单文件就 249MB），整目录递归打出来的 zip 实测 161MB——既拖慢下载，
+     *  又是个白送的流量放大器。客户端只需要那几个源码文件，按白名单逐个取（不递归）。 */
+    const PACKAGE_FILES = [...CLIENT_FILES, ...CLIENT_OPTIONAL]
+    function clientPackage() {
+      try {
+        const r = installClient()
+        if (!r.ok) return { ok: false, message: r.message }
+        const dir = appDir()
+        const entries = []
+        // 白名单取文件（不递归）：即使 app/ 下被塞了任何大文件也不会进包
+        for (const name of PACKAGE_FILES) {
+          const p = join(dir, name)
+          if (!existsSync(p)) continue
+          try { entries.push({ name, data: readFileSync(p) }) } catch (err) { api.log.warn(`打客户端包跳过 ${name}：`, String(err?.message || err)) }
+        }
+        if (!entries.some((x) => x.name === 'main.js')) return { ok: false, message: '客户端包里没有 main.js：pet-client 模板可能缺失（' + join(api.dir, 'pet-client') + '）' }
+        try { entries.push({ name: 'host.json', data: readFileSync(hostFile(), 'utf8') }) } catch {}
+        return {
+          ok: true,
+          filename: 'aurabot-pet-client.zip',
+          buffer: zipBuffer(entries),
+          message: `客户端包已生成（${entries.length} 个文件，含内嵌 host.json）。解压后在本机装好 Electron，在解压目录运行 npx electron main.js`,
+        }
+      } catch (error) {
+        return { ok: false, message: '打客户端包失败：' + String(error?.message || error).slice(0, 160) }
+      }
     }
 
     // ---------- 默认素材包自动下载（装完即有，用户零操作） ----------
@@ -805,6 +1378,33 @@ export default {
     }
 
     /**
+     * 小屋素材是否缺失。完整性 = manifest.json 在 + 至少一张底图/manifest 引用的图在盘上。
+     * 只有 manifest、一张图都没有（上次下载中断只落了一半）也算缺 → 走自动补全；
+     * manifest 引用的图全部不在盘上同样算缺。已有文件不会被补全覆盖（见 ensureDefaultPack 落位循环）。
+     */
+    function housePackMissing() {
+      try {
+        const dir = houseDir()
+        if (!existsSync(join(dir, 'manifest.json'))) return true
+        const IMG = /\.(?:jpe?g|png|webm|gif)$/i
+        const files = readdirSync(dir)
+        if (!files.some((f) => IMG.test(f))) return true // manifest 在但一张图都没有：上次中断只落了一半
+        try {
+          // manifest 里引用到的图（底图/姿势帧/patch）至少一张在，全缺也算半截包
+          const refs = []
+          const walk = (v) => {
+            if (typeof v === 'string') { if (IMG.test(v)) refs.push(v) }
+            else if (Array.isArray(v)) v.forEach(walk)
+            else if (v && typeof v === 'object') Object.values(v).forEach(walk)
+          }
+          walk(JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')))
+          if (refs.length && !refs.some((f) => existsSync(join(dir, f)))) return true
+        } catch {} // manifest 解析不了不当缺：落位时原样收下的清单，客户端自己会报
+        return false
+      } catch { return true }
+    }
+
+    /**
      * 在解压暂存目录里找素材包根（含 default-animation/ 的那一层）。找不到返回 null。
      * 素材仓库约定：**素材必须放文件夹里**（不在仓库根目录摊 106 个 webm），文件夹名随意（pet-pack/、default/、大肥鱼/ 都行）。
      * 所以要按层找：包根 = 暂存目录本身 / <仓库名>-<分支>/ / <任意一层文件夹>/ / <仓库名>-<分支>/<任意一层文件夹>/。
@@ -822,6 +1422,25 @@ export default {
       return null
     }
 
+    /** 在解压暂存目录里找小屋素材根（含 manifest.json 且同层有图片的那一层）。与 findPackRoot 同思路按层找。 */
+    function findHouseRoot(stage) {
+      const isHouseRoot = (dir) => {
+        try {
+          if (!existsSync(join(dir, 'manifest.json'))) return false
+          return readdirSync(dir).some((f) => /\.(?:jpe?g|png|webm|gif)$/i.test(f))
+        } catch { return false }
+      }
+      const subDirs = (dir) => {
+        try { return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => join(dir, e.name)) } catch { return [] }
+      }
+      if (isHouseRoot(stage)) return stage
+      for (const d1 of subDirs(stage)) {
+        if (isHouseRoot(d1)) return d1
+        for (const d2 of subDirs(d1)) if (isHouseRoot(d2)) return d2
+      }
+      return null
+    }
+
     /**
      * 下载并落位 default 素材包。
      * @param {boolean} force true = 包已在也重新下载（面板「重新下载素材包」）；false = 只在缺包时下载
@@ -829,7 +1448,7 @@ export default {
      */
     async function ensureDefaultPack(force = false) {
       if (packDownloading) return { ok: false, message: '素材包正在下载中，别急' }
-      if (!force && !defaultPackMissing()) return { ok: true, skipped: true, message: 'default 素材包已就位，不用下载' }
+      if (!force && !defaultPackMissing() && !housePackMissing()) return { ok: true, skipped: true, message: '素材包已就位，不用下载' }
       const url = String(api.settings().petPackUrl || '').trim()
       if (!url) return { ok: false, message: '没有配置素材包下载地址（面板「桌宠」页 →「素材包」卡里填）' }
       packDownloading = true
@@ -840,23 +1459,47 @@ export default {
         mkdirSync(stage, { recursive: true })
         unzipTo(zip, stage)
         const root = findPackRoot(stage)
-        if (!root) throw new Error('zip 里找不到 default-animation/（内容结构不对：素材要放文件夹里，如 pet-pack/default-animation/）')
-        mkdirSync(animsDirOf('default'), { recursive: true })
+        const houseRoot0 = findHouseRoot(stage)
+        if (!root && !houseRoot0) throw new Error('zip 里找不到 default-animation/（内容结构不对：素材要放文件夹里，如 pet-pack/default-animation/）')
         let copied = 0
-        for (const f of readdirSync(join(root, 'default-animation'))) {
-          const src = join(root, 'default-animation', f)
-          try { if (!statSync(src).isFile()) continue } catch { continue }
-          copyFileSync(src, join(animsDirOf('default'), f))
-          copied++
+        if (root) {
+          mkdirSync(animsDirOf('default'), { recursive: true })
+          for (const f of readdirSync(join(root, 'default-animation'))) {
+            const src = join(root, 'default-animation', f)
+            try { if (!statSync(src).isFile()) continue } catch { continue }
+            copyFileSync(src, join(animsDirOf('default'), f))
+            copied++
+          }
+          if (copied === 0) throw new Error('default-animation/ 里没有动画文件（.webm）')
+          for (const f of ['default-config.json', 'default-manifest.json']) {
+            const src = join(root, f)
+            try { if (statSync(src).isFile()) copyFileSync(src, join(packsDir(), f)) } catch {}
+          }
+          api.log.info(`桌宠：素材包已下载落位（${copied} 个动画 → packs/default-animation/）`)
         }
-        if (copied === 0) throw new Error('default-animation/ 里没有动画文件（.webm）')
-        for (const f of ['default-config.json', 'default-manifest.json']) {
-          const src = join(root, f)
-          try { if (statSync(src).isFile()) copyFileSync(src, join(packsDir(), f)) } catch {}
+        // 小屋素材同包搭车：zip 里哪一层有 manifest.json + 图片（pet-home/ 这种层）就整层落位到 house/。
+        // 旧镜像 zip 里没有小屋素材时静默跳过，不算失败——小屋没素材只是「素材未就绪」，不挡形象包。
+        let houseCopied = 0
+        const houseRoot = houseRoot0
+        if (houseRoot) {
+          mkdirSync(houseDir(), { recursive: true })
+          for (const f of readdirSync(houseRoot)) {
+            if (!/^(manifest\.json|.*\.(?:jpe?g|png|webm|gif))$/i.test(f)) continue // 只收清单与图片，README 之类不带
+            const src = join(houseRoot, f)
+            try { if (!statSync(src).isFile()) continue } catch { continue }
+            const dst = join(houseDir(), f)
+            if (!force && existsSync(dst)) continue // 已有文件不动：手改过的/上次已落位的不覆盖不回滚，只补缺的
+            copyFileSync(src, dst)
+            houseCopied++
+          }
+          if (houseCopied) {
+            api.log.info(`桌宠：小屋素材已下载落位（${houseCopied} 个文件 → house/）`)
+            ensureHouseRoutes()
+          }
         }
-        api.log.info(`桌宠：素材包已下载落位（${copied} 个动画 → packs/default-animation/）`)
-        ensureAssetRoutes()
-        return { ok: true, count: copied, message: `素材包下载完成（${copied} 个动画）` }
+        if (copied || houseCopied) { ensureAssetRoutes(); if (houseCopied) ensureHouseRoutes() } // 落位后立刻注册素材路由，不等 120s 兜底
+        const extra = houseCopied ? `，小屋素材 ${houseCopied} 个` : ''
+        return { ok: true, count: copied, houseCount: houseCopied, message: `素材包下载完成（${copied} 个动画${extra}）` }
       } catch (error) {
         const msg = `素材包下载失败：${String(error?.message || error).slice(0, 200)}`
         api.log.warn(msg)
@@ -873,7 +1516,7 @@ export default {
     if (!api.__petTestHooks) {
       const kick = setTimeout(() => { ensureDefaultPack().catch(() => {}) }, 5_000)
       kick.unref?.()
-      api.every(PACK_CHECK_MS, () => { if (defaultPackMissing()) ensureDefaultPack().catch(() => {}) }, '素材包自动落位')
+      api.every(PACK_CHECK_MS, () => { if (defaultPackMissing() || housePackMissing()) ensureDefaultPack().catch(() => {}) }, '素材包自动落位')
     }
 
     // 官方 electron zip 是「扁平包」：electron.exe / electron 直接在压缩包根目录，没有 dist/ 前缀
@@ -901,27 +1544,38 @@ export default {
 
     /** 把 src 里的条目整体搬进 dest（同盘 rename；跨盘/被占用时回退「复制 + 删源」）。 */
     function moveInto(src, dest) {
+      // 搬运目标里含 resources/default_app.asar：复制/删源同样要走未打补丁的 fs（见 rawFs 注释）
+      const fsx = rawFs()
+      const cpRaw = fsx?.cpSync ? fsx.cpSync.bind(fsx) : cpSync
+      const rmRaw = fsx?.rmSync ? fsx.rmSync.bind(fsx) : rmSync
       mkdirSync(dest, { recursive: true })
       for (const name of readdirSync(src)) {
         const from = join(src, name)
         const to = join(dest, name)
         try { renameSync(from, to) } catch {
-          cpSync(from, to, { recursive: true })
-          rmSync(from, { recursive: true, force: true })
+          cpRaw(from, to, { recursive: true })
+          rmRaw(from, { recursive: true, force: true })
         }
       }
     }
 
     async function electronInstallZip(exe) {
-      const { ver, url } = electronZipUrl()
+      const meta = electronZipUrl()
+      const { ver, url, file } = meta
       const zipFile = join(appDir(), 'electron.zip')
       const pkgRoot = join(appDir(), 'node_modules', 'electron')
       const stage = join(pkgRoot, '.unzip')
+      // 清目录也得走原始 fs：上一次失败留下的 .unzip 里就有 default_app.asar，
+      // 在 Electron 宿主里用 node:fs 递归删会同样抛 Invalid package
+      const fsx = rawFs()
+      const rmRaw = fsx?.rmSync ? fsx.rmSync.bind(fsx) : rmSync
       try {
-        const zip = await fetchZipTo(url, zipFile)
+        // 【安全审查 P1 闭环】先拿校验清单再下 zip：sha256 对不上就直接拒绝安装
+        const expectSha = await electronSha256(meta)
+        const zip = await fetchZipTo(url, zipFile, { sha256: expectSha })
         // 能走到这里说明 pkgRoot 里本来就没有可用安装：清空重装。顺手清掉旧版本留下的垃圾
         // （旧版把扁平 zip 直接解到 pkgRoot，留下 electron.exe + 一百多 MB 散文件）和 npm 的半成品。
-        try { rmSync(pkgRoot, { recursive: true, force: true }) } catch (error) {
+        try { rmRaw(pkgRoot, { recursive: true, force: true }) } catch (error) {
           throw new Error(`旧的 electron 目录删不掉（${String(error?.code || error?.message || error)}）：先点「停止桌宠」再装`)
         }
         mkdirSync(stage, { recursive: true })
@@ -940,7 +1594,7 @@ export default {
         return { ok: false, message: `zip 直装失败：${String(error?.message || error).slice(0, 240)}（可换个网络再点一次，或看 USER-MANUAL 的手动安装教程）` }
       } finally {
         try { unlinkSync(zipFile) } catch {}
-        try { rmSync(stage, { recursive: true, force: true }) } catch {}
+        try { rmRaw(stage, { recursive: true, force: true }) } catch {}
       }
     }
 
@@ -950,12 +1604,13 @@ export default {
       if (!existsSync(join(appDir(), 'main.js'))) return { ok: false, message: '还没生成客户端：先点「下载 / 生成客户端」' }
       // 有 npm-cli 就走 npm（老行为，保持不变）；没有（DSH 自带运行时/裸机）就走 zip 直装，零环境依赖。
       const cli = npmCli()
-      if (!cli) return electronInstallZip(exe)
+      if (!cli || !existsSync(join(appDir(), 'package.json'))) return electronInstallZip(exe)
       const out = await new Promise((resolve) => {
         let tail = ''
         let child = null
         try {
-          child = spawnFn(process.execPath, [cli, 'install', '-D', 'electron'], {
+          // 保留生成时的 package.json 内容和签名，按指定版本安装。
+          child = spawnFn(process.execPath, [cli, 'install', '--no-save', `electron@${electronZipUrl().ver}`], {
             cwd: appDir(),
             env: { ...process.env, ELECTRON_MIRROR: electronMirror() },
             windowsHide: true,
@@ -982,43 +1637,79 @@ export default {
       }
     }
 
-    function launch() {
+    function launchFailure(reason) {
+      const message = `桌宠启动失败：${String(reason).slice(0, 240)}`
+      api.log.warn(message)
+      return { ok: false, message }
+    }
+
+    async function launch() {
+      if (electronStartup) return electronStartup
       if (online().online) return { ok: true, alreadyRunning: true, message: '桌宠已经在跑了（心跳正常），不用重复启动' }
+      const running = recordedPid()
+      if (running) return { ok: true, alreadyRunning: true, pid: running.pid, message: '桌宠进程已在运行，尚未收到心跳' }
       const exe = electronExe()
-      if (!existsSync(exe)) return { ok: false, message: 'Electron 还没安装：先点「安装 Electron」' }
-      if (!existsSync(join(appDir(), 'main.js'))) return { ok: false, message: 'app/main.js 不见了：先点「下载 / 生成客户端」' }
+      if (!existsSync(exe)) return launchFailure('Electron 还没安装：先点「安装 Electron」')
+      if (!existsSync(join(appDir(), 'main.js'))) return launchFailure('app/main.js 不见了：先点「下载 / 生成客户端」')
+      if (!existsSync(join(appDir(), 'package.json'))) return launchFailure('app/package.json 不见了：请重新生成客户端')
+      let child
       try {
         // 分离进程启动；env 必须去掉 ELECTRON_RUN_AS_NODE（见 cleanElectronEnv）
-        const child = spawnFn(exe, ['main.js'], { cwd: appDir(), env: cleanElectronEnv(), detached: true, stdio: 'ignore', windowsHide: true })
-        child.on?.('error', (error) => api.log.warn('桌宠启动失败：', error.message)) // 没人听就是未捕获异常，会带走 DSH
-        child.unref?.()
-        electronProc = { pid: child.pid, startedAt: Date.now() }
-        try { writeJsonAtomic(procFile(), electronProc) } catch {}
-        api.log.info(`桌宠已启动（pid ${child.pid}）`)
-        return { ok: true, pid: child.pid, message: `桌宠已启动（pid ${child.pid}），等它连上就有心跳了` }
+        child = spawnFn(exe, ['main.js'], { cwd: appDir(), env: cleanElectronEnv(), detached: true, stdio: 'ignore', windowsHide: true })
       } catch (error) {
-        return { ok: false, message: '启动失败：' + String(error?.message || error).slice(0, 160) }
+        return launchFailure(error?.message || error)
       }
+      const proc = { pid: child.pid, startedAt: Date.now() }
+      electronStartup = new Promise((resolve) => {
+        let starting = true
+        const finish = (result) => {
+          starting = false
+          clearTimeout(timer)
+          resolve(result)
+        }
+        const timer = setTimeout(() => {
+          if (!Number.isSafeInteger(proc.pid) || proc.pid <= 0 || !processAlive(proc.pid)) {
+            finish(launchFailure('Electron 进程未能通过启动后的存活检查'))
+            return
+          }
+          electronProc = proc
+          try { writeJsonAtomic(procFile(), proc) } catch (error) { api.log.debug(`进程文件写入失败：${error.message}`) }
+          api.log.info(`桌宠进程已启动（pid ${proc.pid}）`)
+          finish({ ok: true, pid: proc.pid, message: `桌宠进程已启动（pid ${proc.pid}），等它连上就有心跳了` })
+        }, petHooks.startupGraceMs ?? 3500)
+        child.once('error', (error) => {
+          if (starting) finish(launchFailure(error.message))
+          else api.log.warn(`桌宠进程错误：${error.message}`)
+        })
+        child.once('exit', (code, signal) => {
+          const reason = signal ? `信号 ${signal}` : `退出码 ${code}`
+          if (starting) finish(launchFailure(`Electron 在启动检查期间退出（${reason}）`))
+          else if (electronProc === proc) {
+            forgetProcess(proc)
+            const message = `桌宠进程已退出（${reason}）`
+            if (code === 0) api.log.info(message)
+            else api.log.warn(message)
+          }
+        })
+        child.unref()
+      }).finally(() => { electronStartup = null })
+      return electronStartup
     }
 
     function stop() {
       const p = recordedPid()
       if (!p) return { ok: false, message: '没有正在运行的桌宠进程记录' }
-      let killed = true
       try { killFn(p.pid) } catch (error) {
-        // ESRCH = 进程本来就不在了：清理记录、按已停止处理，别让面板卡在「停不掉」
-        if (String(error?.code) === 'ESRCH') {
-          electronProc = null
-          try { unlinkSync(procFile()) } catch {}
+        // ESRCH = 进程在检查后退出：清理记录、按已停止处理。
+        if (error?.code === 'ESRCH') {
+          forgetProcess(p)
           return { ok: true, pid: p.pid, message: `桌宠进程（pid ${p.pid}）已经不在了，清掉了记录` }
         }
-        killed = false
         return { ok: false, pid: p.pid, message: '停止失败：' + String(error?.message || error).slice(0, 120) }
       }
-      electronProc = null
-      try { unlinkSync(procFile()) } catch {}
+      forgetProcess(p)
       api.log.info(`桌宠已停止（pid ${p.pid}）`)
-      return { ok: killed, pid: p.pid, message: killed ? `已停止桌宠（pid ${p.pid}）` : '停止指令没有确认成功，看看进程还在不在' }
+      return { ok: true, pid: p.pid, message: `已停止桌宠（pid ${p.pid}）` }
     }
 
     // ---------- pet pack 与素材路由（P1/P4）：packs 目录只读给客户端，404 绝不回落别的包 ----------
@@ -1066,6 +1757,86 @@ export default {
         }
       } catch (error) { api.log.warn('注册素材路由失败：', String(error?.message || error)) }
     }
+
+    // ================= 小屋（复式场景窗） =================
+    // 移植自 zizic04/dsh-pet-home（MIT）；小屋素材 CC BY-NC-SA 4.0 禁止商用，本机自用。
+    // 目录即数据（与 packs 同款思路）：manifest.json + 全部图片平铺在 dataDir('house')，
+    // 一条条注册精确路由（route 不做前缀匹配，原始名与百分号编码名都要注册）。
+    // 没放素材时 /house/manifest 返回 404，客户端显示「素材未就绪」提示，不白屏。
+    const houseDir = () => api.dataDir('house')
+    const houseStateFile = () => api.dataDir('house-state.json')
+    const houseEnabled = () => api.config().petHouseEnabled !== false
+    const MIME_HOUSE = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.json': 'application/json; charset=utf-8' }
+    const registeredHouseAssets = new Set()
+    function serveHouseAsset(res, file) {
+      const dir = houseDir()
+      const full = join(dir, file)
+      let buf = null
+      try { buf = readFileSync(full) } catch {}
+      if (!buf || !full.startsWith(dir)) return api.core.http.send(res, 404, { ok: false, message: '小屋素材不存在' })
+      try {
+        res.statusCode = 200
+        res.setHeader?.('content-type', MIME_HOUSE[file.toLowerCase().slice(file.lastIndexOf('.'))] || 'application/octet-stream')
+        res.setHeader?.('cache-control', 'private, max-age=3600') // 带 token 的 URL 不进共享缓存
+        res.setHeader?.('content-length', String(buf.length))
+        res.end?.(buf)
+      } catch {}
+    }
+    function ensureHouseRoutes() {
+      try {
+        if (!existsSync(houseDir())) return
+        for (const f of readdirSync(houseDir())) {
+          if (!statSync(join(houseDir(), f)).isFile()) continue
+          const keys = new Set([`/asset/house/${f}`, `/asset/house/${encodeURIComponent(f)}`])
+          if ([...keys].every((k) => registeredHouseAssets.has(k))) continue
+          for (const key of keys) {
+            if (registeredHouseAssets.has(key)) continue
+            registeredHouseAssets.add(key)
+            api.route(key, (req, res) => {
+              if (!guard(req, res, { queryTokenOk: true }).ok) return
+              learnHost(req)
+              serveHouseAsset(res, f) // 严格隔离：只服务 house 目录里这个文件
+            })
+          }
+        }
+      } catch (error) { api.log.warn('注册小屋素材路由失败：', String(error?.message || error)) }
+    }
+    function houseStatus() {
+      let files = 0
+      try { files = readdirSync(houseDir()).filter((f) => statSync(join(houseDir(), f)).isFile()).length } catch {}
+      return {
+        enabled: houseEnabled(),
+        files,
+        manifestReady: existsSync(join(houseDir(), 'manifest.json')),
+        state: readJson(houseStateFile(), {}),
+      }
+    }
+    api.route('/house/manifest', (req, res) => {
+      if (!houseEnabled()) return api.core.http.send(res, 404, { ok: false, message: '小屋功能未开启' })
+      if (!guard(req, res, { queryTokenOk: true }).ok) return
+      learnHost(req)
+      serveHouseAsset(res, 'manifest.json')
+    })
+    // 小屋状态：客户端上报（夜里/白天、当前状态、所在楼层、互动台词）；行为大脑三期会读它
+    api.route('/house/state', async (req, res) => {
+      if (!guard(req, res, {}).ok) return
+      learnHost(req)
+      if (req.method === 'POST') {
+        const body = req.__json || {}
+        const cur = readJson(houseStateFile(), {})
+        const next = {
+          ...cur,
+          ...(body.night === undefined ? {} : { night: Boolean(body.night) }),
+          ...(body.state === undefined ? {} : { state: String(body.state || '').slice(0, 32) }),
+          ...(body.floor === undefined ? {} : { floor: Number(body.floor) === 2 ? 2 : 1 }),
+          ...(body.say === undefined ? {} : { lastSay: String(body.say || '').slice(0, 200), lastSayAt: Date.now() }),
+        }
+        writeJsonAtomic(houseStateFile(), next)
+        emit('house', next)
+        return api.core.http.send(res, 200, { ok: true, state: next })
+      }
+      return api.core.http.send(res, 200, { ok: true, state: readJson(houseStateFile(), {}) })
+    })
 
     // ================= 干活状态（DSH 会话事件 → 动画 / 结束提醒） =================
     // 订阅在 host.js（ctx.on('session/event') 已经有一条订阅了），转发到这里：
@@ -1186,7 +1957,7 @@ export default {
       st.recent = Array.isArray(st.recent) ? st.recent.filter((x) => typeof x === 'string').slice(-8) : []
       return st
     }
-    const saveWhisper = (st) => { try { writeJsonAtomic(whisperFile(), st) } catch {} }
+    const saveWhisper = (st) => { try { writeJsonAtomic(whisperFile(), st) } catch (e) { api.log.warn(`碎碎念状态写盘失败：${e.message}`) } }
     /** 醒着窗口（沿用「主动搭话」的 awakeFrom~awakeTo，不再造第二套真相）。 */
     function awakeWindow() {
       const su = api.config().speakUp || {}
@@ -1304,7 +2075,7 @@ export default {
         persona ? `【你的人格设定】\n${String(persona).slice(0, 1200)}` : '',
         '【你是一只待在主人电脑桌面角落的小桌宠（大肥鱼）】',
         mem.length ? `【你记得的事】\n${mem.map((t) => '- ' + t).join('\n')}` : '【你记得的事】（记忆库还很空）',
-        `【现在】\n${busy}\n时段：${part}。心情：${moodNow()}。`,
+        `【现在】\n${busy}\n时段：${part}。心情：${moodNow()}。${weatherLine()}`,
         st.recent.length ? `【你最近已经嘟囔过】\n${st.recent.slice(-3).map((x) => '「' + x + '」').join('、')}（不要重复这些话）` : '',
         [
           '【怎么写这一句】',
@@ -1415,6 +2186,8 @@ export default {
       { action: 'nudge_window', desc: '把你正在用的窗口一路推到屏幕边界外（只剩一条边露着），按住 5 秒再同步拉回原位（不改任何内容）', params: '可选 {"title":"窗口标题片段"}，不填就用前台窗口', say: '（把这个窗口推出去）' },
       { action: 'close_window', desc: '🔴 把你正在用的窗口优雅关掉（等价点右上角 X，程序会自己问要不要保存）', params: '可选 {"title":"窗口标题片段"}，不填就用前台窗口', say: '（这个窗口碍事，关掉）' },
       { action: 'say', desc: '只说一句话不做动作', params: '{"text":"要说的话"}', say: '' },
+      // 小屋动作（三期）：开小屋窗 + 在屋里跳到一个状态；客户端主进程拦截执行（house.js 的 STATES 键）
+      { action: 'enter_house', desc: '回小屋：打开小屋场景窗，她进屋里过日子；可指定去哪（沙发玩手机/餐桌吃饭/书桌办公/床上睡觉/衣柜换装/阳台吹风/厨房找吃的/客厅玩耍），不指定就自由活动', params: '可选 {"key":"sofa|dine|desk|bedphone|sleep|wardrobe|balcony|kitchen|play"}，不填自由活动', say: '（回屋里待会儿）' },
     ]
     /** 动作 → 默认台词（`say` 动作用 params.text，不在这里）。 */
     const BEHAVIOR_SAY = Object.fromEntries(BEHAVIOR_ACTIONS.map((a) => [a.action, a.say || '']))
@@ -1475,6 +2248,10 @@ export default {
           .map((x) => x.trim().toLowerCase())
           .filter((x) => x && ALL_ACTIONS.has(x)),
       )
+      // 抓鼠标默认关（2026-11-07）：petClickChase / petTeaseChase 任一为 false（默认都 false）
+      // 就把 chase_cursor 塞进禁用清单，AI 动作表、反应层（点击/勾引）、聊天联动简报共用这份口径；
+      // 两个都开时不塞，恢复原有扑鼠标行为。与面板手填的禁用清单合并去重（Set 天然去重）。
+      if (!petClickChase() || !petTeaseChase()) disabledSet.add('chase_cursor')
       return {
         enabled: s.behaviorEnabled !== false,
         minMinutes,
@@ -1507,7 +2284,7 @@ export default {
         : []
       return st
     }
-    const saveBehavior = (st) => { try { writeJsonAtomic(behaviorFile(), st) } catch {} }
+    const saveBehavior = (st) => { try { writeJsonAtomic(behaviorFile(), st) } catch (e) { api.log.warn(`行为大脑状态写盘失败：${e.message}`) } }
     function planBehavior(st, b, now = Date.now()) {
       const span = Math.max(1, b.maxMinutes - b.minMinutes)
       let at = now + (b.minMinutes + Math.round(Math.random() * span)) * MIN_MS
@@ -1848,7 +2625,7 @@ export default {
       st.lastChatId = String(st.lastChatId || '').slice(0, 40)
       return st
     }
-    const saveChatBhv = (st) => { try { writeJsonAtomic(chatFile(), st) } catch {} }
+    const saveChatBhv = (st) => { try { writeJsonAtomic(chatFile(), st) } catch (e) { api.log.warn(`聊天联动状态写盘失败：${e.message}`) } }
     /** 生效范围判定：白名单非空按精确 chatId 匹配；留空 = 只有主人私聊。 */
     function chatAllowed(chatId, cb) {
       const id = String(chatId || '')
@@ -1866,6 +2643,8 @@ export default {
       const action = String(obj.action || '').trim()
       if (action === 'none') return { action: 'none' }
       if (!CHAT_ACTIONS.has(action)) return null
+      // 2026-11-01：主人禁用的动作聊天联动也不能选（chase_cursor 在安分子集里，禁了就该跳过）。
+      if (behaviorSettings().disabledSet.has(action)) return null
       const params = action === 'say'
         ? { text: String((obj.params && obj.params.text) || '').trim().slice(0, 60) }
         : {}
@@ -1879,7 +2658,9 @@ export default {
     function chatPrompt(msg) {
       let persona = ''
       try { persona = api.core?.personas?.current?.() || '' } catch {}
-      const table = BEHAVIOR_ACTIONS.filter((a) => CHAT_ACTIONS.has(a.action))
+      // 2026-11-01：被主人禁用的动作从简报表里摘掉（禁了 chase_cursor 就别让 AI 挑它）。
+      const banned = behaviorSettings().disabledSet
+      const table = BEHAVIOR_ACTIONS.filter((a) => CHAT_ACTIONS.has(a.action) && !banned.has(a.action))
         .map((a) => `- ${a.action}：${a.desc}（参数：${a.params}）`).join('\n')
       const text = String(msg?.text || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 200)
       return [
@@ -1948,6 +2729,600 @@ export default {
       if (!msg || msg.kind !== 'in') return
       Promise.resolve(chatBehaviorOnce(msg)).catch((error) => api.log.debug?.('聊天联动出错（忽略）：', String(error?.message || error)))
     }
+
+    // ================= 对话框（petChat：主人找她聊的小窗，设计稿 docs/PET-CHAT-DESIGN.md） =================
+    // 与碎碎念（自言自语）、聊天联动（QQ 消息触发小动作）是三码事：这里是主人在桌宠旁的小窗里
+    // 主动找她说话，她按「主人私聊」同款语义回答（人格 + 记忆 + 当下状态）。铁律：**永不发 QQ**。
+    // 回合归属：独立后台回合 key='petChat'（与碎碎念/behavior/chatBehavior 并列，工作区单独成条、
+    // 不抢会话）；并发锁独立命名 petChatBusy，上一句没答完就拒收新句。
+    const PETCHAT_TURN_TITLE = '桌宠 · 对话框（主人找她聊）'
+    const CHAT_HISTORY_LIMIT_PROMPT = 8   // prompt 里附的「最近聊过」条数（多轮上下文兜底，不赌 hub 行为）
+    const chatHistFile = () => api.dataDir('chat/history.jsonl')
+    let petChatBusy = false               // 一轮回答要几十秒：上一句还没答完就拒收新句（仿 whisperBusy）
+    let chatWin = { open: false, at: 0 }  // 客户端上报的对话框开合状态（带时效，过期按关窗处理）
+    let hotkeyState = { state: 'unconfigured', key: '', at: 0 } // 客户端上报的快捷键注册状态：unconfigured/registered/failed
+    const CHAT_WIN_TTL_MS = 5 * 60_000    // 窗口状态 5 分钟没刷新就当关窗（回复走碎碎念气泡）
+    function petChatSettings() {
+      const s = api.settings()
+      const clamp = (v, d, lo, hi) => { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : d }
+      const keyword = String(s.petChatCloseKeyword || '').trim().slice(0, 20)
+      return {
+        enabled: s.petChatEnabled === true, // 默认关
+        hotkey: String(s.petChatHotkey || '').trim().slice(0, 32),
+        closeKeyword: keyword,
+        blurHide: s.petChatBlurHide !== false,
+        maxEntries: clamp(s.petChatMaxEntries, 200, 10, 2000),
+        retentionDays: clamp(s.petChatRetentionDays, 30, 0, 3650),
+        weatherCity: String(s.petWeatherCity || '').trim().slice(0, 40),
+      }
+    }
+    // ---------- 历史（api.dataDir('chat/history.jsonl')，每行 {ts,role,text} 追加写；只存桌宠本地） ----------
+    // 追加写 / 头部截断 / 过期清理共用同一把锁（串行 promise 链），避免回复落盘和清理互踩。
+    let chatHistLock = Promise.resolve()
+    function withChatLock(fn) {
+      const run = () => Promise.resolve().then(fn).catch((error) => api.log.warn('对话历史出错：', String(error?.message || error)))
+      const p = chatHistLock.then(run, run)
+      chatHistLock = p.then(() => {}, () => {})
+      return p
+    }
+    /** 读全部历史（坏行丢弃）；内存里最多留 maxEntries 条，读盘原样返回由调用方截断。 */
+    function readChatHistoryRaw() {
+      let raw = ''
+      try { raw = readFileSync(chatHistFile(), 'utf8') } catch { return [] }
+      const out = []
+      for (const line of raw.split('\n')) {
+        const t = line.trim()
+        if (!t) continue
+        try {
+          const o = JSON.parse(t)
+          if (o && typeof o === 'object' && typeof o.text === 'string' && o.text && (o.role === 'user' || o.role === 'pet')) {
+            const item = { ts: Number(o.ts) || Date.now(), role: o.role, text: String(o.text).slice(0, 600) }
+            // 历史也带 messageId：开窗拉历史后，迟到的 chat 事件才能按 id 去重（复审 #18-3）
+            if (o.messageId) item.messageId = String(o.messageId).slice(0, 40)
+            out.push(item)
+          }
+        } catch {} // 坏行丢弃，宁可少一条也不让面板炸
+      }
+      return out
+    }
+    const chatHistory = (limit = 50) => readChatHistoryRaw().slice(-Math.max(1, Math.min(2000, Math.round(Number(limit) || 50))))
+    /** 追加一条 + 超限头部截断（重写文件）。 */
+    function appendChatHistory(role, text, messageId = '') {
+      return withChatLock(() => {
+        const t = String(text || '').trim()
+        if (!t) return
+        const st = petChatSettings()
+        mkdirSync(dirname(chatHistFile()), { recursive: true })
+        const item = { ts: Date.now(), role, text: t.slice(0, 600) }
+        // 历史也带 messageId：开窗拉历史后，迟到的 chat 事件靠它去重（一审 #18-3）
+        if (messageId) item.messageId = String(messageId).slice(0, 40)
+        appendFileSync(chatHistFile(), JSON.stringify(item) + '\n')
+        const all = readChatHistoryRaw()
+        if (all.length > st.maxEntries) {
+          writeFileSync(chatHistFile(), all.slice(-st.maxEntries).map((x) => JSON.stringify(x)).join('\n') + '\n')
+        }
+      })
+    }
+    /** 过期清理（retentionDays=0 = 永久，跳过）；启动时 + 每日 tick 各跑一次。返回清掉几条。 */
+    function petChatSweep(now = Date.now()) {
+      const st = petChatSettings()
+      if (!st.retentionDays) return Promise.resolve({ ok: true, removed: 0 })
+      return withChatLock(() => {
+        const cutoff = now - st.retentionDays * 24 * 60 * 60_000
+        const all = readChatHistoryRaw()
+        const keep = all.filter((x) => x.ts >= cutoff)
+        const removed = all.length - keep.length
+        if (removed > 0) {
+          mkdirSync(dirname(chatHistFile()), { recursive: true })
+          if (keep.length) writeFileSync(chatHistFile(), keep.map((x) => JSON.stringify(x)).join('\n') + '\n')
+          else { try { unlinkSync(chatHistFile()) } catch {} }
+        }
+        return { ok: true, removed }
+      })
+    }
+    // ---------- 天气（一期，服务端接入）：低频拉取 + 内存缓存；失败保留旧缓存、不报错打扰 ----------
+    const DEFAULT_WEATHER_URL = 'https://wttr.in/{city}?format=%C+%t' // 免 key 默认：返回「晴 +26°C」这类一行文本
+    const WEATHER_TTL_MS = 30 * MIN_MS // ≥30 分钟刷新一次（api.every 低频兜底 + prompt 命中即取缓存）
+    let weatherCache = { at: 0, city: '', text: '' }
+    let weatherFetching = false
+    let weatherFailAt = 0 // 上次失败时间：失败后也歇 30 分钟再试（一审 #18-5）
+    function weatherUrlTemplate() {
+      const raw = String(api.settings().petWeatherUrl || '').trim()
+      return /^https?:\/\//i.test(raw) && raw.includes('{city}') ? raw : DEFAULT_WEATHER_URL
+    }
+    /** 拉一次天气进缓存（可被 petHooks.fetchWeather 注入，测试不打真网络）。失败静默保留旧缓存。 */
+    async function weatherFetchOnce() {
+      const st = petChatSettings()
+      if (!st.weatherCity || weatherFetching) return
+      if (weatherCache.city === st.weatherCity && Date.now() - weatherCache.at < WEATHER_TTL_MS) return
+      // 失败也要歇 30 分钟：否则每次 prompt 都会重试，间隔根本保证不了（一审 #18-5）
+      if (Date.now() - weatherFailAt < WEATHER_TTL_MS) return
+      weatherFetching = true
+      try {
+        const url = weatherUrlTemplate().replace('{city}', encodeURIComponent(st.weatherCity))
+        const fetchFn = petHooks.fetchWeather || ((u) => fetch(u, { signal: AbortSignal.timeout(10_000) }))
+        const res = await fetchFn(url)
+        if (!res.ok) { weatherFailAt = Date.now(); return }
+        const text = String(await res.text() || '').replace(/\s+/g, ' ').trim().slice(0, 40)
+        if (text) { weatherCache = { at: Date.now(), city: st.weatherCity, text }; weatherFailAt = 0 } else { weatherFailAt = Date.now() }
+      } catch { weatherFailAt = Date.now() } // 失败保留上一次缓存（可能过期，但好过没有），绝不打扰
+      finally { weatherFetching = false }
+    }
+    /** prompt「现在」段用的一行天气；城市没配 / 还没拉到 → 空串（不进 prompt）。 */
+    function weatherLine() {
+      const st = petChatSettings()
+      if (!st.weatherCity) return ''
+      if (!weatherCache.text || weatherCache.city !== st.weatherCity) return ''
+      void weatherFetchOnce() // 过期就顺手触发低频刷新（fire-and-forget，本轮先用缓存）
+      return `天气：${weatherCache.text}（${st.weatherCity}）。`
+    }
+    // ---------- 记忆（走私聊主人模式）：recallHint 读 / [记] 标记写，全 ?. 容错（memory 模块可能被关掉） ----------
+    /** 合成「主人私聊」上下文调 recallHint：自动获得 about 归主人、弱命中用上一句兜底、强化遗忘曲线。 */
+    function chatRecallHint(text, prevText) {
+      try {
+        const mem = api.use('memory')
+        const cfg = api.config()
+        const chat = { kind: 'private', userId: cfg.ownerQQ, chatId: `private:${cfg.ownerQQ}` }
+        const hint = mem?.recallHint?.(chat, text, String(prevText || '').slice(-300), '')
+        return typeof hint === 'string' ? hint : ''
+      } catch { return '' } // memory 模块不在 / 出错：不带记忆直接答，绝不挂
+    }
+    function chatMemoryAdd(text) {
+      try {
+        const cfg = api.config()
+        api.use('memory')?.add?.({
+          text: String(text || '').slice(0, 200),
+          about: cfg.ownerQQ,              // about 必须归到主人头上：私聊 recall 的 about 过滤才想得起
+          aboutName: cfg.ownerName || '',
+          importance: 0.5,
+          source: 'pet',
+          tags: ['对话框'],
+        })
+      } catch (error) { api.log.debug?.('对话框写记忆失败（忽略）：', String(error?.message || error)) }
+    }
+    // ---------- 回复消毒 + 「[记] 值得记的事」标记解析（沿用行为回执 iconReceipt 的模式：模型决定记什么） ----------
+    function parseChatReply(raw) {
+      const MEMO = /^[ \t]*[*_#>\-\s]*[【\[]\s*(目的|需求|情绪|情绪值|类型|状态|记忆|思考|动作|备注|待续)\s*[】\]]/
+      let text = String(raw ?? '').replace(/\r/g, '')
+      let memo = ''
+      const mk = text.match(/(?:^|\n)\s*[【\[]\s*记\s*[】\]]\s*[:：]?\s*(.+)/)
+      if (mk) { memo = String(mk[1] || '').trim().slice(0, 200); text = text.replace(mk[0], '\n') }
+      text = text.split('\n').filter((l) => !MEMO.test(l)).join('\n') // 备忘段不上气泡
+        .replace(/^[「“"'']+/, '').replace(/[」”"'']+$/, '')
+        .replace(/^大肥鱼\s*[:：]\s*/m, '')
+        .trim()
+      if (!text || /^[[（(【]?\s*(沉默|跳过)\s*[\]）)】]?$/.test(text)) text = ''
+      return { text: text.slice(0, 300), memo }
+    }
+    // ---------- prompt：骨架照抄 whisperPrompt，但框定语句换掉（主人找她聊，不是自言自语） ----------
+    function petChatPrompt(text, prevText) {
+      let persona = ''
+      try { persona = api.core?.personas?.current?.() || '' } catch {}
+      const snap = workSnap
+      const busy = snap.state
+        ? `宿主现在：${WORK_STATE_LABEL[snap.state] || snap.state}${snap.task ? '（' + snap.task + '）' : ''}`
+        : '宿主现在：空闲'
+      const hint = chatRecallHint(text, prevText)
+      const history = readChatHistoryRaw().slice(0, -1).slice(-CHAT_HISTORY_LIMIT_PROMPT) // 当前这句已在库里，排除掉
+      const hh = new Date().getHours()
+      const part = hh < 6 ? '凌晨' : hh < 11 ? '上午' : hh < 14 ? '中午' : hh < 18 ? '下午' : hh < 23 ? '晚上' : '深夜'
+      const weather = weatherLine()
+      return [
+        '（主人在对话框里找你说话，像私聊那样口语地回她。这不是自言自语，也不是在回复 QQ 消息，绝不发去 QQ。）',
+        persona ? `【你的人格设定】\n${String(persona).slice(0, 1200)}` : '',
+        '【你是一只待在主人电脑桌面角落的小桌宠（大肥鱼）】',
+        hint || '',
+        history.length ? `【你们最近聊过】\n${history.map((x) => `${x.role === 'user' ? '主人' : '你'}：${x.text}`).join('\n')}` : '',
+        `【现在】\n${busy}\n时段：${part}。心情：${moodNow()}。${weather}`,
+        '回复里若有什么值得记下来的事（主人的喜好、约定、近况），可以在最后另起一行写「[记] 一句话」；没有就不写。',
+        `【这一轮主人说】\n${String(text).slice(0, 500)}`,
+        '回复主人的这句话，口语、简短（一两句以内），不加引号和名字前缀。这一轮不能用任何工具，直接输出回复。',
+      ].filter(Boolean).join('\n')
+    }
+    /**
+     * 对话框一轮（POST /chat 同函数）。闸门顺序：开关 → 插件 → 桌宠在线 → 专注 → 并发锁 → 关键字拦截。
+     * @returns {Promise<{ok:boolean, reason?:string, text?:string, viaWindow?:boolean, closed?:boolean, messageId?:string}>}
+     */
+    async function petChatOnce(rawText) {
+      const st = petChatSettings()
+      const text = String(rawText || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 500)
+      if (!text) return { ok: false, reason: 'empty' }
+      if (!st.enabled) return { ok: false, reason: 'disabled' }
+      if (api.config().enabled === false) return { ok: false, reason: 'plugin-off' }
+      if (!online().online) return { ok: false, reason: 'pet-offline' }
+      if (focusOn()) return { ok: false, reason: 'focus' }
+      if (petChatBusy) return { ok: false, reason: 'thinking' }
+      // 同步占锁：检查与置位之间不能再有 await，否则并发请求会一起通过检查（一审 #18-4）
+      petChatBusy = true
+      try {
+        // 关键字拦截（服务端兜底；客户端发送前也会先查一遍）：命中直接关窗、不请求模型、不落历史
+        if (st.closeKeyword && text.includes(st.closeKeyword)) {
+          emit('chatClose', {})
+          return { ok: true, closed: true }
+        }
+        const winOpen = chatWin.open && Date.now() - chatWin.at <= CHAT_WIN_TTL_MS
+        const history = readChatHistoryRaw()
+        const prevText = [...history].reverse().find((x) => x.role === 'user')?.text || ''
+        const userMsgId = randomBytes(6).toString('hex')
+        await appendChatHistory('user', text, userMsgId) // 落盘进锁链（与清理互斥；await 保证时序可测）
+        let raw = ''
+        try {
+          const prompt = petChatPrompt(text, prevText)
+          if (typeof api.think === 'function') {
+            raw = await api.think(prompt, { title: PETCHAT_TURN_TITLE, timeoutMs: 120_000, noTools: true, key: 'petChat' })
+          } else if (typeof api.ask === 'function') { // 老宿主没有 api.think：退回单次问答（工作区看不到思考）
+            raw = await api.ask({ text: prompt, maxTokens: 300, temperature: 0.8 })
+          }
+        } catch (error) {
+          api.log.debug?.('对话框生成失败：', String(error?.message || error))
+        }
+        const { text: reply, memo } = parseChatReply(raw)
+        if (!reply) {
+          await appendChatHistory('pet', '（没答上来）')
+          if (winOpen) emit('chat', { text: '（她走神了，再说一遍？）', messageId: randomBytes(6).toString('hex'), windowOpen: true })
+          return { ok: false, reason: 'empty' }
+        }
+        if (memo) chatMemoryAdd(memo) // 模型决定记什么，不做自动全文提炼（防灌库）；about 归主人
+        const messageId = randomBytes(6).toString('hex')
+        await appendChatHistory('pet', reply, messageId)
+        // 回复下发：对话框开着 → 进消息流；途中窗被关 → 走碎碎念气泡（同一套气泡渲染）。绝不发 QQ。
+        const winOpenNow = chatWin.open && Date.now() - chatWin.at <= CHAT_WIN_TTL_MS
+        if (winOpenNow) {
+          emit('chat', { text: reply, messageId, windowOpen: true })
+          return { ok: true, text: reply, viaWindow: true, messageId }
+        }
+        await dispatch({ text: reply.slice(0, 600), modality: 'text', purpose: 'whisper', via: 'pet', noFallback: true })
+        return { ok: true, text: reply, viaWindow: false, messageId }
+      } finally {
+        petChatBusy = false
+      }
+    }
+    function petChatStatus() {
+      const st = petChatSettings()
+      const winOpen = chatWin.open && Date.now() - chatWin.at <= CHAT_WIN_TTL_MS
+      return {
+        enabled: st.enabled, hotkey: st.hotkey, closeKeyword: st.closeKeyword, blurHide: st.blurHide,
+        maxEntries: st.maxEntries, retentionDays: st.retentionDays, weatherCity: st.weatherCity,
+        hotkeyState: hotkeyState.state, // 已注册 / 失败 / 未配置（面板回显注册状态用）
+        windowOpen: winOpen, thinking: petChatBusy, turnTitle: PETCHAT_TURN_TITLE,
+        historyCount: readChatHistoryRaw().length,
+        weather: st.weatherCity ? (weatherCache.city === st.weatherCity ? weatherCache.text : '') : '',
+        online: online().online,
+      }
+    }
+    // ---------- 对话框路由（模块 route 全路径精确匹配，仓库铁律；逐条注册） ----------
+    api.route('/chat', async (req, res) => {
+      if (!guard(req, res).ok) return
+      const body = await api.core.http.body(req)
+      const r = await petChatOnce(body.text)
+      api.core.http.send(res, r.ok ? 200 : 400, r)
+    })
+    api.route('/chat/history', (req, res) => {
+      if (!guard(req, res).ok) return
+      learnHost(req)
+      const q = api.core.http.query(req)
+      const limit = Math.max(1, Math.min(2000, Math.round(Number(q.limit) || 50)))
+      api.core.http.send(res, 200, { ok: true, items: chatHistory(limit) }) // 服务端截断后下发
+    })
+    // 客户端上报：对话框开合 + 快捷键注册状态（面板「状态」卡回显「已注册 / 失败 / 未配置」）
+    api.route('/chat/state', async (req, res) => {
+      if (!guard(req, res).ok) return
+      const body = await api.core.http.body(req)
+      if (body.open === true) chatWin = { open: true, at: Date.now() }
+      else if (body.open === false) chatWin = { open: false, at: Date.now() }
+      const hs = String(body.hotkey || '')
+      if (['registered', 'failed', 'unconfigured'].includes(hs)) {
+        hotkeyState = { state: hs, key: String(body.hotkeyKey || '').slice(0, 32), at: Date.now() }
+      }
+      api.core.http.send(res, 200, { ok: true, windowOpen: petChatStatus().windowOpen })
+    })
+
+    // ================= 语音对讲（1.2.0：单轮语音对讲，替代 1.1.2 打电话） =================
+    // 智能音箱式：全局热键 toggle → 说话 → 再按一下发送 → 服务端一轮完成 → 系统音频设备外放。
+    // 无状态机、无会话——每轮独立，POST /voice/talk 一次走完：
+    //   上行 { audio:<base64 wav> }（兼容 audioB64 兜底读一次）
+    //   → 耳朵：优先 DSH「语音输入」插件 s0.transcribe，备选本地 faster-whisper（callAsrUrl）
+    //   → api.think（key:'voiceTalk'，场景行 + 旧事提示 + 桌宠当下状态 + 口语约束）
+    //   → 嘴：callEngine 三档（native=voice/tts.js 锁 edge 失败退 Windows；sovits=本地 GPT-SoVITS；voice=「语音」页接管）
+    //   → 可选 RVC 变声（翻唱模块 convertSpeech；没就绪降级为原声）
+    //   → 返回 { ok, heard, replyText, audioB64, mime, engine, rvcNote?, ms }
+    // 失败返回结构化 { ok:false, error:'asr-not-ready'|'no-audio'|'asr-failed'|'tts-failed', message }（人话）。
+    // 桌宠状态：每轮 emit('voiceTalk', { state:'listening'|'thinking'|'speaking'|'idle' }) 驱动客户端动作/气泡。
+    // 底层 ASR/TTS/RVC/memory hint/think prompt 全部沿用旧通话实现（petHooks 注入点 callAsr/callTts/callRvc 保留）。
+    // 临时音频一律写 api.dataDir('voice-talk-tmp')（模块源码目录禁写运行数据——会被拍快照），用完即删。
+    const VOICE_TALK_TMP_DIR = () => api.dataDir('voice-talk-tmp')
+    const CALL_MAX_AUDIO_BYTES = 16 * 1024 * 1024 // 一段话的上限（base64 后约 21MB，够说十分钟）
+    const CALL_MIME_BY_EXT = { '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.webm': 'audio/webm', '.m4a': 'audio/mp4', '.flac': 'audio/flac', '.aac': 'audio/aac' }
+    const callSettings = () => api.settings() || {}
+    // 桌宠对讲状态提示：客户端据此切「在听 / 在想 / 在说 / 恢复空闲」
+    const emitVoiceTalk = (state) => { try { emit('voiceTalk', { state }) } catch {} }
+
+    // 临时音频目录：启动时 + 每次开写前顺手清掉两小时前的旧文件（关机残留）
+    function sweepCallTmp() {
+      try {
+        const dir = VOICE_TALK_TMP_DIR()
+        if (!existsSync(dir)) return
+        for (const name of readdirSync(dir)) {
+          const p = join(dir, name)
+          try { if (Date.now() - statSync(p).mtimeMs > 2 * 3600_000) unlinkSync(p) } catch {}
+        }
+      } catch {}
+    }
+    sweepCallTmp()
+
+    // ---- 耳朵：优先 DSH「语音输入」插件（s0.resolve + s0.transcribe 路径），
+    //      备选本地 faster-whisper（POST callAsrUrl + /v1/audio/transcriptions，multipart）。
+    //      webm / 非 PCM16 WAV 硬转不了 16k，直接走备选。测试注入 petHooks.callAsr(buf)→text，不打真网络。
+    async function callTranscribe(buf) {
+      if (typeof petHooks.callAsr === 'function') return String((await petHooks.callAsr(buf)) || '').trim()
+      const isRiff = buf.length > 44 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WAVE'
+      let s0 = null
+      try { s0 = api.dsh?.get?.('speechToText') || null } catch {}
+      if (s0 && typeof s0.transcribe === 'function' && typeof s0.resolve === 'function' && isRiff) {
+        try {
+          const wav16k = api.lib('voice/wav.js').toMono16k(buf) // DSH 识别只吃 16k 单声道 PCM16 WAV
+          const spec = s0.resolve({ audio: new Uint8Array(wav16k) })
+          const r = await s0.transcribe(spec, AbortSignal.timeout(120000))
+          const text = typeof r === 'string' ? r : r?.text || r?.transcript || ''
+          const t = String(text || '').trim()
+          if (t) return t
+        } catch (error) {
+          api.log.warn('DSH 语音识别没成，退本地 faster-whisper：', String(error?.message || error))
+        }
+      }
+      // 备选：本地 faster-whisper（multipart）
+      const base = String(callSettings().callAsrUrl || 'http://127.0.0.1:8000').replace(/\/+$/, '')
+      const fd = new FormData()
+      fd.append('file', new Blob([buf]), isRiff ? 'speech.wav' : 'speech.webm')
+      fd.append('language', 'zh')
+      fd.append('response_format', 'json')
+      const r = await fetch(`${base}/v1/audio/transcriptions`, { method: 'POST', body: fd, signal: AbortSignal.timeout(120000) })
+      if (!r.ok) throw new Error(`识别服务返回 ${r.status}：${(await r.text().catch(() => '')).slice(0, 120)}`)
+      const j = await r.json().catch(() => ({}))
+      return String(j.text || j.transcription || '').trim()
+    }
+
+    // ---- 记忆提示：memory 对 system 会话直接跳过，这里自己补——说话前先想起相关旧事（主人视角检索）
+    const callOwnerName = () => {
+      try { return String(api.config().ownerName || '').trim() || '主人' } catch { return '主人' }
+    }
+    async function callMemoryHint(text) {
+      let mem = null
+      try { mem = api.use('memory') } catch { mem = null }
+      if (!mem || typeof mem.recall !== 'function') return ''
+      try {
+        const hits = (await Promise.resolve(mem.recall(text, { limit: 4 }))) || []
+        const lines = hits.map((h) => String((h && (h.it ? h.it.text : h.text)) || '').trim()).filter(Boolean).slice(0, 4)
+        if (!lines.length) return ''
+        api.log.info(`语音对讲里想起 ${lines.length} 条旧事`)
+        return `【想起的旧事】（只是让你心里有数，别照着念出来）\n${lines.join('；')}`
+      } catch { return '' }
+    }
+
+    // ---- 大脑：每轮 think prompt（语音对讲场景 + 旧事提示 + 桌宠此刻状态 + 口语约束）----
+    const callSpoken = (s) => String(s || '')
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/[*_`#>~]/g, '')
+      .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '')
+      .replace(/（[^）]{0,30}）/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    function callStateLine() {
+      // 桌宠独有：她在干嘛（workStatus/state 聚合）+ 心情（moodOf）
+      let busy = '空闲'
+      try {
+        const w = workSnapshot()
+        if (w && w.state) busy = `${WORK_STATE_LABEL[w.state] || w.state}${w.task ? '（' + w.task + '）' : ''}`
+      } catch {}
+      return `【你此刻的状态】正在做的事：${busy}。心情：${moodNow()}。`
+    }
+    async function callThink(text) {
+      const max = Number(callSettings().callMaxChars) || 120
+      const hint = await callMemoryHint(text)
+      const prompt = [
+        '（这是语音对讲：对方是你主人，刚对着麦克风说的这句话被识别成了文字；你要用声音直接回答他，不是打字）',
+        hint,
+        callStateLine(),
+        `他刚说：「${String(text).slice(0, 500)}」`,
+        `现在直接说你要说的话：口语、一到两句、最多 ${max} 字。`,
+        '不要 Markdown、不要括号里的动作旁白、不要 emoji、不要「某某：」这种前缀，只输出你要念出来的话。',
+        '如果识别出来的话明显不通顺，就按你听到的大概意思自然接一句，别追问「你说什么」。',
+      ].filter(Boolean).join('\n')
+      const r = await api.think(prompt, { title: '语音对讲', noTools: true, key: 'voiceTalk', timeoutMs: 120000 })
+      return callSpoken(r)
+    }
+
+    // ---- 嘴：三档引擎（沿用旧通话实现细节）----
+    const callTmpWrite = (buf, ext) => {
+      sweepCallTmp()
+      mkdirSync(VOICE_TALK_TMP_DIR(), { recursive: true })
+      const p = join(VOICE_TALK_TMP_DIR(), `${Date.now()}-${randomBytes(4).toString('hex')}${ext}`)
+      writeFileSync(p, buf)
+      return p
+    }
+    async function callSovits(text) {
+      // 本地 GPT-SoVITS：参考音频方式（ref_audio_path / prompt_text 沿用「语音」页 gptsovits 配置），照抄 voicecall
+      const s = callSettings()
+      const g = (api.config().voice || {}).gptsovits || {}
+      const url = String(s.sovitsUrl || 'http://127.0.0.1:9880').replace(/\/+$/, '')
+      const params = new URLSearchParams({
+        text,
+        text_lang: g.textLang || 'zh',
+        ref_audio_path: g.refAudio || '',
+        prompt_text: g.promptText || '',
+        prompt_lang: g.promptLang || 'zh',
+        media_type: 'wav',
+        streaming_mode: 'true',
+      })
+      const up = await fetch(`${url}/tts?${params}`, { signal: AbortSignal.timeout(60000) })
+      if (!up.ok) throw new Error(`GPT-SoVITS 返回 ${up.status}：${(await up.text().catch(() => '')).slice(0, 120)}`)
+      const buf = Buffer.from(await up.arrayBuffer())
+      if (buf.length < 400) throw new Error('GPT-SoVITS 出来的音频是空的')
+      return { bytes: buf, mime: 'audio/wav', engine: 'sovits' }
+    }
+    async function callSynthesize(text) {
+      const hooks = api.__petTestHooks || {}
+      // 测试注入：不真合成（callTts 钩子与 RVC 钩子二选一：注入 TTS 时直接返回，RVC 走假 TTS 路径）
+      if (typeof hooks.callTts === 'function') return await hooks.callTts(text)
+      const s = callSettings()
+      const engine = ['native', 'sovits', 'voice'].includes(s.callEngine) ? s.callEngine : 'native'
+      let out = null
+      if (engine === 'sovits') {
+        out = await callSovits(text)
+      } else if (engine === 'voice') {
+        // 用户自选接管才碰豆包；voice.speak 失败自己会退 Windows 语音
+        const v = api.has('voice') ? api.use('voice') : null
+        if (!v || typeof v.speak !== 'function') throw new Error('「语音」模块没开着，接管引擎不可用')
+        const r = await v.speak(text)
+        const ext = (String(r.file || '').match(/\.[a-z0-9]+$/i) || ['.mp3'])[0].toLowerCase()
+        out = { bytes: readFileSync(r.file), mime: CALL_MIME_BY_EXT[ext] || 'audio/mpeg', engine: r.engine || 'voice' }
+      } else {
+        // native：插件自带合成，engine 锁 edge（失败自动退 Windows 语音——默认档，不依赖豆包）
+        const tts = api.lib('voice/tts.js')
+        const r = await tts.textToSpeech(text, { engine: 'edge' }, api.log)
+        const ext = (String(r.file || '').match(/\.[a-z0-9]+$/i) || ['.mp3'])[0].toLowerCase()
+        out = { bytes: readFileSync(r.file), mime: CALL_MIME_BY_EXT[ext] || 'audio/mpeg', engine: r.engine || 'edge' }
+      }
+      // 可选 RVC 变声：TTS 出稿后用翻唱模块的音色再变一次；翻唱没就绪降级为不变声，out.rvcNote 说明原因
+      let rvcNote = ''
+      if (s.callRvc && s.callRvcVoice && out) {
+        try {
+          if (typeof hooks.callRvc === 'function') {
+            const b = await hooks.callRvc(out.bytes) // 测试注入
+            if (Buffer.isBuffer(b)) { out = { ...out, bytes: b, engine: out.engine + '+rvc' } }
+          } else {
+            const song = api.has('song') ? api.use('song') : null
+            const st = typeof song?.status === 'function' ? song.status() : null
+            if (!song || typeof song.convertSpeech !== 'function' || !st?.ready) {
+              rvcNote = '翻唱模块没就绪，这一轮没变声（原声）'
+            } else if (!(st.voices || []).includes(s.callRvcVoice)) {
+              rvcNote = `翻唱里没有音色「${s.callRvcVoice}」，这一轮没变声（原声）`
+            } else {
+              const src = callTmpWrite(out.bytes, '.wav')
+              const dst = await song.convertSpeech(src, { voice: String(s.callRvcVoice), pitch: 0, outDir: api.dataDir('voice-talk-rvc') })
+              const useP = dst || src
+              out = { bytes: readFileSync(useP), mime: CALL_MIME_BY_EXT[extname(useP).toLowerCase()] || out.mime, engine: out.engine + '+rvc' }
+              try { unlinkSync(src) } catch {}
+            }
+          }
+        } catch (error) {
+          rvcNote = `变声失败，用原声：${String(error?.message || error).slice(0, 80)}`
+          api.log.warn('语音对讲变声失败，用原声：', String(error?.message || error))
+        }
+      }
+      return { ...out, rvcNote }
+    }
+
+    // ---- 语音对讲路由（模块 route 全路径精确匹配，仓库铁律；逐条注册，不做前缀匹配）----
+    const talkFail = (error, message, extra = {}) => ({ ok: false, error, message, ...extra })
+
+    // ASR 前置探活：本地 faster-whisper GET /health（2s 超时）或 DSH 语音输入 provider 启用。
+    // 未就绪时人话说明，客户端首次触发即提示，不等说完才报错。测试可注入 petHooks.asrProbe 避免真网络。
+    // 最近一次探测结果缓存给同步的 status() 快照用（面板读 status().voiceTalk）。
+    let lastAsrProbe = { ready: false, reason: '识别还没检查过，先拉一次 /voice/talk/config' }
+    async function asrProbe() {
+      if (typeof petHooks.asrProbe === 'function') {
+        const r = await petHooks.asrProbe()
+        if (typeof r === 'boolean') return { ready: r, reason: r ? '' : '语音识别还没配好' }
+        return { ready: Boolean(r?.ready), reason: String(r?.reason || (r?.ready ? '' : '语音识别还没配好')) }
+      }
+      try {
+        const s0 = api.dsh?.get?.('speechToText') || null
+        if (s0 && typeof s0.transcribe === 'function') return { ready: true, reason: '' }
+      } catch {}
+      const base = String(callSettings().callAsrUrl || 'http://127.0.0.1:8000').replace(/\/+$/, '')
+      try {
+        const r = await fetch(`${base}/health`, { method: 'GET', signal: AbortSignal.timeout(2000) })
+        if (r.ok) return { ready: true, reason: '' }
+        return { ready: false, reason: `本地识别 ${base} 返回 ${r.status}，请在面板配 faster-whisper 或开 DSH 语音输入` }
+      } catch {
+        return { ready: false, reason: `本地识别 ${base} 连不上，请在面板配 faster-whisper 或开 DSH 语音输入` }
+      }
+    }
+
+    // 配置快照（客户端首屏拉一次）：talkMode 固定 toggle；asrReady 每次实时探活
+    api.route('/voice/talk/config', async (req, res) => {
+      if (!guard(req, res).ok) return
+      const s = callSettings()
+      const probe = await asrProbe()
+      lastAsrProbe = probe
+      api.core.http.send(res, 200, {
+        ok: true,
+        engine: ['native', 'sovits', 'voice'].includes(s.callEngine) ? s.callEngine : 'native',
+        rvc: Boolean(s.callRvc && s.callRvcVoice),
+        rvcVoice: String(s.callRvcVoice || ''),
+        talkMode: 'toggle',
+        hotkey: String(s.voiceHotkey || 'Alt+Space'),
+        micDeviceId: String(s.callMicDeviceId || ''),
+        speakerDeviceId: String(s.callSpeakerDeviceId || ''),
+        asrReady: probe.ready,
+        asrReason: probe.reason || '',
+      })
+    })
+
+    // 单轮对讲：{ audio:<base64 wav> }（audioB64 仅兜底读一次）→ ASR → think → TTS(+RVC) → 音频。
+    // 无状态机、无会话，一轮走完；状态经 emit('voiceTalk',{state}) 下发客户端。
+    api.route('/voice/talk', async (req, res) => {
+      if (!guard(req, res).ok) return
+      if (req.method !== 'POST') return api.core.http.send(res, 405, talkFail('no-audio', '请用 POST 发送录音'))
+      const t0 = Date.now()
+      const body = await api.core.http.body(req).catch(() => null)
+      // 字段名统一为 audio；audioB64 只是兼容上一版的一次性兜底（上次事故根因：两边字段名对不上）
+      const raw = body?.audio ?? body?.audioB64
+      const b64 = String(raw || '').replace(/^data:[^,]+,/, '')
+      let buf = null
+      try { buf = Buffer.from(b64, 'base64') } catch { buf = null }
+      if (!buf || !buf.length) return api.core.http.send(res, 200, talkFail('no-audio', '没收到声音，请再试一次'))
+      if (buf.length > CALL_MAX_AUDIO_BYTES) return api.core.http.send(res, 200, talkFail('no-audio', '这段录音太长了，说短一点再试'))
+
+      const probe = await asrProbe()
+      lastAsrProbe = probe
+      if (!probe.ready) return api.core.http.send(res, 200, talkFail('asr-not-ready', probe.reason || '语音识别还没配好'))
+
+      const ms = {}
+      emitVoiceTalk('listening')
+      try {
+        // 耳朵
+        const tAsr = Date.now()
+        let text
+        try { text = await callTranscribe(buf) } catch (error) { throw Object.assign(new Error(String(error?.message || error)), { __stage: 'asr' }) }
+        ms.asr = Date.now() - tAsr
+        if (!text) return api.core.http.send(res, 200, talkFail('asr-failed', '没听清，再说一遍？', { heard: '', ms }))
+
+        // 大脑
+        emitVoiceTalk('thinking')
+        const tThink = Date.now()
+        let reply
+        try { reply = await callThink(text) } catch (error) { throw Object.assign(new Error(String(error?.message || error)), { __stage: 'think' }) }
+        ms.think = Date.now() - tThink
+        if (!reply) return api.core.http.send(res, 200, talkFail('think-failed', '她一时没想好怎么答，再说一遍？', { heard: text, ms }))
+
+        // 嘴（可选 RVC）
+        emitVoiceTalk('speaking')
+        const tTts = Date.now()
+        let audio
+        try { audio = await callSynthesize(reply) } catch (error) { throw Object.assign(new Error(String(error?.message || error)), { __stage: 'tts' }) }
+        ms.tts = Date.now() - tTts
+        ms.total = Date.now() - t0
+        const result = {
+          ok: true,
+          heard: text,
+          replyText: reply,
+          audioB64: audio.bytes.toString('base64'),
+          mime: audio.mime,
+          engine: audio.engine,
+          ms,
+        }
+        if (audio.rvcNote) result.rvcNote = audio.rvcNote
+        return api.core.http.send(res, 200, result)
+      } catch (error) {
+        api.log.warn('语音对讲这一轮失败：' + (error.message || error))
+        if (error?.__stage === 'asr') return api.core.http.send(res, 200, talkFail('asr-failed', '没听清或识别失败，再说一遍？', { ms }))
+        return api.core.http.send(res, 200, talkFail('tts-failed', '声音没合成出来，稍后再试', { ms }))
+      } finally {
+        emitVoiceTalk('idle')
+      }
+    })
 
     // ================= 桌面图标隔离区（第二批：drag_icon / hide_icon 的服务端执行层） =================
     // 铁律 2：「删除桌面图标」永远不是真删除——只有 rename 剪切到隔离区 + manifest 记录 + 可一键归还 + 超期自动归还。
@@ -2070,7 +3445,7 @@ export default {
           at: Number(x.at) || 0, reason: String(x.reason || ''), playbackId: String(x.playbackId || ''),
         }))
     }
-    function saveManifest(list) { try { mkdirSync(quarantineDir(), { recursive: true }); writeJsonAtomic(manifestFile(), list) } catch {} }
+    function saveManifest(list) { try { mkdirSync(quarantineDir(), { recursive: true }); writeJsonAtomic(manifestFile(), list) } catch (e) { api.log.warn(`隔离区清单写盘失败：${e.message}`) } }
     /**
      * 「挪文件」的唯一实现（隔离与归还共用）：先试 rename（真正的剪切，原子）；
      * 跨卷时（桌面在 OneDrive/另一块盘，插件数据目录在别的盘）rename 会抛 EXDEV，退化为
@@ -2213,28 +3588,80 @@ export default {
     }
 
     // ---------- 路由 ----------
+    // ---------- 余额查询（1.0.14，右键「查看余额」的服务端通道） ----------
+    // ⚠ key 获取通道的结论（2026-11-07 调研）：插件 api 面（makeApi）拿不到明文 DeepSeek API key——
+    //   宿主配置里只有 imageGen.apiKey / memory.vector.apiKey（各自用途不同，拿来查余额既不干净也不对）；
+    //   聊天模型的 key 走 DSH 网关（host.js 经 ctx.llm 列 provider/model），插件侧永远只见模型名不见 key。
+    // 所以这条路由按「诚实降级」实现：默认回 { ok:false, message }，客户端气泡显示友好文案，绝不造假数据。
+    // 未来宿主若开放 key 通道，只需在 petHooks.fetchBalance 注入实现（测试同款注入点），路由与客户端不用改。
+    async function fetchBalance() {
+      try {
+        if (typeof petHooks.fetchBalance === 'function') return await petHooks.fetchBalance()
+        return { ok: false, message: '暂无法获取余额：插件拿不到 DeepSeek API key（模型请求走 DSH 网关，不存明文 key）' }
+      } catch (error) {
+        // 绝不把 key 或请求头打进日志/响应：只透出兜底文案
+        return { ok: false, message: '余额查询失败了，过会儿再试试吧' }
+      }
+    }
+    api.route('/balance', async (req, res) => {
+      if (!guard(req, res).ok) return
+      const r = await fetchBalance()
+      api.core.http.send(res, r.ok ? 200 : 502, r)
+    })
     api.route('/events', (req, res) => pollEvents(req, res))
-    api.route('/status', (req, res) => {
+    const petStatusRoute = (req, res) => {
       if (!guard(req, res).ok) return
       learnHost(req)
       const s = api.settings()
       api.core.http.send(res, 200, {
         ok: true, name: 'aurabot-pet', version: api.version,
-        online: online(), focus: focusOn(), scale: petScale(), bootId, seq,
+        online: online(), focus: focusOn(), scale: petScale(), releaseLand: petReleaseLand(), bootId, seq,
+        physics: petPhysics(), animRate: petAnimRate(), balanceEnabled: petShowBalance(),
+        clickChase: petClickChase(), teaseChase: petTeaseChase(), // 面板回显抓鼠标两开关（默认都关）
         carrier: s.carrier, modality: s.modality, fallbackToQQ: s.petFallbackToQQ !== false,
         pack: activePack(), playbackCount: playbacks.length,
         work: { ...workSnapshot(), label: WORK_STATE_LABEL[workSnap.state] || '' }, // 当前她在干什么（思考中/干活中/完成…）
         whisper: { ...whisperStatus() },
+        chat: petChatStatus(), // 对话框（快捷键注册状态回显在这）：已注册 / 失败 / 未配置
+        // 语音对讲配置回显（1.2.0）：面板「语音对讲」卡控件的数据源（面板以 voiceTalk 为准，call 保留兼容）。
+        // 直接取 settings，不套规范化，所见即面板原值；asrReady/Reason 取最近一次 /voice/talk/config 探活。
+        voiceTalk: {
+          engine: s.callEngine, rvc: s.callRvc, rvcVoice: s.callRvcVoice,
+          talkMode: 'toggle', hotkey: s.voiceHotkey || 'Alt+Space',
+          maxChars: s.callMaxChars, asrUrl: s.callAsrUrl, sovitsUrl: s.sovitsUrl,
+          micDeviceId: s.callMicDeviceId, speakerDeviceId: s.callSpeakerDeviceId,
+          asrReady: lastAsrProbe.ready, asrReason: lastAsrProbe.reason,
+        },
+        call: {
+          engine: s.callEngine, rvc: s.callRvc, rvcVoice: s.callRvcVoice,
+          talkMode: s.callTalkMode, pttKey: s.callPttKey, vadSilence: s.callVadSilence,
+          maxChars: s.callMaxChars, asrUrl: s.callAsrUrl, sovitsUrl: s.sovitsUrl,
+          micDeviceId: s.callMicDeviceId, speakerDeviceId: s.callSpeakerDeviceId,
+        },
         portReady: portReady(), port: knownPort ? Number(knownPort) : null,
         electronInstalled: existsSync(electronExe()), pid: recordedPid()?.pid || null,
         client: clientStatus(), // 生成物对账：缺 behavior.js 这类「旧壳」在这里现形
+        remoteClient: Boolean(publicBase()), publicBaseUrl: publicBase() ? publicBase().url : '', // 面板据此切「下载客户端包」分支
+        // 安全状态：面板据此提示「明文会被阻断 / 令牌已过期 / 可轮换」
+        publicBaseInsecure: publicBaseInsecure(), allowInsecureRemote: insecureRemoteAllowed(),
+        tokenExpired: tokenExpired(), tokenIssuedAt: tokenIssuedAt || null,
+        tokenTtlDays: Number(api.settings().tokenTtlDays) || 0,
         hostFile: hostFile(), clientDir: api.dataDir('app'), serverTime: Date.now(),
       })
-    })
+    }
+    try {
+      api.route('/status', petStatusRoute)
+    } catch (error) {
+      // 本机若别的模块（如改名接管语音的 aura-mimo）已占根 /status，降级到独立路径，
+      // 保证桌宠模块本身能启动；面板/客户端走 status() 导出函数，不依赖这条路由。
+      api.log?.warn?.('桌宠 /status 路由被占用，降级到 /pet/status：' + (error.message || error))
+      api.route('/pet/status', petStatusRoute)
+    }
     api.route('/config', (req, res) => {
       if (!guard(req, res).ok) return
       learnHost(req)
       ensureAssetRoutes()
+      ensureHouseRoutes()
       const s = api.settings()
       api.core.http.send(res, 200, {
         ok: true,
@@ -2244,11 +3671,35 @@ export default {
         pack: packView(), // 动画池/权重/事件映射/物理参数 + 干活状态/碎碎念动画映射；null = 没素材，客户端走静态形象
         // 人物大小倍率（0.5~2.0）：客户端按它整窗等比缩放（setZoomFactor + setSize），物理/拖拽共用窗口宽反推
         scale: petScale(),
+        // 松手后落地开关：false = 客户端松手后停在原地（不抛不落）；缺省当 true
+        releaseLand: petReleaseLand(),
+        // 甩抛物理（1.0.14）：客户端把它叠在素材包 physics 默认之上，设置优先于素材包默认
+        physics: petPhysics(),
+        // 动画节奏倍率：客户端把空闲轮播间隔 ÷ 它（>1 更活泼）；坏值服务端已回落 1
+        animRate: petAnimRate(),
+        // 互动开关（1.0.14）：「查看余额」菜单显隐 / 点击扑鼠标 / 晃鼠标勾引追（布尔口径在取值函数里统一收口）
+        balanceEnabled: petShowBalance(),
+        clickChase: petClickChase(),
+        teaseChase: petTeaseChase(),
         work: { ...workSnapshot(), label: WORK_STATE_LABEL[workSnap.state] || '' },
         whisper: (({ enabled, source }) => ({ enabled, source }))(whisperStatus()),
         // 行为层：客户端的**反应层**（点击/勾引/摸摸/鼠标闲置）是本地直接演的，不看这一份的话
         // 面板关掉「行为总开关」根本拦不住它、鼠标闲置分钟数也永远是默认值（2026-10-30 补）。
-        behavior: (() => { const b = behaviorSettings(); return { enabled: b.enabled, idleCursorMinutes: b.idleCursorMinutes } })(),
+        // disabledActions（2026-11-01 补）：面板「AI 动作表」开关关掉追鼠标/叼鼠标后，客户端反应层
+        // 也不能再抓鼠标——反应层之前只看 enabled，禁用清单不下发就是「关了还抓」的病根。
+        behavior: (() => { const b = behaviorSettings(); return { enabled: b.enabled, idleCursorMinutes: b.idleCursorMinutes, disabledActions: b.disabledActions } })(),
+        // 对话框：客户端按这份做快捷键注册 / 关键字关闭 / 失焦收起（配置变更路径，不只启动一次）
+        chat: (() => { const c = petChatSettings(); return { enabled: c.enabled, hotkey: c.hotkey, closeKeyword: c.closeKeyword, blurHide: c.blurHide } })(),
+        // 语音对讲（1.2.0）：客户端 refreshConfig 从 voiceTalk 段 + 顶层 voiceHotkey 读热键/引擎/设备，
+        // 与 status().voiceTalk 同口径；talkMode 固定 toggle。无通话窗、无 PTT/VAD 旧字段。
+        voiceTalk: {
+          hotkey: String(s.voiceHotkey || 'Alt+Space'), engine: s.callEngine,
+          rvc: s.callRvc, rvcVoice: s.callRvcVoice,
+          micDeviceId: s.callMicDeviceId, speakerDeviceId: s.callSpeakerDeviceId,
+          talkMode: 'toggle', maxChars: s.callMaxChars,
+          asrUrl: s.callAsrUrl, sovitsUrl: s.sovitsUrl,
+        },
+        voiceHotkey: String(s.voiceHotkey || 'Alt+Space'),
         serverTime: Date.now(),
       })
     })
@@ -2422,6 +3873,30 @@ export default {
       const r = installClient()
       api.core.http.send(res, 200, { ...r, client: clientStatus() })
     })
+    // 客户端包（zip）：app/ 目录 + 内嵌 host.json 一起打；面板「下载客户端包」经宿主 /panel/pet/client-package 走这里
+    // 【安全审查 P2】这个响应里揣着 bearer 令牌，所以额外收三道：
+    //   ① 只允许 GET（浏览器里 `window.open`/`<a download>` 才走得通，恶意页面的跨站 POST 打不进来）；
+    //   ② 显式 revalidate 头（no-store）：别让中间层/浏览器把含令牌的 zip 缓存下来；
+    //   ③ 大小上限：包本身是白名单文件拼的，正常几十 KB，超过就是出了怪事，直接拒绝而不是吐给调用方。
+    const CLIENT_PACKAGE_MAX_BYTES = 8 * 1024 * 1024 // 8MB 足够（实际 ~80KB）
+    api.route('/client-package', (req, res) => {
+      if (String(req.method || 'GET').toUpperCase() !== 'GET') {
+        return api.core.http.send(res, 405, { ok: false, message: '客户端包只允许 GET（面板按钮本身就是 GET 下载）' })
+      }
+      if (!guard(req, res).ok) return
+      const r = clientPackage()
+      if (!r.ok) return api.core.http.send(res, 500, r)
+      if (r.buffer.length > CLIENT_PACKAGE_MAX_BYTES) {
+        api.log.warn(`客户端包异常大（${r.buffer.length} 字节），已拒绝下发`)
+        return api.core.http.send(res, 500, { ok: false, message: `客户端包异常大（${r.buffer.length} 字节），已拒绝下发` })
+      }
+      res.setHeader?.('content-type', 'application/zip')
+      res.setHeader?.('content-disposition', `attachment; filename="${String(r.filename || 'aurabot-pet-client.zip').replace(/[^\w.-]/g, '_')}"`)
+      // 内含令牌：任何缓存层都不许留
+      res.setHeader?.('cache-control', 'no-store, no-cache, must-revalidate, private')
+      res.setHeader?.('pragma', 'no-cache')
+      res.end(r.buffer)
+    })
     // 生成物核对：真机排查「行为层怎么没反应」的第一步（curl 这个就知道 app/ 缺没缺文件）
     api.route('/client/status', (req, res) => {
       if (!guard(req, res).ok) return
@@ -2432,9 +3907,9 @@ export default {
       if (!guard(req, res).ok) return
       api.core.http.send(res, 200, await electronInstall())
     })
-    api.route('/launch', (req, res) => {
+    api.route('/launch', async (req, res) => {
       if (!guard(req, res).ok) return
-      api.core.http.send(res, 200, launch())
+      api.core.http.send(res, 200, await launch())
     })
     api.route('/stop', (req, res) => {
       if (!guard(req, res).ok) return
@@ -2443,22 +3918,30 @@ export default {
 
     // ---------- 启动 ----------
     writeHostFile(true)
+    autoRegenClient() // 升级后 app/ 未被手改就自动跟上新模板（治「升级完点小屋还是白屏」）
     ensureAssetRoutes()
+    ensureHouseRoutes()
     // 碎碎念排程先落一次盘：面板一打开就能看到「下次约 N 分钟后」，重启也不丢排程
-    try { const st0 = loadWhisper(); if (!st0.nextAt) { planWhisper(st0, whisperSettings()); saveWhisper(st0) } } catch {}
+    try { const st0 = loadWhisper(); if (!st0.nextAt) { planWhisper(st0, whisperSettings()); saveWhisper(st0) } } catch (e) { api.log.warn(`碎碎念排程初始化失败：${e.message}`) }
     // 行为大脑排程同样先落一次盘（独立配额，与碎碎念互不知晓）
-    try { const b0 = loadBehavior(); if (!b0.nextAt) { planBehavior(b0, behaviorSettings()); saveBehavior(b0) } } catch {}
-    const offHostTimer = api.every(120_000, () => { writeHostFile(true); ensureAssetRoutes() }, '刷新 host.json 与素材路由')
+    try { const b0 = loadBehavior(); if (!b0.nextAt) { planBehavior(b0, behaviorSettings()); saveBehavior(b0) } } catch (e) { api.log.warn(`行为大脑排程初始化失败：${e.message}`) }
+    const offHostTimer = api.every(120_000, () => { writeHostFile(true); ensureAssetRoutes(); ensureHouseRoutes() }, '刷新 host.json 与素材路由')
     // 碎碎念：60s 心跳里只做「读一次状态文件 + 纯逻辑判断」，重活都别放进 tick
     const offWhisper = api.every(60_000, () => whisperTick(), '碎碎念')
     const offBehavior = api.every(60_000, () => behaviorTick(), '行为大脑')
     // 聊天联动：只读观察 activity 事件（宿主广播，只看不拦）；旧宿主/fake api 没有 on 时静默跳过
     if (typeof api.on === 'function') {
-      api.on('activity', (msg) => { try { chatBehaviorFire(msg) } catch {} })
+      api.on('activity', (msg) => { try { chatBehaviorFire(msg) } catch (e) { api.log.debug(`聊天联动处理 activity 失败：${e.message}`) } })
     }
     // 图标隔离区超期自动归还：10 分钟一扫（读 manifest 纯逻辑，重活不在 tick 里）
     const offIconSweep = api.every(600_000, () => { iconSweep().catch((e) => api.log.warn('图标超期归还出错：', String(e?.message || e))) }, '图标隔离区超期归还')
-    api.onDispose(() => { offHostTimer(); offWhisper(); offBehavior(); offIconSweep(); waiters.clear(); presence.clear(); workMap.clear() })
+    // 对话框：过期历史清理（启动时 + 每日 tick；withChatLock 串行，与回复落盘不互踩）
+    petChatSweep().catch(() => {})
+    const offChatSweep = api.every(60 * MIN_MS, () => { petChatSweep().catch(() => {}) }, '对话框历史清理')
+    // 天气低频刷新（≥30 分钟一次；城市没配时函数内部直接跳过）。测试环境不打真网络，靠手动调 weatherFetchOnce
+    const offWeather = api.every(WEATHER_TTL_MS, () => { weatherFetchOnce().catch(() => {}) }, '天气低频刷新')
+    if (!api.__petTestHooks) setTimeout(() => { weatherFetchOnce().catch(() => {}) }, 3_000).unref?.()
+    api.onDispose(() => { offHostTimer(); offWhisper(); offBehavior(); offIconSweep(); offChatSweep(); offWeather(); waiters.clear(); presence.clear(); workMap.clear() })
     api.log.info(`桌宠模块就绪：host.json 在 ${hostFile()}（端口由宿主注入，Host 头学习保留作漂移纠正）`)
 
     return {
@@ -2472,6 +3955,8 @@ export default {
       writeHostFile,
       installClient,
       download: async () => installClient(), // 面板经 /panel/pet/download 调这个（host.js 降级路径按有没有这个函数判断）
+      clientPackage,                         // 远端直连：app/ 目录 + host.json 打 zip（面板「下载客户端包」同函数）
+      rotateToken,                           // 安全：轮换令牌（旧令牌立即失效，客户端需重新下载包）
       setWebPort,                            // 宿主（host.js）启动时注入真实 Web 端口，破自举死锁
       portReady,
       electronInstall,                       // 面板经 /panel/pet/electron-install 调（npmmirror 镜像装 Electron）
@@ -2481,6 +3966,8 @@ export default {
       activePack,
       packView,
       ensureAssetRoutes,
+      ensureHouseRoutes,                     // 小屋素材路由（测试/面板手动刷新用）
+      houseStatus,                           // 测试/面板：小屋素材与状态（/status 未挂，避免刷屏）
       ensureDefaultPack,                     // 素材包下载落位（force=false 只在缺包时下；测试/面板手动用）
       // 碎碎念（桌宠自己的气泡流）与干活状态
       whisper: whisperOnce,                  // 手动/测试：立即碎碎念一句（force）
@@ -2505,13 +3992,31 @@ export default {
       chatBehavior: chatBehaviorOnce,        // 测试/手动钩子：聊天联动一轮（activity 同函数，可 await）
       chatBehaviorParse: parseChatAction,    // 测试钩子：聊天联动动作单解析
       chatBehaviorSettings: chatSettings,    // 测试钩子：聊天联动有效配置（含白名单解析结果）
+      petChat: petChatOnce,                  // 测试/手动钩子：对话框一轮（POST /chat 同函数）
+      petChatStatus,                         // 测试钩子：对话框状态（/status 里的 chat 同函数）
+      petChatSweep,                          // 测试钩子：历史过期清理（定时器同函数，可注入 now）
+      petChatHistory: chatHistory,           // 测试钩子：读历史（GET /chat/history 同函数）
+      // 语音对讲（1.2.0）：测试钩子（fake 注入走 api.__petTestHooks.callAsr/callTts/callRvc/asrProbe）
+      asrProbe,                              // 测试钩子：探活（可配 petHooks.asrProbe，不打真网络）
+      voiceTalkConfig: () => ({              // 测试钩子：配置快照同 /voice/talk/config，不探活
+        engine: ['native', 'sovits', 'voice'].includes(callSettings().callEngine) ? callSettings().callEngine : 'native',
+        rvc: Boolean(callSettings().callRvc && callSettings().callRvcVoice),
+        rvcVoice: String(callSettings().callRvcVoice || ''),
+        talkMode: 'toggle', hotkey: String(callSettings().voiceHotkey || 'Alt+Space'),
+      }),
+      weatherFetchOnce,                      // 测试钩子：天气拉取（可配 petHooks.fetchWeather，不打真网络）
+      balance: fetchBalance,                 // 测试钩子：余额查询（可配 petHooks.fetchBalance；默认诚实降级回 ok:false）
       onSessionEvent,                        // host.js 把 ctx.on('session/event') 转发进来
       workStatus: () => ({ ...workSnapshot(), label: WORK_STATE_LABEL[workSnap.state] || '', text: workEndText(workSnap) }),
       status: () => {
         const s = api.settings()
         const w = workSettings()
         return {
-          ...online(), focus: focusOn(), scale: petScale(), carrier: s.carrier, modality: s.modality, bootId, seq,
+          ...online(), focus: focusOn(), scale: petScale(), releaseLand: petReleaseLand(), carrier: s.carrier, modality: s.modality, bootId, seq,
+          // 甩抛物理与互动开关（1.0.14）：面板守卫 pet.physics / pet.animRate / pet.balanceEnabled /
+          // pet.clickChase / pet.teaseChase 看的就是这份（host.js /panel/pet/status 用 use('pet').status()）
+          physics: petPhysics(), animRate: petAnimRate(),
+          balanceEnabled: petShowBalance(), clickChase: petClickChase(), teaseChase: petTeaseChase(),
           pack: activePack(), playbackCount: playbacks.length,
           // 素材包概况：面板「素材包」卡用它显示状态（内建模块的 settings 不渲染表单，只能走 status + /panel/pet/*）
           packInfo: (() => {
@@ -2530,9 +4035,25 @@ export default {
           workEnabled: w.enabled, workBubble: w.bubble, workNotify: w.notify,
           workAnimMap: (packView() || {}).workStatus || null, // 面板展示「六档动画能不能对上」
           whisper: whisperStatus(),
+          chat: petChatStatus(), // 对话框（快捷键注册状态回显在这）：已注册 / 失败 / 未配置
+          // 语音对讲配置回显（1.2.0）：面板以 voiceTalk 为准（host.js /panel/pet/status 用 use('pet').status()）
+          voiceTalk: {
+            engine: s.callEngine, rvc: s.callRvc, rvcVoice: s.callRvcVoice,
+            talkMode: 'toggle', hotkey: s.voiceHotkey || 'Alt+Space',
+            maxChars: s.callMaxChars, asrUrl: s.callAsrUrl, sovitsUrl: s.sovitsUrl,
+            micDeviceId: s.callMicDeviceId, speakerDeviceId: s.callSpeakerDeviceId,
+            asrReady: lastAsrProbe.ready, asrReason: lastAsrProbe.reason,
+          },
+          call: {
+            engine: s.callEngine, rvc: s.callRvc, rvcVoice: s.callRvcVoice,
+            talkMode: s.callTalkMode, pttKey: s.callPttKey, vadSilence: s.callVadSilence,
+            maxChars: s.callMaxChars, asrUrl: s.callAsrUrl, sovitsUrl: s.sovitsUrl,
+            micDeviceId: s.callMicDeviceId, speakerDeviceId: s.callSpeakerDeviceId,
+          },
           portReady: portReady(), port: knownPort ? Number(knownPort) : null,
           electronInstalled: existsSync(electronExe()), pid: recordedPid()?.pid || null,
           client: clientStatus(), // 面板「桌宠」卡据此提示重新生成（缺文件 = 行为层静默失效）
+          remoteClient: Boolean(publicBase()), publicBaseUrl: publicBase() ? publicBase().url : '', // 面板据此把 Electron 三键换成「下载客户端包」
         }
       },
       state: () => ({ count: delivered.length }),

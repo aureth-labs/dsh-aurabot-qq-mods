@@ -1,4 +1,4 @@
-// pet-behavior-client.test.js —— 桌宠客户端行为层纯逻辑单测（node:test）
+﻿// pet-behavior-client.test.js —— 桌宠客户端行为层纯逻辑单测（node:test）
 // 被测对象：fork/src/modules/pet/pet-client/behavior.js（CommonJS，与 physics.js 同款求值方式加载，
 // 因为 fork/package.json 是 type:module，直接 require 会按 ESM 解析）。
 // 覆盖：未知动作 refused、第三批占位 refused、勾引判定（构造光标样本序列）、摸摸判定（时间序列）、
@@ -814,11 +814,21 @@ test('主进程 carry 契约：ClipCursor 锁住指针 + 到位释放（防止�
   assert.ok(/if \(o\.carry\) pinCursorAtDip/.test(src), 'carry 期间每帧要把指针钉在身体中心')
 })
 
+test('反应层禁用契约：/config 下发 disabledActions，反应层三处抓鼠标入口都要尊重它（2026-11-01 bug）', () => {
+  const src = readFileSync(new URL('../pet-client/main.js', import.meta.url), 'utf8')
+  assert.ok(src.includes('disabledActions'), '/config 必须解析 disabledActions 进 behaviorCfg')
+  assert.ok(/const behaviorActionEnabled/.test(src), '缺统一判禁入口')
+  assert.ok(/behaviorActionEnabled\('chase_cursor'\) && behaviorApi\.isTeasing/.test(src), '勾引→追鼠标要查禁用')
+  assert.ok(/behaviorActionEnabled\('steal_cursor'\) && behaviorApi\.isCursorIdle/.test(src), '鼠标闲置→叼鼠标要查禁用')
+  assert.ok(/pet:click[\s\S]{0,80}behaviorActionEnabled\('chase_cursor'\)/.test(src), '点击桌宠→追鼠标要查禁用')
+  assert.ok(/configLoaded/.test(src), '首次配置返回前默认不跑（configLoaded），避免启动瞬间抓一下')
+})
+
 // ---------- 每个动作都要顶气泡（本地兜底台词） ----------
 
 test('客户端动作表自带 say：拿不到服务端台词时也能顶气泡（点击/勾引/摸摸不经过服务端）', () => {
   const acts = Object.keys(B.ACTIONS)
-  assert.equal(acts.length, 9)
+  assert.equal(acts.length, 10)
   for (const a of acts) {
     assert.equal(typeof B.ACTIONS[a].say, 'string', `${a} 必须有 say 字段（缺了就是没气泡）`)
     if (a === 'say') {
@@ -890,4 +900,13 @@ test('静止形象契约：播完定格在待机末帧（鲸鱼娘），不是 e
   // emoji 只是兜底：初始隐藏 + 素材缺席 1.5s 后才出现
   assert.ok(/id="pet"[^>]*style="display:none"/.test(html), 'emoji 兜底应初始隐藏')
   assert.ok(/setTimeout\(\(\) => \{[\s\S]{0,80}pet\.style\.display = 'flex'/.test(html), '素材缺席要有 1.5s 兜底显示')
+})
+
+test('对话框契约（一审 #18）：show 后补报 open、POST 响应带 messageId 去重', () => {
+  const src = readFileSync(new URL('../pet-client/main.js', import.meta.url), 'utf8')
+  // 1) 窗口 show:false → ready-to-show 里 show() 之后必须补报 open:true（否则服务端一直以为没开、回复错发气泡）
+  assert.match(src, /ready-to-show', \(\) => \{[^}]*reportChatState\(\)/, 'ready-to-show 后要补报 open')
+  assert.match(src, /chatWin\.on\('show', \(\) => reportChatState\(\)\)/, 'show 事件兜底补报（show() 后 isVisible 未必已翻）')
+  // 2) POST 响应路径要把 messageId 一起给渲染页，和 chat 事件两路同源去重
+  assert.match(src, /__chatAppend', d\.text, d\.messageId\)/, 'POST 路径漏传 messageId，同一条回复会显示两次')
 })

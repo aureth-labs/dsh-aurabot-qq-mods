@@ -17,8 +17,13 @@ export const MAX_PACKAGE_BYTES = 20 * 1024 * 1024
 const ID_RE = /^[a-z][a-z0-9-]{1,39}$/
 const VERSION_RE = /^\d+\.\d+\.\d+$/
 const ENTRY = ['index.mjs', 'index.js']
+// scripts/ 里可能放着运行时文件，不能整体跳过；只跳过测试与本地缓存。
 const SKIP_DIRS = new Set(['node_modules', '.git', '.build', '.runtime', '.aurabot-cache', 'test', 'tests', 'fixtures', '__tests__'])
-const SKIP_FILE = /(\.test\.[cm]?[jt]s|^package-lock\.json|^\.gitignore)$/
+// 有构建输出的模块，src/ 是 TS 源码，不进包。
+const BUILD_SKIP_DIRS = new Set([...SKIP_DIRS, 'src'])
+// 用「相对模块根目录」的路径来测（不是文件名）：带 ^ 的规则只命中根目录，
+// 这样 lib/build.mjs 这种运行时文件不会被当成根目录的构建脚本一起跳过。
+const SKIP_FILE = /(\.test\.[cm]?[jt]s|^package-lock\.json|^yarn\.lock$|^tsconfig(\..+)?\.json$|^\.gitignore$|^build\.(mjs|js|ts)$)/
 
 // 能力声明：给审核者和安装页看的，不是沙箱。模块和插件同进程，这里拦不住恶意代码。
 export const CAPABILITIES = {
@@ -40,8 +45,8 @@ export const CATEGORIES = {
   manage: '管理',
   tool: '工具',
 }
-const ROOT_FILES = /^(module\.json|index\.m?js|panel\.js|package(-lock)?\.json|.*\.md|LICENSE.*)$/i
-const ROOT_DIRS = new Set(['lib', 'test', 'assets', 'docs'])
+const ROOT_FILES = /^(module\.json|index\.m?js|panel\.js|build\.(mjs|js|ts)|package(-lock)?\.json|tsconfig(\..+)?\.json|yarn\.lock|.*\.md|LICENSE.*)$/i
+const ROOT_DIRS = new Set(['lib', 'test', 'assets', 'docs', 'src', 'scripts'])
 
 export const compareVersions = (a, b) => {
   const x = String(a).split('.').map(Number)
@@ -74,6 +79,14 @@ export function validateManifest(m, id, known = new Set(BUILTINS)) {
   if (m.id !== id) errors.push(`id「${m.id ?? ''}」要和文件夹名「${id}」一样`)
   if (!CATEGORIES[m.category]) errors.push(`category 要从这些里选：${Object.keys(CATEGORIES).join('、')}`)
   if (m.tags !== undefined && !(Array.isArray(m.tags) && m.tags.length <= 5 && m.tags.every((t) => typeof t === 'string' && t.trim()))) errors.push('tags 要是字符串数组，最多 5 个')
+  if (m.platforms !== undefined) {
+    if (!Array.isArray(m.platforms) || !m.platforms.length) errors.push('platforms 要是非空数组；不写表示只支持 QQ')
+    else if (m.platforms.includes('*') && m.platforms.length !== 1) errors.push('platforms 里的 "*" 只能单独使用')
+    else {
+      for (const p of m.platforms) if (p !== '*' && (typeof p !== 'string' || !/^[a-z][a-z0-9-]{0,39}$/.test(p))) errors.push(`platforms 里的「${p}」不对：只能用小写字母、数字和 -`)
+      if (new Set(m.platforms).size !== m.platforms.length) errors.push('platforms 里不能有重复项')
+    }
+  }
   if (!VERSION_RE.test(String(m.version || ''))) errors.push('version 要写成 1.2.3')
   if (!Number.isInteger(m.api) || m.api < 1) errors.push('api 要写按哪一版扩展接口开发的（整数）')
   if (!VERSION_RE.test(String(m.minPluginVersion || ''))) errors.push('minPluginVersion 要写成 1.2.3')
@@ -88,18 +101,21 @@ export function validateManifest(m, id, known = new Set(BUILTINS)) {
 }
 
 /** 模块发布时带的文件（不含测试和依赖）。相对路径，统一用 /。 */
-export function filesOf(dir, base = dir, out = []) {
+export function filesOf(dir, base = dir, out = [], skipDirs = SKIP_DIRS) {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     if (e.isSymbolicLink()) throw new Error(`不允许符号链接：${relative(base, join(dir, e.name))}`)
-    if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name)) filesOf(join(dir, e.name), base, out) }
-    else if (e.isFile() && !SKIP_FILE.test(e.name)) out.push(relative(base, join(dir, e.name)).split(sep).join('/'))
+    if (e.isDirectory()) { if (!skipDirs.has(e.name)) filesOf(join(dir, e.name), base, out, skipDirs) }
+    else if (e.isFile()) {
+      const rel = relative(base, join(dir, e.name)).split(sep).join('/')
+      if (!SKIP_FILE.test(rel)) out.push(rel)
+    }
   }
   return out.sort()
 }
 
 /** 源码里实际用到的能力。 */
-export function scanCapabilities(dir) {
-  const code = filesOf(dir).filter((f) => /\.([cm]?[jt]s|html)$/.test(f)).map((f) => readFileSync(join(dir, f), 'utf8')).join('\n')
+export function scanCapabilities(dir, skipDirs = SKIP_DIRS) {
+  const code = filesOf(dir, dir, [], skipDirs).filter((f) => /\.([cm]?[jt]s|html)$/.test(f)).map((f) => readFileSync(join(dir, f), 'utf8')).join('\n')
   return Object.keys(CAPABILITIES).filter((cap) => CAPABILITIES[cap].re.test(code))
 }
 
@@ -117,11 +133,23 @@ export function checkModule(mod, known) {
     if (e.isFile() && !ROOT_FILES.test(e.name)) warnings.push(`${e.name} 建议放进 lib/ 或 assets/，模块根目录只留入口和说明`)
     if (e.isDirectory() && !ROOT_DIRS.has(e.name) && !/^[._]/.test(e.name) && e.name !== 'node_modules' && e.name !== 'pet-client') warnings.push(`文件夹 ${e.name}/ 建议归到 lib/、assets/、docs/ 或 test/`)
   }
+  // 自定义面板 panel.js：插件是用 new Function(body) 跑它的（整文件即函数体，含顶层 return），
+  // 所以入口的 import 检查覆盖不到它。这里按同一种方式解析一遍——括号/引号错位当场就红，
+  // 不用等用户打开面板才看见「Unexpected token ')'」（phone 0.2.0 就这么漏过一版）。
+  const panelFile = join(mod.dir, 'panel.js')
+  if (existsSync(panelFile)) {
+    const source = readFileSync(panelFile, 'utf8')
+    try {
+      new Function(source) // eslint-disable-line no-new-func
+    } catch (error) {
+      errors.push(`panel.js 语法错误（面板会加载失败：${error.message}）`)
+    }
+  }
   const pkg = existsSync(join(mod.dir, 'package.json')) ? JSON.parse(readFileSync(join(mod.dir, 'package.json'), 'utf8')) : null
   if (Object.keys(pkg?.dependencies || {}).length && !m.build) errors.push('有 npm 依赖的模块必须配 build 打成独立运行包：用户机器上不跑 npm install')
   if (m.build && !pkg?.scripts?.build) errors.push('配了 build，package.json 里要有 scripts.build')
   try {
-    const found = scanCapabilities(mod.dir)
+    const found = scanCapabilities(mod.dir, m.build ? BUILD_SKIP_DIRS : SKIP_DIRS)
     const declared = new Set(Array.isArray(m.capabilities) ? m.capabilities : [])
     for (const cap of found) if (!declared.has(cap)) errors.push(`代码用到了「${CAPABILITIES[cap].label}」，capabilities 要声明 ${cap}`)
     for (const cap of declared) if (!found.includes(cap)) warnings.push(`声明了 ${cap}，但扫描没发现（确认一下是不是多写了）`)
@@ -185,7 +213,8 @@ export function collect(mod, m = readManifest(mod.dir)) {
     dir = join(mod.dir, m.build.out)
     if (!existsSync(dir)) throw new Error(`构建后没有 ${m.build.out}/`)
   }
-  const files = new Map(filesOf(dir).map((f) => [f, readFileSync(join(dir, f))]))
+  const skipDirs = m.build ? BUILD_SKIP_DIRS : SKIP_DIRS
+  const files = new Map(filesOf(dir, dir, [], skipDirs).map((f) => [f, readFileSync(join(dir, f))]))
   files.set('module.json', readFileSync(join(mod.dir, 'module.json')))
   for (const name of ['LICENSE', 'README.md']) if (!files.has(name)) files.set(name, readFileSync(join(mod.dir, name)))
   return files
@@ -194,16 +223,20 @@ export function collect(mod, m = readManifest(mod.dir)) {
 /** 把发布内容放到临时目录真正加载一次，确认入口能跑通、和 module.json 对得上。 */
 export function smokeTest(files, m) {
   const tmp = mkdtempSync(join(tmpdir(), 'aurabot-mod-'))
+  // 用 module.json 的 id 作为临时子目录名：有些模块从「文件夹名」推导自己的 id
+  // （如 aura-mimo 支持改名为 voice 接管内置语音），随机临时目录名会让入口 id
+  // 和 module.json 对不上。真实安装目录也是模块 id，这样最接近发布后的形态。
+  const root = join(tmp, m.id)
   try {
     for (const [name, data] of files) {
-      mkdirSync(dirname(join(tmp, name)), { recursive: true })
-      writeFileSync(join(tmp, name), data)
+      mkdirSync(dirname(join(root, name)), { recursive: true })
+      writeFileSync(join(root, name), data)
     }
-    const entry = entryOf(tmp)
+    const entry = entryOf(root)
     if (!entry) return ['发布内容里没有入口文件']
-    const script = `globalThis.aurabot={lib:()=>new Proxy({},{get:()=>()=>{}}),src:'file:///'};const d=(await import(${JSON.stringify(pathToFileURL(join(tmp, entry)).href)})).default;console.log('@@'+JSON.stringify({id:d?.id,version:d?.version,api:d?.api,setup:typeof d?.setup}));process.exit(0)`
+    const script = `globalThis.aurabot={lib:()=>new Proxy({},{get:()=>()=>{}}),src:'file:///'};const d=(await import(${JSON.stringify(pathToFileURL(join(root, entry)).href)})).default;console.log('@@'+JSON.stringify({id:d?.id,version:d?.version,api:d?.api,setup:typeof d?.setup}));process.exit(0)`
     let out
-    try { out = execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: tmp, encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'] }) } catch (error) { return [`入口加载失败：${String(error.stderr || error.message).slice(0, 500)}`] }
+    try { out = execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: root, encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'] }) } catch (error) { return [`入口加载失败：${String(error.stderr || error.message).slice(0, 500)}`] }
     const got = JSON.parse(out.split('\n').find((l) => l.startsWith('@@')).slice(2))
     const errors = []
     if (got.setup !== 'function') errors.push('入口要 export default 一个带 setup(api) 的对象')
@@ -225,7 +258,7 @@ export function packModule(mod, outDir) {
   mkdirSync(outDir, { recursive: true })
   writeFileSync(join(outDir, file), zip)
   const { id, name, version, description, category, author, license, api, minPluginVersion, requires, capabilities } = m
-  return { id, name, version, description, category, tags: m.tags || [], author, license, api, minPluginVersion, requires, capabilities, replacesBuiltin: Boolean(m.replacesBuiltin), ...(m.homepage ? { homepage: m.homepage } : {}), tag, file, path: `${tag}/${file}`, size: zip.length, sha256: createHash('sha256').update(zip).digest('hex') }
+  return { id, name, version, description, category, tags: m.tags || [], ...(m.platforms ? { platforms: m.platforms } : {}), author, license, api, minPluginVersion, requires, capabilities, replacesBuiltin: Boolean(m.replacesBuiltin), ...(m.homepage ? { homepage: m.homepage } : {}), tag, file, path: `${tag}/${file}`, size: zip.length, sha256: createHash('sha256').update(zip).digest('hex') }
 }
 
 /** 按这次打包结果和现有模块生成新的索引。删掉目录的模块自动下架；内容没变就原样返回。 */

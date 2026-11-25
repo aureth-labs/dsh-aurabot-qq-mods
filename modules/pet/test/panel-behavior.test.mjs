@@ -1,4 +1,4 @@
-// 面板集成：桌宠「行为动作」卡（设计稿 §8 测试通道）的 /panel/pet/behavior/* 代理。
+﻿// 面板集成：桌宠「行为动作」卡（设计稿 §8 测试通道）的 /panel/pet/behavior/* 代理。
 // 覆盖：状态行数据（开关/额度/下次/回执/禁用表）、「试一下」下发、/playback 回执回读、
 // 每动作 AI 开关（ext.pet.behaviorDisabledActions）、图标隔离区清单与「放回去」。
 // fake-dsh 模式；AURABOT_DATA_DIR 隔离；不引入新依赖。
@@ -89,7 +89,7 @@ test('状态行：/panel/pet/behavior/status 给齐总开关/额度/下次触发
     assert.ok(b.openActions.includes(a), '已开放动作缺了 ' + a)
   }
   assert.deepEqual(b.deferredActions, [], '第三批已实现，没有暂未开放的动作')
-  assert.equal(b.openActions.length, 9)
+  assert.equal(b.openActions.length, 10)
   assert.ok(b.openActions.includes('idle_anim'), 'idle_anim 是原「自动轮播」的替代出口')
 })
 

@@ -1,0 +1,909 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { createLogger } from './logger.js';
+import { DELIVERY_STATE, digestOf } from './delivery.js';
+import { DIRS } from './paths.js';
+
+const log = createLogger('outbound');
+
+/** 队列空闲多久后回收（分钟）。有会话在发就一直续，停了才删键 */
+const QUEUE_IDLE_MS = 60 * 1000;
+
+/**
+ * 出站消息调度器。
+ *
+ * QQ 官方接口的硬限制都在这里统一处理，插件和内核都不用关心：
+ *
+ *   1. 被动回复只有 5 分钟有效期，超时必失败 → 快过期时降级为主动消息
+ *   2. 同一条消息最多被动回复 5 次（msg_seq 1–5）→ 用满后同样降级
+ *   3. 发送接口 100 QPS（「每秒 5 条」只属于文字子频道，群聊 / 单聊没有这条）→ 本地令牌队列，超出的排队等
+ *   4. 主动消息有两个维度：单关系 20/分钟 + 每群 1000/天 → 本地记账，用完直接拒绝
+ *   5. 必须 WebSocket 在线才能发 → 离线时直接拒绝，不浪费一次网络请求
+ *   6. 主动消息返回 304023 表示「已进入审核」 → 这不是失败，不能当错误处理
+ *
+ * 插件只管调 msg.reply()，剩下的交给这里。
+ */
+
+/**
+ * 被动回复窗口。**两个接口不一样，别再用一个值。**
+ *
+ *   群聊 `/v2/groups/{group_openid}/messages`：5 分钟、最多 5 次
+ *   单聊 `/v2/users/{user_openid}/messages`：**60 分钟、最多 4 次**
+ *
+ * 以前两者共用「5 分钟 / 5 次」（群聊的口径），单聊的后果是：
+ *   · 5 分钟后就降级成主动消息，白吃「每个好友 1000 条/天」的额度，
+ *     而被动回复本来不占主动额度；
+ *   · 第 5 次回复会被服务端拒（40034128）。
+ *
+ * 各留 15 秒给网络和服务端时钟差。
+ */
+const PASSIVE_WINDOW_MS = {
+  group: 5 * 60 * 1000,
+  c2c: 60 * 60 * 1000,
+  /** 文字子频道 / 频道私信：官方 `send.html` 写被动回复有效期 5 分钟 */
+  guild: 5 * 60 * 1000,
+  dm: 5 * 60 * 1000,
+};
+const PASSIVE_SAFE_MS = {
+  group: PASSIVE_WINDOW_MS.group - 15_000,
+  c2c: PASSIVE_WINDOW_MS.c2c - 15_000,
+  guild: PASSIVE_WINDOW_MS.guild - 15_000,
+  dm: PASSIVE_WINDOW_MS.dm - 15_000,
+};
+
+/**
+ * 同一条消息最多回复次数：群聊 5、单聊 4。
+ * 超过会返回 40034128「被动回复时间或次数超限」。
+ * 频道侧官方只给了 5 分钟窗口，没给次数上限，所以不在这里拦。
+ */
+const PASSIVE_MAX_REPLIES = {
+  group: 5,
+  c2c: 4,
+  guild: Number.MAX_SAFE_INTEGER,
+  dm: Number.MAX_SAFE_INTEGER,
+};
+
+/**
+ * 主动消息日额度。群/单聊沿用 `this.dailyActive`（默认 1000）；
+ * 频道是另一套口径（`send.html` / `dms.html`）：
+ *   · 文字子频道：默认 20 条/天·子频道，且每个频道每天只能推 2 个子频道
+ *   · 频道私信：2 条/天·用户 + 200 条/天·机器人
+ * 本地先按单会话的严的那档记，跨子频道/跨用户的总量由平台兜底。
+ */
+export const CHANNEL_DAILY_ACTIVE = Object.freeze({ guild: 20, dm: 2 });
+
+/** 主动消息进入审核的返回码，属于正常结果 */
+const CODE_AUDIT = 304023;
+
+/**
+ * 把出站 payload 压成一行人能看懂的文字，用于日志。
+ *
+ * 排查时最常遇到的问题是「机器人到底回没回、回了什么」——发送侧以前
+ * 一行日志都没有，只能去翻 QQ 客户端对着猜。现在打出来。
+ *
+ * @param {object} payload api.js 驼峰字段的 payload
+ * @returns {string}
+ */
+function briefOf(payload) {
+  const b = payload ?? {};
+  const parts = [];
+  if (typeof b.content === 'string' && b.content.trim()) parts.push(b.content.trim());
+  if (b.markdown?.content) {
+    parts.push(`[markdown] ${String(b.markdown.content).replace(/\s+/g, ' ').trim()}`);
+  }
+  if (b.ark) parts.push('[ark 卡片]');
+  /**
+   * 官方图文卡片（msg_type=8）**没有正文**：content 必须为空，四个字段都在
+   * card 里。以前 briefOf 不认它，日志里就只剩「发出 …：(空)」，排查时
+   * 完全看不出刚才发的是哪张卡片。扁平 / 官方嵌套两种结构都认。
+   */
+  if (b.card) {
+    const c = b.card?.content ?? b.card;
+    const title = String(c?.title ?? '').trim();
+    parts.push(title ? `[图文卡片] ${title}` : '[图文卡片]');
+  }
+  if (b.media) {
+    // fileType 是数字（1 图 / 2 视频 / 3 语音 / 4 文件），直接打数字没人看得懂
+    const name = { 1: '图片', 2: '视频', 3: '语音', 4: '文件' }[b.media.fileType ?? b.fileType];
+    parts.push(name ? `[${name}消息]` : '[媒体消息]');
+  }
+  if (b.keyboard) parts.push('[按钮键盘]');
+  if (b.image) parts.push('[图片]');
+  if (b.file_uuid) parts.push('[文件]');
+
+  let text = parts.join(' | ');
+  if (text.length > 120) text = `${text.slice(0, 120)}…`;
+  return text;
+}
+
+/** 带错误码的发送异常，方便调用方分辨该提示用户什么 */
+export class SendError extends Error {
+  constructor(message, code, detail) {
+    super(message);
+    this.name = 'SendError';
+    /**
+     * 五种，按「多久能好」排序：
+     *   offline  连不上 QQ —— 等它上线
+     *   expired  被动窗口过了 —— 等用户再说一句
+     *   quota    今天这个会话的主动额度用完了 —— 等跨天
+     *   rate     这一分钟发得太密 —— 等一分钟
+     *   api      接口报错 —— 看具体错误码
+     */
+    this.code = code; // offline | expired | quota | rate | api
+    this.detail = detail;
+  }
+}
+
+/**
+ * 这次失败是「确定没发出去」还是「不知道发没发出去」。
+ *
+ * 只有 `api` 这一类可能不确定：超时、5xx、连接重置——请求发出去了但响应没回来。
+ * 其余四种（`offline` / `expired` / `quota` / `rate`）都是**本地判定**，
+ * 消息一定没发出去，记 `failed` 可以放心重试。
+ *
+ * 判错的代价不对称：把「确定失败」误判成 unknown，用户要人工核对（麻烦但安全）；
+ * 把 unknown 误判成「确定失败」，就会重发一条可能已经发出去的消息（重复打扰）。
+ * 所以这里宁可保守——拿不准就当 unknown。
+ */
+function uncertainOf(e) {
+  if (e?.code !== 'api') return false;
+  const s = String(e?.detail ?? e?.message ?? '');
+  return /timeout|timed out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket hang up|aborted|\b5\d\d\b/i.test(s);
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** 本地日期键，按用户所在时区算，不用 UTC 免得跨天错位 */
+export function dateKey(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/**
+ * 主动消息额度账本。
+ * 按「日期 → 会话 → 已用条数」记账，落盘到 data/quota.json，重启不清零。
+ */
+class QuotaLedger {
+  constructor(file) {
+    this.file = file;
+    this.data = null; // { '2026-10-22': { 'group:xxx': 3 } }
+    this.dirty = false;
+    this.timer = null;
+  }
+
+  async #load() {
+    if (this.data) return this.data;
+    try {
+      this.data = JSON.parse(await fs.readFile(this.file, 'utf8'));
+    } catch {
+      this.data = {};
+    }
+    // 只保留最近 3 天，避免文件无限增长
+    const keys = Object.keys(this.data).sort();
+    for (const k of keys.slice(0, Math.max(0, keys.length - 3))) delete this.data[k];
+    return this.data;
+  }
+
+  async used(chatKey) {
+    const d = await this.#load();
+    return d[dateKey()]?.[chatKey] ?? 0;
+  }
+
+  async consume(chatKey, n = 1) {
+    const d = await this.#load();
+    const day = dateKey();
+    d[day] ??= {};
+    d[day][chatKey] = (d[day][chatKey] ?? 0) + n;
+    this.#scheduleSave();
+    return d[day][chatKey];
+  }
+
+  /**
+   * 退还额度。发送失败时用——「先扣后发」不退还的话，一次网络抖动就白扣一条。
+   */
+  async refund(chatKey, n = 1) {
+    const d = await this.#load();
+    const day = dateKey();
+    if (!d[day]?.[chatKey]) return 0;
+    d[day][chatKey] = Math.max(0, d[day][chatKey] - n);
+    this.#scheduleSave();
+    return d[day][chatKey];
+  }
+
+  async snapshot() {
+    const d = await this.#load();
+    return { ...(d[dateKey()] ?? {}) };
+  }
+
+  #scheduleSave() {
+    this.dirty = true;
+    if (this.timer) return;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.flush().catch((e) => log.warn('额度账本写盘失败:', e.message));
+    }, 500);
+    this.timer.unref?.();
+  }
+
+  async flush() {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    if (!this.dirty || !this.data) return;
+    this.dirty = false;
+    try {
+      await fs.mkdir(path.dirname(this.file), { recursive: true });
+      await fs.writeFile(this.file, JSON.stringify(this.data, null, 2), 'utf8');
+    } catch (e) {
+      log.warn('额度账本写盘失败:', e.message);
+    }
+  }
+}
+
+/**
+ * 从出站报文里挑出「人看得懂的那部分」，喂给 `digestOf`。
+ *
+ * 报文不止一种形状，只认顶层 `content` 会漏掉一大半：
+ *
+ *   · 纯文本   `{ content }`
+ *   · markdown `{ markdown: { content } }` ← ai-chat 默认就走这条
+ *   · 卡片     `{ markdown, keyboard, ark }`
+ *   · 图文卡片 `{ msgType: 8, card: { type:'tuwen', content:{ title … } } }`
+ *   · 富媒体   `{ msgType: 7, media }`，**不带 content**（7 里 content 没有语义，
+ *              填了客户端会当正文，渲染出一块空文字区）
+ *
+ * 漏掉的后果不是发不出去（账本的状态机不看摘要），而是摘要列全变成
+ * `…(0)#da39a3ee`——所有记录长得一模一样，「人工核对」这条路等于堵死，
+ * 真出现 `unknown` 的时候只能靠猜。
+ */
+export function digestTextOf(payload) {
+  const p = payload ?? {};
+  const md = p.markdown;
+  const text = p.content ?? p.text ?? (typeof md === 'string' ? md : md?.content);
+  if (typeof text === 'string' && text.trim()) return text;
+  /**
+   * 没有正文的报文给个占位。一串空摘要里冒出 `[媒体]` / `[卡片]`，
+   * 至少能分辨「这条本来就没有文字」，而不是「摘要功能又坏了」。
+   */
+  /**
+   * 富媒体占位。
+   *
+   * 数值来自 api.js 的 FILE_TYPE，要能一眼看出是哪种媒体。
+   * 注意 `sendMedia` 的报文是 `{fileType, url}`——**没有 `media` 字段**，
+   * 以前只看 `p.media` 时，插件经 `ctx.api.sendMedia` 直发的消息在账本里
+   * 就是一条空摘要（复核实测：`digestTextOf({fileType:1,url}) === ''`）。
+   */
+  const mediaName = { 1: '（图片）', 2: '（视频）', 3: '（语音）', 4: '（文件）' }[Number(p.fileType)];
+  if (p.media) return mediaName ?? '[媒体]';
+  if (mediaName) return mediaName;
+  if (p.ark) return '[卡片]';
+  /**
+   * 图文卡片（`msg_type=8`）带上标题。只写 `[卡片]` 的话，一天发十条卡片
+   * 就是十条一模一样的记录，账本里根本分不出哪条是哪条。
+   */
+  /** 协议 / 扩展路径给的是扁平 `{title, …}`，`msg.replyTuwen()` 给的是嵌套 `{type,content}` */
+  const cardBody = p.card?.content ?? p.card;
+  const cardTitle = String(cardBody?.title ?? '').trim();
+  if (p.card) return cardTitle ? `[图文卡片] ${cardTitle}` : '[图文卡片]';
+  return '';
+}
+
+export class Outbound {
+  /**
+   * @param {object} opts
+   * @param {object} opts.api            QQApi 实例
+   * @param {object} opts.cfg            全局配置
+   * @param {() => boolean} opts.isOnline 机器人是否已连上网关
+   */
+  constructor({ api, cfg, isOnline = () => true, quotaFile, delivery = null, ledger = null, queueIdleMs = QUEUE_IDLE_MS }) {
+    this.api = api;
+    /** 队列空闲回收时长（毫秒）。默认 60s，测试可传短值 */
+    this.queueIdleMs = Math.max(1, Number(queueIdleMs) || QUEUE_IDLE_MS);
+    /** 投递账本（阶段 5）。没有它就退回原来的「发一次算一次」 */
+    this.delivery = delivery;
+    /**
+     * 事件账本（v3 出站入账）。**不能走构造函数传**——`bot.js` 里
+     * `createLedger` 在 `new Outbound` 之后才执行，这里拿到的是 undefined。
+     * 真正生效的是 `bot.js` 里那句后置注入 `this.outbound.ledger = this.ledger`。
+     */
+    this.ledger = ledger;
+    this.cfg = cfg;
+    this.isOnline = isOnline;
+
+    const o = cfg.outbound ?? {};
+    // 官方没有「每会话每秒 N 条」这条限制（那只适用于文字子频道），接口级是 100 QPS；
+    // 这里压到 4 条/秒纯属自家的保守策略，给其他来源留一点余量
+    this.perSec = Math.max(1, o.perSec ?? 4);
+    /**
+     * 主动消息额度。官方文档（`autogen/api/.../messages.post`）写的是两个维度：
+     *
+     *   - 单关系（接收方）：20/qpm，且**每个群 1 天最多接收 1000 条**
+     *   - Bot（发送方）：认证 60/qpm，未认证 30/qpm
+     *
+     * 这里以前按「20 条/天」记账（把频道的口径套到了群聊），少算了 50 倍，
+     * 主动推送被白白拦掉。现在按官方数值：1000/天 + 20/分钟。
+     */
+    this.dailyActive = Math.max(0, o.dailyActive ?? 1000);
+    this.activePerMin = Math.max(0, o.activePerMinute ?? 20);
+    this.downgrade = o.downgradeToActive !== false;
+    /**
+     * E3：dry 出站截获。开着时 `send()` 不真发，只记下本来会发什么。
+     * **只能截本进程内建插件的出站**：外部子进程插件走 NDJSON，不经过这里。
+     */
+    this.dry = Boolean(o.dryRun);
+    /** 最近 50 条「本来会发出去」的消息，面板只读展示 */
+    this.dryLog = [];
+
+    /** msgId -> 已用被动回复次数。官方：同一条消息最多 5 次 */
+    this.passiveCount = new Map();
+    /** chatKey -> 最近 60 秒的主动发送时间戳 */
+    this.activeLog = new Map();
+
+    // 额度账本按机器人分开，不同机器人的额度互不影响
+    this.quota = new QuotaLedger(quotaFile ?? path.join(DIRS.data, 'quota.json'));
+    /** chatKey -> { chain: Promise, history: number[], idleTimer } */
+    this.queues = new Map();
+
+    this.stats = {
+      passive: 0,
+      active: 0,
+      degraded: 0, // 被动超窗降级为主动的次数
+      expired: 0, // 因超窗被拒绝的次数
+      quotaBlocked: 0, // 因日额度用完被拒绝的次数（等跨天才好）
+      rateBlocked: 0, // 因分钟限流被拒绝的次数（等一分钟就好）
+      throttled: 0, // 因限速排队过的次数
+      audit: 0, // 进入审核的主动消息
+      offline: 0,
+    };
+  }
+
+  /* ---------------- E3：dry 出站截获 ---------------- */
+
+  /** 面板开关。返回切换后的状态 */
+  setDry(on) {
+    this.dry = on === true;
+    if (!this.dry) this.dryLog.length = 0;
+    return this.dry;
+  }
+
+  #drySend(opts) {
+    const p = opts?.payload ?? {};
+    const text = String(p.markdown?.content ?? p.content ?? '');
+    const row = {
+      at: Date.now(),
+      kind: String(opts?.kind || ''),
+      target: String(opts?.target || ''),
+      /** 有 msgId / receivedAt 就是被动回复，否则是主动推送 */
+      passive: Boolean(p.msgId || opts?.receivedAt),
+      text: text.slice(0, 200),
+      files: Array.isArray(p.files) ? p.files.length : 0,
+      keyboard: Boolean(p.keyboard),
+    };
+    this.dryLog.push(row);
+    if (this.dryLog.length > 50) this.dryLog.shift();
+    this.stats.dry = (this.stats.dry || 0) + 1;
+    log.info(`[dry] ${row.kind} ${row.target}：${row.text.slice(0, 40)}`);
+    /** 形状和真实发送一致，调用方不用分叉；`dry:true` 让它知道没真发 */
+    return { ok: true, dry: true, id: '', pending: false };
+  }
+
+  /* ---------------- 对外主入口 ---------------- */
+
+  /**
+   * 发送一条消息。payload 里带 msg_id 就是被动回复，不带就是主动推送。
+   *
+   * @param {object} p
+   * @param {'group'|'c2c'} p.kind
+   * @param {string} p.target      群 openid 或用户 openid
+   * @param {string} p.chatKey     记账与限速用的会话键，如 group:xxx
+   * @param {object} p.payload     发给接口的报文
+   * @param {number} [p.receivedAt] 触发本次回复的消息接收时间
+   * @returns {Promise<{id?:string, pending?:boolean, degraded?:boolean}>}
+   */
+  /**
+   * 发送。**有 `requestId` 就走投递账本，没有就照旧发一次。**
+   *
+   * 为什么不是「所有发送都记账」：`requestId` 由调用方生成，只有它知道
+   * 「一段话」的语义边界（`qq_send` 每调一次是一段独立消息）。插件直接
+   * `msg.reply()` 那种没有 id，按原行为走——被动回复本身有 `msg_seq` 兜底。
+   *
+   * 账本是**增强**不是主链路：`claim` 失败一律退回「照发」，不能让记账把消息堵死。
+   */
+  async send(opts) {
+    /** E3：dry 模式在**最顶层**截住，连投递账本和限速都不进——它本来就没发 */
+    if (this.dry) return this.#drySend(opts);
+    const requestId = String(opts?.requestId ?? '').trim();
+    if (!requestId || !this.delivery) {
+      /**
+       * 没有幂等键（被动回复 / 富媒体 / 框架菜单）走这里。
+       * 以前直接 return，导致图片、菜单全都不入账。
+       * 与下面的 settle 分支互斥：这里不经过 delivery，reuse 也进不来。
+       */
+      const r = await this.#sendOnce(opts);
+      this.#recordOutbound(opts, r);
+      return r;
+    }
+
+    const c = this.delivery.claim({
+      requestId,
+      kind: opts.kind,
+      chatId: opts.target,
+      replyTo: opts.payload?.msgId,
+      msgSeq: opts.payload?.msgSeq,
+      digest: digestOf(digestTextOf(opts.payload)),
+    });
+
+    if (c.action === 'reuse') {
+      // 已经发过：直接回上次的结果，**不再打接口**
+      return {
+        id: c.row?.msg_id || '',
+        reused: true,
+        pending: c.row?.state === DELIVERY_STATE.AUDITED,
+        requestId,
+      };
+    }
+    if (c.action === 'unknown') {
+      /**
+       * 上次结果未知，**绝不自动重发**。
+       *
+       * 官方配额下重发的代价是双份：可能重复发一条，还会撞上限流。
+       * 宁可让人去面板核对一次。
+       */
+      throw new SendError(
+        '这条消息上次的发送结果未知（超时或进程崩溃），不会自动重发。请到面板「投递」页核对',
+        'unknown',
+      );
+    }
+    if (c.action === 'wait') {
+      throw new SendError('这条消息正在发送中，别重复调用', 'pending');
+    }
+
+    try {
+      const r = await this.#sendOnce(opts);
+      this.delivery.settle(
+        requestId,
+        r?.pending ? DELIVERY_STATE.AUDITED : DELIVERY_STATE.SENT,
+        { msgId: r?.id },
+      );
+      /**
+       * 两个成功出口各记一次，**互斥**：
+       *   · 这里 = 有 requestId、走 delivery 的路径；
+       *   · 早返回分支 = 无 requestId（被动回复 / 富媒体 / 菜单）。
+       * reuse 不调 #sendOnce，catch 里发送失败，两者都不记。
+       */
+      this.#recordOutbound(opts, r);
+      return { ...r, requestId };
+    } catch (e) {
+      /**
+       * 失败也要结算，否则这一行永远卡在 `pending`。
+       *
+       * `unknown` 只给「不知道发没发出去」的情况（超时 / 5xx / 连接重置）。
+       * `offline` / `expired` / `quota` / `rate` 是**确定没发出去**，记 `failed` 允许重试。
+       */
+      this.delivery.settle(requestId, uncertainOf(e) ? DELIVERY_STATE.UNKNOWN : DELIVERY_STATE.FAILED, {
+        code: e?.code || 'error',
+      });
+      throw e;
+    }
+  }
+
+  /**
+   * 出站入账（v3）。
+   *
+   * 只在**发送成功之后**记：没发出去就等于没说过，记了会污染时间线，
+   * 而时间线正是 `chat_look` 和巩固的原料。
+   *
+   * 三条边界：
+   *   · 账本没接（老版本 / 被关）→ 直接返回，不报错；
+   *   · `append` 抛错 → 只 warn，**绝不影响发送**（账本是增强不是主链路）；
+   *   · `at` 由 `timeBasis:'observation'` 决定（= 本地发送时刻）。
+   *     `append()` 不认外部传的 `at`，它只从 `msg.raw.timestamp` 推——别传，
+   *     传了也不会生效，反而会让人以为时间被固定住了。
+   *
+   * `userId` / `userName` 留空：机器人自己的 openid 要 `api.getMe()`（网络调用），
+   * 不能阻塞发送。时间线里出站行显示的是插件名，不缺这两个字段。
+   */
+  /**
+   * 给「不经过本类 send() 的发送路径」补记一笔出站事件。
+   *
+   * 目前只有 `msg.replyStream`：它直连 `api.sendStreamMessage`，绕过
+   * `#sendOnce` 与 delivery，所以 `send()` 里那两个记账出口都覆盖不到它
+   * —— 单聊长回复会整条不进账本、「谁」列依旧空（复核抓到的 P1）。
+   * 由调用方在**发送成功之后**调一次，幂等由调用方保证。
+   */
+  recordDirect({ kind, target, content, payload = null, plugin = '', id = '' } = {}) {
+    this.#recordOutbound(
+      {
+        kind,
+        target,
+        /**
+         * 能传完整报文就传：只给 `content` 的话，插件发 `{markdown:{content}}`
+         * 或纯媒体时摘要会是空串，账本里就成了一行没有内容的记录。
+         */
+        payload: payload ?? { content: String(content ?? '') },
+        plugin,
+      },
+      { id: String(id ?? '') },
+    );
+  }
+
+  #recordOutbound(opts, r) {
+    if (!this.ledger?.append) return;
+    try {
+      this.ledger.append(
+        {
+          kind: String(opts.kind ?? ''),
+          chatId: String(opts.target ?? ''),
+          userId: '',
+          userName: '',
+          content: digestTextOf({
+            ...opts.payload,
+            ...(opts.fileType != null ? { fileType: opts.fileType } : {}),
+          }),
+          id: String(r?.id ?? ''),
+          msgIdx: String(r?.raw?.ext_info?.ref_idx ?? ''),
+          /**
+           * 谁说的。多插件合并时是逗号分隔（`echo,ai-chat`），
+           * 由 `message.js` 的 `flushReplies` 拼好传下来。
+           */
+          plugin: String(opts.plugin ?? ''),
+        },
+        { timeBasis: 'observation' },
+      );
+    } catch (e) {
+      log.warn(`出站没记进账本（不影响发送）：${e.message}`);
+    }
+  }
+
+  async #sendOnce({ kind, target, chatKey, payload, receivedAt, fileType }) {
+    if (!['group', 'c2c', 'guild', 'dm'].includes(kind)) {
+      throw new SendError(`不支持的会话类型: ${kind}`, 'api');
+    }
+    /** 频道的主动额度与群/单聊不是一回事，按 kind 取 */
+    const dailyLimit = CHANNEL_DAILY_ACTIVE[kind] ?? this.dailyActive;
+    if (!this.isOnline()) {
+      this.stats.offline += 1;
+      /**
+       * 错误消息要**带上下一步怎么办**。
+       *
+       * 只解释原因（「没连上」）时，调用方只能自己猜是重试还是放弃；
+       * 写明「等它上线」，它就知道这类错误不该重试。
+       */
+      throw new SendError(
+        '机器人当前没有连上 QQ，消息发不出去。等它重新上线再试（面板「运行」页能看状态）。',
+        'offline',
+      );
+    }
+
+    const body = { ...payload };
+    // 约定：payload 用 api.js 的驼峰字段（msgId / msgSeq），由 api.js 转成 msg_id / msg_seq
+    const wantPassive = Boolean(body.msgId);
+    let active = !wantPassive;
+    let degraded = false;
+
+    // 1) 被动窗口检查：快过期就别发请求了，直接按主动消息处理
+    if (wantPassive) {
+      const age = receivedAt ? Date.now() - receivedAt : 0;
+      const safeMs = PASSIVE_SAFE_MS[kind];
+      if (age > safeMs) {
+        if (!this.downgrade) {
+          this.stats.expired += 1;
+          throw new SendError(
+            `这条消息已经过去 ${Math.round(age / 1000)} 秒，超过 QQ 的 ${Math.round(safeMs / 1000)} 秒被动回复窗口，回复发不出去了`,
+            'expired',
+          );
+        }
+        delete body.msgId;
+        delete body.msgSeq;
+        active = true;
+        degraded = true;
+        this.stats.degraded += 1;
+        log.warn(
+          `被动窗口已过（${Math.round(age / 1000)}s），降级为主动消息 · ${chatKey}`,
+        );
+      }
+    }
+
+    // 2) 排队 + 限速 + 额度扣减 + 实际发送
+    //    额度的「查」和「扣」都放在队列里，避免两个并发推送同时通过检查后超额
+    return this.#enqueue(chatKey, async () => {
+      // 2a) 被动回复次数上限：群聊 5 次、单聊 4 次
+      //     同一条消息被多个插件连着回、或用户一句话触发多轮时很容易撞上，
+      //     本地先拦，省得服务端返回 40034128 再兜底
+      let passiveNow = wantPassive && !active;
+      if (passiveNow) {
+        const maxReplies = PASSIVE_MAX_REPLIES[kind];
+        const used = this.passiveCount.get(body.msgId) ?? 0;
+        if (used >= maxReplies) {
+          if (!this.downgrade) {
+            this.stats.expired += 1;
+            throw new SendError(
+              `同一条消息最多回复 ${maxReplies} 次（QQ 官方限制），这条已经回满了。\n` +
+                `等用户再说一句，就能继续用被动回复。`,
+              'expired',
+            );
+          }
+          delete body.msgId;
+          delete body.msgSeq;
+          passiveNow = false;
+          active = true;
+          degraded = true;
+          this.stats.degraded += 1;
+          log.warn(
+            `同一条消息已回复 ${used} 次，达到官方上限，降级为主动消息 · ${chatKey}`,
+          );
+        } else {
+          this.passiveCount.set(body.msgId, used + 1);
+          this.#prunePassiveCount();
+        }
+      }
+
+      // 2b) 主动消息额度：日额度 + 分钟额度，两个都要过
+      //     互动召回（is_wakeup）走官方独立额度：用户主动对话后 30 天内
+      //     当天 / 1–3 天 / 3–7 天 / 7–30 天四个窗口各 1 条。
+      //     上游 dsh-roost 已按窗口严格记账（最多 4 条 / 30 天），
+      //     这里再扣本地日额度会让「7–30 天」那档永远发不出去；
+      //     但分钟限流仍要过，防刷屏是另一回事。
+      const isWakeup = body.isWakeup === true;
+      if (active) {
+        if (!isWakeup) {
+          const used = await this.quota.used(chatKey);
+          if (used >= dailyLimit) {
+            this.stats.quotaBlocked += 1;
+            throw new SendError(
+              `这个会话今天的主动消息额度已用完（${dailyLimit} 条/天），QQ 不再允许主动推送。\n` +
+                `等用户 @ 一次机器人，就能继续用被动回复。`,
+              'quota',
+            );
+          }
+        }
+        /**
+         * 分钟限流单独一个 code（`rate`），**不能和日额度共用 `quota`**。
+         *
+         * 两者的「多久能好」差三个数量级：日额度要等跨天，分钟限流等一分钟。
+         * 以前都叫 `quota`，调用方只能按最坏情况处理——dsh-roost 的主动搭话
+         * 会把「发得太密」当成「今天说满了」，直接放弃一整天。
+         * 反过来按最好情况处理，就是每分钟重试一次空转到跨天。
+         */
+        if (!this.#allowActiveThisMinute(chatKey)) {
+          this.stats.rateBlocked += 1;
+          throw new SendError(
+            `这个会话的主动消息发得太密（官方限制 ${this.activePerMin} 条/分钟），**等 1 分钟**就好。`,
+            'rate',
+          );
+        }
+        if (!isWakeup) await this.quota.consume(chatKey);
+      }
+
+      try {
+        const r = await this.#post(kind, target, body, active ? '主动' : '被动', fileType);
+        if (active) this.stats.active += 1;
+        else this.stats.passive += 1;
+        if (r?.pending) this.stats.audit += 1;
+        return { ...r, degraded };
+      } catch (e) {
+        // 被动回复没发出去，把这次占用的次数退回去，不然 5 次额度会白白烧掉
+        if (passiveNow) {
+          const n = this.passiveCount.get(body.msgId) ?? 0;
+          if (n > 0) this.passiveCount.set(body.msgId, n - 1);
+        }
+        // 主动消息是「先扣后发」，发失败要把额度退回去（互动召回没扣，不退）
+        if (active && !isWakeup) await this.quota.refund(chatKey).catch(() => {});
+        // 被动回复被服务端判定过期（本地时钟差或排队等太久），再降级试一次
+        const canRetry =
+          wantPassive && !active && this.downgrade && this.#looksExpired(e);
+        if (!canRetry) throw e;
+
+        const used = await this.quota.used(chatKey);
+        if (used >= dailyLimit || !this.#allowActiveThisMinute(chatKey)) {
+          this.stats.expired += 1;
+          throw new SendError(
+            'QQ 判定这条被动回复已过期，且主动消息额度不够补救',
+            'expired',
+          );
+        }
+        await this.quota.consume(chatKey);
+        const fallback = { ...body };
+        delete fallback.msgId;
+        delete fallback.msgSeq;
+        log.warn(`被动回复被拒（${e.message}），改发主动消息 · ${chatKey}`);
+        const r = await this.#post(kind, target, fallback, '降级主动', fileType);
+        this.stats.degraded += 1;
+        this.stats.active += 1;
+        if (r?.pending) this.stats.audit += 1;
+        return { ...r, degraded: true };
+      }
+    });
+  }
+
+  /* ---------------- 内部 ---------------- */
+
+  async #post(kind, target, body, how = '', fileType) {
+    const r = kind === 'group'
+      ? await this.api.sendGroup(target, body)
+      : kind === 'c2c'
+        ? await this.api.sendC2C(target, body)
+        : kind === 'guild'
+          ? await this.api.sendChannelMessage(target, body)
+          : await this.api.sendDmMessage(target, body);
+
+    // 发出去了什么。放在这里而不是调用处：三个调用点（正常 / 降级 / 审核中）
+    // 都要打，写在一处不会漏
+    const where = String(target ?? '').slice(0, 10) || '-';
+    /** 顶层 fileType 不进 body（会被 api 当未知字段带出去），只用于日志与账本 */
+    const what = briefOf({ ...body, ...(fileType != null ? { fileType } : {}) }) || '(空)';
+
+    // 主动消息需要审核，接口会用业务码返回「审核中」，这不是失败
+    /** 304023 主动、304024 被动进入审核，都不是失败（官方 send.html 明确写在 data 里返回） */
+    if (r && typeof r === 'object' && (Number(r.code) === CODE_AUDIT || Number(r.code) === 304024)) {
+      log.info(`发出 ${kind} →${where}（${how}·审核中）：${what}`);
+      return { pending: true, id: r.id ?? '', raw: r };
+    }
+    log.info(`发出 ${kind} →${where}${how ? `（${how}）` : ''}：${what}`);
+    return { id: r?.id ?? '', raw: r };
+  }
+
+  /** 从异常里判断是不是「被动窗口过期」这类可降级的错误 */
+  #looksExpired(e) {
+    const text = `${e?.message ?? ''} ${JSON.stringify(e?.body ?? {})}`.toLowerCase();
+    return (
+      text.includes('msg_id') ||
+      text.includes('expire') ||
+      text.includes('过期') ||
+      text.includes('超时') ||
+      text.includes('40034')
+    );
+  }
+
+  /**
+   * 最近 60 秒这个会话发了几条。
+   *
+   * 只读，不占坑——`#allowActiveThisMinute` 会顺手把当前时刻压进队列，
+   * 诊断用的时候不能有这个副作用（面板刷一次就少一次额度就离谱了）。
+   */
+  rateUsed(chatKey, now = Date.now()) {
+    return (this.activeLog.get(chatKey) ?? []).filter((t) => now - t < 60_000).length;
+  }
+
+  /**
+   * 主动消息分钟级限流。官方单关系维度是 20/qpm，
+   * 日额度够但一分钟内猛发照样会被服务端 40034100 拦下，本地先挡。
+   * @returns {boolean} 这一分钟还允许发吗（允许时顺便占一个坑）
+   */
+  #allowActiveThisMinute(chatKey) {
+    if (this.activePerMin <= 0) return true;
+    const now = Date.now();
+    const list = (this.activeLog.get(chatKey) ?? []).filter((t) => now - t < 60_000);
+    if (list.length >= this.activePerMin) {
+      this.activeLog.set(chatKey, list);
+      return false;
+    }
+    list.push(now);
+    this.activeLog.set(chatKey, list);
+    // 会话数很多时别让这张表无限长
+    if (this.activeLog.size > 500) {
+      const oldest = this.activeLog.keys().next().value;
+      if (oldest !== undefined) this.activeLog.delete(oldest);
+    }
+    return true;
+  }
+
+  /** 被动次数表不能无限长，超了丢最旧的（和 api.js 的 seqMap 一个套路） */
+  #prunePassiveCount() {
+    if (this.passiveCount.size <= 2000) return;
+    const oldest = this.passiveCount.keys().next().value;
+    if (oldest !== undefined) this.passiveCount.delete(oldest);
+  }
+
+  /**
+   * 同一会话串行执行，并保证 1 秒内不超过 perSec 条。
+   * 不同会话之间互不影响，可以并行。
+   */
+  #enqueue(chatKey, task) {
+    let q = this.queues.get(chatKey);
+    if (!q) {
+      q = { chain: Promise.resolve(), history: [], idleTimer: null, idleGen: 0 };
+      this.queues.set(chatKey, q);
+    }
+    // 有活了：撤销上一次排的空闲回收（连同它那代编号一起作废）
+    if (q.idleTimer) {
+      clearTimeout(q.idleTimer);
+      q.idleTimer = null;
+    }
+    q.idleGen += 1;
+    const gen = q.idleGen;
+    const run = q.chain.then(async () => {
+      await this.#throttle(q);
+      return task();
+    });
+    // 链不能因为某次失败就断掉
+    q.chain = run.then(
+      () => {},
+      () => {},
+    );
+    // 这一批任务跑完后排空闲回收：只有「仍是同一个 q、代号没变」才删，
+    // 这样后来入队的任务撤销旧 timer 后，旧回调不会误删正在用的队列。
+    q.chain.then(() => this.#retireIdleQueue(chatKey, q, gen));
+    return run;
+  }
+
+  /** 队列空闲 QUEUE_IDLE_MS 后删键；代号不匹配说明期间又有新任务，放弃本次回收 */
+  #retireIdleQueue(chatKey, q, gen) {
+    const timer = setTimeout(() => {
+      q.idleTimer = null;
+      if (q.idleGen !== gen) return;
+      if (this.queues.get(chatKey) !== q) return;
+      this.queues.delete(chatKey);
+    }, this.queueIdleMs);
+    timer.unref?.();
+    q.idleTimer = timer;
+  }
+
+  async #throttle(q) {
+    for (;;) {
+      const now = Date.now();
+      q.history = q.history.filter((t) => now - t < 1000);
+      if (q.history.length < this.perSec) {
+        q.history.push(now);
+        return;
+      }
+      this.stats.throttled += 1;
+      const wait = 1000 - (now - q.history[0]) + 10;
+      if (wait > 0) await sleep(wait);
+    }
+  }
+
+  /* ---------------- 状态 ---------------- */
+
+  async quotaSnapshot() {
+    return this.quota.snapshot();
+  }
+
+  /** 给 /status 和面板用的一行摘要 */
+  async summary() {
+    const used = await this.quota.snapshot();
+    const total = Object.values(used).reduce((a, b) => a + b, 0);
+    return {
+      ...this.stats,
+      perSec: this.perSec,
+      dailyActive: this.dailyActive,
+      activePerMinute: this.activePerMin,
+      activeUsedToday: total,
+      activeByChat: used,
+    };
+  }
+
+  async flush() {
+    await this.quota.flush();
+
+    /**
+     * 等排队中的发送发完再退出。
+     *
+     * 以前只刷额度账本、完全不看 `this.queues`：重启/更新/关机时，
+     * 用户看到命令执行了，回复却永远没发出去，额度还照扣。
+     * 最多等 5 秒，超时就明确说丢了几条。
+     */
+    const chains = [...this.queues.values()].map((q) => q.chain);
+    if (chains.length) {
+      let timedOut = false;
+      const timeout = new Promise((resolve) => {
+        const t = setTimeout(() => {
+          timedOut = true;
+          resolve();
+        }, 5000);
+        t.unref?.();
+      });
+      await Promise.race([Promise.allSettled(chains), timeout]);
+      if (timedOut) {
+        log.warn(`退出前还有 ${this.queues.size} 个会话的发送任务没排完，已放弃等待`);
+      }
+    }
+  }
+}
+
+/** 把 SendError 翻译成给用户看的话；非 SendError 返回 null */
+export function userFacingSendError(e) {
+  if (e instanceof SendError) return e.message;
+  return null;
+}
