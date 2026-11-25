@@ -116,6 +116,28 @@ export function checkCommand (command, opts = {}) {
   if (raw.length > 300) return deny('命令太长')
   if (/[\r\n]/.test(raw)) return deny('命令里不能有换行')
   if (matchesBlocked(raw, opts.blocked || [])) return deny('这个命令被设为禁止执行')
+
+  // 回家交给服务器的 /home [名字]（支持多个家、自己管维度），RCON 里要用 execute as 以玩家身份执行
+  if (/^home(?:\s|$)/i.test(raw)) {
+    const parts = raw.split(/\s+/).filter(Boolean)
+    if (parts.length > 2) return deny('home 只带一个家名')
+    let name = parts[1]
+    // 模型有时会写成 home <玩家名>；玩家名不是家名，去掉
+    if (name && isSelf(name, opts.player)) name = ''
+    if (name && !/^[A-Za-z0-9_\u4e00-\u9fa5-]{1,16}$/.test(name)) return deny('家名格式不对')
+    if (opts.admin !== true) {
+      const allowed = Array.isArray(opts.guestCommands) ? opts.guestCommands : []
+      if (!allowed.includes('home')) return deny('普通玩家不能用 home')
+    }
+    if (!opts.player) return deny('不知道是谁要回家')
+    return {
+      ok: true,
+      command: `execute as ${opts.player} run home${name ? ' ' + name : ''}`,
+      level: opts.admin === true ? 'admin' : 'guest',
+      kind: 'home',
+    }
+  }
+
   if (opts.admin === true) {
     // 管理员说「回去」也走同一套缓存坐标（RCON 里 /back 需要玩家执行）
     if (/^back$/i.test(raw)) return { ok: true, command: 'back', level: 'admin', kind: 'back' }

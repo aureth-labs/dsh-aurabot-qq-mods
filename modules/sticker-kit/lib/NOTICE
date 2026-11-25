@@ -1,0 +1,18 @@
+dsh-nekowhale-stickers
+Copyright 2026 Loping151
+
+Source: https://github.com/Loping151/dsh-nekowhale-stickers
+
+Sticker artwork and templates by 可以叫我云大人 / 雾雪
+  Bilibili: https://space.bilibili.com/103739
+  Website:  https://kiriyuki.com
+大肥鱼 character design based on ZipZipPipe (https://space.bilibili.com/4168597)
+  and 上善无形 (https://space.bilibili.com/4456176); GPT娘 design based on ZipZipPipe.
+
+Modified versions, and republished software with the same features, must keep this NOTICE,
+i.e. credit the repository address above and link the sticker author.
+
+---
+这份署名也跟着搬过来了：DHS 的 dsh-nekowhale-stickers 插件已从本机卸载，
+它的表情知识库（meme / dir / text / use / desc）已补进 Aurabot 表情库，
+模板渲染与检索打分在 vendor/ 和 lib-search.mjs 里，出处按上面 NOTICE 的要求保留。
