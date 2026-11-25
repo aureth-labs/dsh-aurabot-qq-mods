@@ -1,0 +1,21 @@
+{
+  "id": "slop",
+  "name": "去套话",
+  "version": "1.0.0",
+  "description": "只在发给模型的历史上改写套话式提问，不动落盘会话，也不改主人看到的原文。",
+  "category": "tool",
+  "tags": [
+    "聊天",
+    "改写"
+  ],
+  "author": "Aurabot",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "filesystem",
+    "plugin-internals"
+  ],
+  "homepage": "https://github.com/aureth-labs/dsh-aurabot-qq"
+}

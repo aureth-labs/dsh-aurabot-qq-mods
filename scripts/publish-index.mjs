@@ -6,7 +6,7 @@ import { ROOT, listModules, mergeIndex } from './lib.mjs'
 
 const arg = (name) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : '' }
 const read = (path) => (path && existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null)
-const repo = process.env.GITHUB_REPOSITORY || 'accomplish07zrh-eng/dsh-aurabot-qq-mods'
+const repo = process.env.GITHUB_REPOSITORY || 'aureth-labs/dsh-aurabot-qq-mods'
 
 const index = mergeIndex({
   previous: read(arg('--previous')),

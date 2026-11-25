@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<!-- Aurabot 桌宠 · 待办小窗（todo.html）—— 本文件是模板/生成物：
+     由插件「桌宠」模块生成到 <数据目录>/modules-data/pet/app/，随 main.js 一起更新。
+     为什么是独立小窗而不是气泡：桌宠窗口只有 ~460 宽，塞一张可编辑清单会把窗口顶到 700 高、
+     还会把人物挤出可视区。这里和对话框（chat.html）同一套路：本地小窗 + ipc，无远程内容。
+     数据：GET /todos 拿合并清单（DSH 那边的任务只读 + 本地自记的），增删改走 /todos/*。
+     快捷键 / 右键菜单 / 托盘都能唤起；Esc 或失焦收起（由 main.js 处理）。 -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 100vw; height: 100vh; display: flex; flex-direction: column;
+    font: 13px/1.5 "Microsoft YaHei", system-ui, sans-serif; background: rgba(250,250,252,.97);
+    border-radius: 10px; overflow: hidden; box-shadow: 0 4px 18px rgba(0,0,0,.18); }
+  #bar { padding: 7px 12px; font-size: 11px; color: #98a0aa; user-select: none; flex: none;
+    display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #eeeef3; }
+  #bar b { color: #5a6270; font-weight: 600; font-size: 12px; }
+  #cnt { margin-left: auto; }
+  #form { flex: none; display: flex; gap: 6px; padding: 9px 12px 7px; }
+  #inp { flex: 1 1 auto; border: 1px solid #dde1e8; border-radius: 8px; padding: 7px 10px; font: inherit; outline: none; min-width: 90px; }
+  #inp:focus { border-color: #9db8e8; }
+  /* 日期框：不撑满也不抢输入框的宽度。宽 122px 刚好放得下 12/31 23:59，又不至于把正文挤没 */
+  #due { border: 1px solid #dde1e8; border-radius: 8px; padding: 6px 6px; font: inherit; font-size: 11px;
+    color: #5a6270; outline: none; background: #fff; flex: 0 0 122px; width: 122px; }
+  #due:focus { border-color: #9db8e8; }
+  #add { border: 0; border-radius: 8px; padding: 7px 12px; font: inherit; background: #5b8def;
+    color: #fff; cursor: pointer; flex: none; white-space: nowrap; }
+  #add:active { background: #4a7de0; }
+  #add:disabled { background: #c3cddd; cursor: default; }
+  #err { margin: 0 12px 4px; padding: 5px 9px; border-radius: 7px; background: #fdecec; color: #c0392b;
+    font-size: 11px; flex: none; }
+  #err[hidden] { display: none; }
+  #list { flex: 1; overflow-y: auto; padding: 2px 12px 10px; list-style: none; }
+  .it { display: flex; align-items: flex-start; gap: 8px; padding: 7px 0; border-bottom: 1px solid #f2f2f6; }
+  .it:last-child { border-bottom: 0; }
+  .ck { margin-top: 3px; flex: none; cursor: pointer; accent-color: #5b8def; }
+  .main { flex: 1; min-width: 0; }
+  .tx { color: #333; word-break: break-word; }
+  .it.done .tx { color: #a8b0ba; text-decoration: line-through; }
+  .meta { margin-top: 2px; font-size: 11px; color: #a8b0ba; }
+  .meta.warn { color: #e08c3a; }
+  .meta.late { color: #d9534f; }
+  .del { flex: none; border: 0; background: transparent; color: #c8ced8; cursor: pointer;
+    font: inherit; padding: 2px 5px; border-radius: 5px; }
+  .del:hover { background: #f4f5f8; color: #8b93a0; }
+  .del.armed { background: #fdecec; color: #d9534f; }
+  .tag { display: inline-block; margin-left: 5px; padding: 0 5px; border-radius: 4px;
+    background: #eef3fd; color: #6d8ec9; font-size: 10px; vertical-align: 1px; }
+  #empty { padding: 26px 16px; text-align: center; color: #b4bbc6; font-size: 12px; line-height: 1.8; }
+  #empty[hidden] { display: none; }
+</style>
+</head>
+<body>
+  <div id="bar"><b>待办</b><span id="cnt"></span></div>
+  <div id="form">
+    <input id="inp" placeholder="记一件要做的事…（回车添加）" maxlength="200" autocomplete="off">
+    <input id="due" type="datetime-local" title="到期时间（可留空）">
+    <button id="add">添加</button>
+  </div>
+  <div id="err" hidden></div>
+  <ul id="list"></ul>
+  <div id="empty">还没有待办～<br>记一件要做的事，到点我会提醒你</div>
+<script>
+const { ipcRenderer } = require('electron')
+const list = document.getElementById('list')
+const inp = document.getElementById('inp')
+const due = document.getElementById('due')
+const addBtn = document.getElementById('add')
+const errBox = document.getElementById('err')
+const cnt = document.getElementById('cnt')
+const empty = document.getElementById('empty')
+const MIN = 60000, HOUR = 60 * MIN, DAY = 24 * HOUR
+let busy = false
+
+function esc(s) { const d = document.createElement('div'); d.textContent = String(s == null ? '' : s); return d.innerHTML }
+function showErr(msg) { errBox.hidden = !msg; errBox.textContent = msg || '' }
+/** 时长说成人话（和宿主 todoSpan 同一口径，面板里的「还剩」靠它）。 */
+function span(ms) {
+  const m = Math.max(1, Math.round(Math.abs(ms) / MIN))
+  if (m < 60) return m + '分钟'
+  const h = Math.max(1, Math.round(m / 60))
+  return h < 24 ? h + '小时' : Math.max(1, Math.round(h / 24)) + '天'
+}
+/** 一条待办的副标题：逾期 / 还剩多久 / 已完成 / 无期限。 */
+function metaOf(t, now) {
+  if (t.done) return { text: '已完成', cls: '' }
+  if (t.dueAt === null) return { text: '没有期限', cls: '' }
+  if (t.dueAt <= now) return { text: '逾期 ' + span(now - t.dueAt), cls: 'late' }
+  const left = t.dueAt - now
+  return { text: '还剩 ' + span(left), cls: left < HOUR ? 'warn' : '' }
+}
+function whenText(ms) {
+  const d = new Date(ms)
+  const pad = (n) => String(n).padStart(2, '0')
+  const sameDay = new Date().toDateString() === d.toDateString()
+  const hm = pad(d.getHours()) + ':' + pad(d.getMinutes())
+  return (sameDay ? '' : (pad(d.getMonth() + 1) + '/' + pad(d.getDate()) + ' ')) + hm
+}
+
+function render(todos, now) {
+  list.innerHTML = ''
+  empty.hidden = (todos || []).length > 0
+  let pending = 0
+  for (const t of todos || []) {
+    if (!t.done) pending++
+    const li = document.createElement('li')
+    li.className = 'it' + (t.done ? ' done' : '')
+    const m = metaOf(t, now)
+    const editable = t.src !== 'dsh'
+    li.innerHTML =
+      '<input class="ck" type="checkbox"' + (t.done ? ' checked' : '') + (editable ? '' : ' disabled') + '>' +
+      '<div class="main"><div class="tx">' + esc(t.text) +
+        (t.src === 'dsh' ? '<span class="tag">DSH</span>' : '') + '</div>' +
+        '<div class="meta ' + m.cls + '">' + esc(m.text) +
+        (t.dueAt !== null ? ' · ' + whenText(t.dueAt) : '') + '</div></div>' +
+      (editable ? '<button class="del" title="删除">✕</button>' : '')
+    const ck = li.querySelector('.ck')
+    ck.addEventListener('change', () => {
+      if (busy) { ck.checked = !ck.checked; return }
+      ipcRenderer.send('pet:todo:patch', { id: t.id, done: ck.checked })
+    })
+    const del = li.querySelector('.del')
+    if (del) {
+      // 两步删除：第一次只进入「确认」态，2.5 秒后自动复原（清单没有撤销，误点一次就没了太容易）
+      let armed = 0
+      del.addEventListener('click', () => {
+        if (!armed) {
+          armed = setTimeout(() => { armed = 0; del.classList.remove('armed'); del.textContent = '✕' }, 2500)
+          del.classList.add('armed'); del.textContent = '确认'
+          return
+        }
+        clearTimeout(armed); armed = 0
+        ipcRenderer.send('pet:todo:remove', { id: t.id })
+      })
+    }
+    list.appendChild(li)
+  }
+  cnt.textContent = pending ? pending + ' 项未完成' : '都做完啦'
+}
+function submit() {
+  if (busy) return
+  const text = inp.value.trim()
+  if (!text) { inp.focus(); return }
+  let dueAt = null
+  if (due.value) {
+    const ms = new Date(due.value).getTime()
+    if (!Number.isFinite(ms)) { showErr('这个时间看不懂，换一个吧'); return }
+    // 过去的时刻建出来就是逾期，提醒一上线就会喊：拦在这里，别让人先错一次再改
+    if (ms < Date.now()) { showErr('这个时间已经过去了，换一个吧'); return }
+    dueAt = ms
+  }
+  showErr('')
+  ipcRenderer.send('pet:todo:add', { text, dueAt })
+}
+addBtn.addEventListener('click', submit)
+inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit() } })
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') ipcRenderer.send('pet:todo:close') })
+
+// main.js 注入入口：整张清单 / 请求在途 / 错误
+window.__todoRender = (todos) => { busy = false; addBtn.disabled = false; inp.disabled = false; render(todos, Date.now()) }
+window.__todoBusy = (on) => { busy = Boolean(on); addBtn.disabled = busy; inp.disabled = busy }
+window.__todoError = (msg) => { busy = false; addBtn.disabled = false; inp.disabled = false; showErr(msg) }
+window.__todoAdded = () => { inp.value = ''; due.value = ''; inp.focus() }
+inp.focus()
+</script>
+</body>
+</html>

@@ -52,6 +52,13 @@ window.__chatSetHistory = (items) => { msgs.innerHTML = ''; seen.clear(); for (c
 window.__chatAppend = (text, id) => add('pet', text, id)
 window.__chatUser = (text, id) => add('user', text, id)
 window.__chatHint = (text) => add('hint', text)
+// 按住说话转出来的字（「识别后直接发送」关着时用它）：只填进输入框，不自动发，
+// 免得把识别错的话直接发出去；聚焦并把光标放到末尾，回车就能发。
+window.__chatFill = (text) => {
+  inp.value = String(text == null ? '' : text)
+  inp.focus()
+  try { inp.setSelectionRange(inp.value.length, inp.value.length) } catch {}
+}
 function send() {
   const text = inp.value.trim()
   if (!text) return

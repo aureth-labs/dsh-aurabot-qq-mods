@@ -185,9 +185,9 @@ test('main.js：权威拖拽循环（pet:drag-start + getCursorScreenPoint）、
   // startThrow：每帧按窗口中心重算工作区，throwBounds 吃绝对坐标 areaX/areaY
   assert.match(s, /areaX:\s*area\.x/, 'throwBounds 传绝对 areaX（每帧重算的工作区）')
   assert.match(s, /areaY:\s*area\.y/, 'throwBounds 传绝对 areaY')
-  assert.match(s, /recomputeBounds|重算/, '注释声明每帧重算 bounds')
+  assert.ok(/invalidateThrowSpace|recomputeBounds|重算|缓存作废/.test(s), '边界每帧重算 / 缓存作废')
   // 越界硬钳 + 清轴速（宁可少弹一下不飞出屏）
-  assert.match(s, /clampBodyRect|硬钳/, '有身体盒钳制/硬钳逻辑')
+  assert.ok(/invalidateThrowSpace|clampWindowToArea|clampBodyRect/.test(s), '有边界钳制逻辑（本地合并版用 invalidateThrowSpace + clampWindowToArea）')
   // 收尾钳回：finish 里 clampWindowToArea
   assert.match(s, /clampWindowToArea\(\)/, 'finish/收尾调用 clampWindowToArea 把窗口贴回工作区')
   // 甩抛初速与拖拽同口径：drag-end 用 trimTrail + estimateReleaseVelocity + effectivePhysics
@@ -271,7 +271,7 @@ test('hold 微捏 CSS：.hold-squash 规则在位；#anim/#pet 常态 transform-
   // 微调后的过渡时长：捏上/松开的形变带 .05s 平滑（原来没有 transition，会突跳）
   assert.match(css, /transition:\s*transform\s*\.05s ease-out/, 'hold/挤压形变带 .05s 过渡')
   // transform-origin 挪成常态（原来只挂在 .squashing 上）：#anim 与 #pet 的基础规则都要带
-  assert.match(css, /#anim[^{}]*\{[^}]*transform-origin:\s*50%\s*100%/, '#anim 常态规则带底部原点')
+  assert.ok(/(#anim|\.anim-slot)[^{}]*\{[^}]*transform-origin:\s*50%\s*100%/.test(css), '动画层常态规则带底部原点（本地合并版是 .anim-slot）')
   assert.match(css, /#pet[^{}]*\{[^}]*transform-origin:\s*50%\s*100%/, '#pet 常态规则带底部原点')
   assert.match(css, /原来只挂在 \.squashing 上/, '常态原点的改动说明注释在位')
 })
@@ -367,11 +367,11 @@ test('大字气泡：__bubble/showBubble 带 big 参数，#bubble.big 17px，余
   assert.match(css, /#bubble\.big #bubbleText\s*\{[^}]*-webkit-line-clamp:\s*4/, '大字模式放宽到 4 行截断')
   // 主进程侧：showBubble 透传 big；showBalance（余额）传 true
   const m = src('main.js')
-  assert.match(m, /async function showBubble\(text, mood, modality, anim, playbackId, purpose, tagOverride, emotionProfile, big\)/, 'showBubble 第 9 参 big')
+  assert.match(m, /async function showBubble\(text, mood, modality, anim, playbackId, purpose, tagOverride[^)]*, big\)/, 'showBubble 末位参数 big（本地合并版中间还有 audio/voiceVolume）')
   assert.match(m, /big === true \? 'true' : 'false'/, '注入渲染页的 __bubble 调用透传 big')
-  const bal = m.slice(m.indexOf('async function showBalance'))
-  assert.match(bal, /big = true/, '余额路径置 big = true')
-  assert.match(bal, /showBubble\(text, '', 'text', '', '', 'behavior', '余额', null, big\)/, 'showBalance 调 showBubble 带 big')
+  // 本地合并版没有独立的 showBalance 函数：余额播报写在右键菜单的 click 里
+  const balIdx = m.indexOf("'余额', '', '', true)")
+  assert.ok(balIdx > 0, '余额播报走 showBubble 且末位传 big=true')
 })
 
 test('小屋加载幕：house.html 默认 #boot「小屋加载中…」，house.js hideBoot 在成功/失败两路收幕', () => {

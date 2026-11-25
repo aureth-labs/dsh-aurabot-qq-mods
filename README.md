@@ -1,6 +1,6 @@
 # dsh-aurabot-qq-mods
 
-Aurabot 插件（[dsh-aurabot-qq](https://github.com/accomplish07zrh-eng/dsh-aurabot-qq)）的**模块市场**：面板「模块市场」里能装的模块都在这里。
+Aurabot 插件（[dsh-aurabot-qq](https://github.com/aureth-labs/dsh-aurabot-qq)）的**模块市场**：面板「模块市场」里能装的模块都在这里。
 
 - 想用模块：在 Aurabot 面板打开「模块市场」，点安装。插件 1.2.0 起支持。
 - 想看有哪些：[模块目录](modules/README.md)。
@@ -50,7 +50,7 @@ pet-pack/
 - 插件按「哪一层里有 `default-animation/`」来定位包根，所以文件夹名可改（`pet-pack/`、`default/` 等均可），
   但 `default-config.json`、`default-manifest.json`、`default-animation/` 三者必须同级。
 - 换了目录名或改了下载地址后，在插件面板「桌宠 → 素材包下载地址」填本仓库的 archive 直链即可：
-  `https://github.com/accomplish07zrh-eng/dsh-aurabot-qq-mods/archive/refs/heads/main.zip`
+  `https://github.com/aureth-labs/dsh-aurabot-qq-mods/archive/refs/heads/main.zip`
   （国内网络可换成 Gitee 等镜像直链；也可调 `POST /packs/fetch-default` 手动重下。）
 
 ## 署名与许可
@@ -67,7 +67,7 @@ pet-pack/
 - 再分发（含镜像本仓库）必须保留上述署名与本许可声明，并以相同许可共享。
 
 完整许可条款见 [LICENSE](LICENSE)。插件侧的第三方声明见上游仓库的
-[THIRD-PARTY-NOTICES.md](https://github.com/accomplish07zrh-eng/dsh-aurabot-qq/blob/main/THIRD-PARTY-NOTICES.md)。
+[THIRD-PARTY-NOTICES.md](https://github.com/aureth-labs/dsh-aurabot-qq/blob/main/THIRD-PARTY-NOTICES.md)。
 
 ## 说明
 

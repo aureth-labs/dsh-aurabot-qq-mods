@@ -1,0 +1,23 @@
+{
+  "id": "sleep",
+  "name": "睡觉做梦",
+  "version": "2.1.0",
+  "description": "拟真的睡眠节律：入睡与醒来时间随机、会失眠、会做梦，梦与白天经历挂钩，并区分梦与现实分别入库。",
+  "category": "creative",
+  "tags": [
+    "睡眠",
+    "做梦",
+    "节律"
+  ],
+  "author": "Aurabot",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "filesystem",
+    "plugin-config",
+    "plugin-internals"
+  ],
+  "homepage": "https://github.com/aureth-labs/dsh-aurabot-qq"
+}
