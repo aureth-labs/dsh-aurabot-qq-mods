@@ -1,0 +1,14 @@
+{
+  "id": "memory-constellation",
+  "name": "记忆中枢",
+  "version": "0.9.1",
+  "description": "一页管记忆：星图看清晰度和层级，点星复习、改删或新增；内置向量检索、名字联想和可选每日读写，聊天时自动串起相关记忆。",
+  "category": "social",
+  "tags": ["记忆", "星图", "联想", "向量", "归档"],
+  "author": "Aureth Labs",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": ["memory"],
+  "capabilities": ["filesystem", "plugin-config", "plugin-internals"]
+}
