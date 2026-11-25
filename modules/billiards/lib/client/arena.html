@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>桌面台球</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: transparent; overflow: hidden;
+    font-family: "Microsoft YaHei", sans-serif; -webkit-user-select: none; user-select: none; cursor: default; }
+  #table { position: fixed; inset: 0; }
+  .hole { position: absolute; border-radius: 50%; pointer-events: none; z-index: 3;
+    background: radial-gradient(circle at 40% 35%, #000 55%, #1a1a1a 100%);
+    box-shadow: inset 0 2px 6px rgba(0,0,0,.9), 0 0 0 2px rgba(0,0,0,.35); }
+  /* 球：外层只负责定位/编号，内层 .body 负责圆形裁切（编号要露在球外面，不能被裁） */
+  .ball { position: absolute; z-index: 2; will-change: transform; }
+  .ball .body { position: absolute; inset: 0; border-radius: 50%; overflow: hidden;
+    box-shadow: 0 6px 16px rgba(0,0,0,.45), inset 0 -8px 14px rgba(0,0,0,.3), inset 0 8px 12px rgba(255,255,255,.22); }
+  .ball video { position: absolute; left: 50%; top: 55%; width: 210%; height: 210%;
+    transform: translate(-50%, -50%); object-fit: cover; pointer-events: none; }
+  /* 编号挂在球下方（2026-11-10 用户要求）：不盖住宠物脸 */
+  .ball .num { position: absolute; left: 50%; bottom: -17px; transform: translateX(-50%);
+    font-weight: 700; font-size: 13px; color: #fff; text-shadow: 0 2px 4px rgba(0,0,0,.85), 0 0 6px rgba(0,0,0,.6);
+    pointer-events: none; white-space: nowrap; }
+  .ball.cue .body { box-shadow: 0 0 0 3px rgba(150,225,255,.75), 0 6px 18px rgba(0,0,0,.5); }
+  .ball.cue { cursor: grab; }
+  .ball.cue.dragging { cursor: grabbing; }
+  /* 自由球：黄边=可放，红边=压球/出界/堵洞口 */
+  .ball.cue.placing .body { box-shadow: 0 0 0 3px rgba(255,214,102,.95), 0 6px 18px rgba(0,0,0,.5); }
+  .ball.cue.bad .body { box-shadow: 0 0 0 3px rgba(255,90,90,.95), 0 6px 18px rgba(0,0,0,.5); }
+  /* 瞄准层：白球→ghost 线路 + ghost 圈 + 目标球出射方向；全部不吃鼠标 */
+  .guide { position: absolute; pointer-events: none; z-index: 4; display: none; }
+  #aim { height: 3px; border-radius: 2px; transform-origin: 0 50%; display: none;
+    background: linear-gradient(90deg, rgba(255,255,255,.95), rgba(255,255,255,.35)); }
+  #aim.bad { background: linear-gradient(90deg, rgba(255,120,120,.95), rgba(255,120,120,.35)); }
+  #power { height: 5px; border-radius: 3px; transform-origin: 0 50%;
+    background: linear-gradient(90deg, rgba(120,220,255,.85), rgba(255,210,90,.95)); }
+  #ghost { border: 2px dashed rgba(255,255,255,.8); border-radius: 50%; }
+  #ghost.bad { border-color: rgba(255,120,120,.9); }
+  #tline { height: 2px; border-radius: 1px; transform-origin: 0 50%;
+    background: linear-gradient(90deg, rgba(255,240,150,.95), rgba(255,240,150,0)); }
+  #hud { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); z-index: 6;
+    display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px;
+    max-width: calc(100vw - 28px); padding: 8px 16px; border-radius: 999px; white-space: nowrap;
+    background: rgba(12,30,20,.78); color: #d9f0e2; font-size: 13px; backdrop-filter: blur(6px);
+    border: 1px solid rgba(120,200,160,.25); }
+  #hud > * { flex: 0 0 auto; }
+  #hud b { color: #fff; }
+  #hud .k { color: #7fc9a3; }
+  #hud .sep { width: 1px; height: 16px; background: rgba(120,200,160,.25); }
+  #hud .me { color: #9fe8ff; }
+  #hud .foe { color: #ffd7a1; }
+  #hud button { background: rgba(60,140,100,.85); color: #eafff3; border: 0; border-radius: 999px;
+    padding: 5px 12px; font-size: 12px; cursor: pointer; }
+  #hud button:hover { background: rgba(74,168,120,.95); }
+  #msgBar { position: fixed; left: 50%; top: 64px; transform: translateX(-50%); z-index: 6;
+    max-width: 78vw; padding: 7px 15px; border-radius: 12px; font-size: 13px; line-height: 1.5;
+    color: #eafff3; background: rgba(10,28,19,.8); border: 1px solid rgba(120,200,160,.22);
+    display: none; text-align: center; pointer-events: none; }
+  #msgBar.bad { color: #ffd0d0; border-color: rgba(255,120,120,.4); background: rgba(46,12,12,.82); }
+  #msgBar.good { color: #ccffdf; border-color: rgba(120,255,170,.4); }
+  /* 进球通知：顶部居中，显示"X 号球进袋！" */
+  #pocketNotif { position: fixed; left: 50%; top: 110px; transform: translateX(-50%); z-index: 6;
+    max-width: 78vw; padding: 6px 14px; border-radius: 10px; font-size: 14px; font-weight: 600; line-height: 1.4;
+    color: #ffe08a; background: rgba(40,30,10,.85); border: 1px solid rgba(255,210,90,.4);
+    display: none; text-align: center; pointer-events: none; }
+  #pocketNotif.show { display: block; }
+  #win { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; z-index: 8;
+    background: rgba(6,20,13,.55); }
+  #win .card { background: #1d4530; border-radius: 16px; padding: 20px 26px; width: 320px; color: #d9f0e2;
+    box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+  #win h2 { margin: 0 0 4px; font-size: 17px; color: #bff5d8; }
+  #win .sub { font-size: 12px; color: #8fc7a8; margin-bottom: 12px; }
+  #win .row { display: flex; justify-content: space-between; padding: 5px 0; font-size: 13px;
+    border-bottom: 1px dashed rgba(140,200,170,.16); }
+  #win .btns { display: flex; gap: 10px; margin-top: 14px; }
+  #win button { flex: 1; background: #2c6b4a; color: #eafff3; border: 0; border-radius: 10px;
+    padding: 9px 0; font-size: 13px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="table">
+  <div id="power" class="guide"></div>
+  <div id="aim" class="guide"></div>
+  <div id="ghost" class="guide"></div>
+  <div id="tline" class="guide"></div>
+</div>
+<div id="hud">
+  <span><span class="k">轮到</span> <b id="hTurn">你</b> <span class="k" id="hPhase">开球</span></span>
+  <span class="sep"></span>
+  <span class="me"><span class="k">你</span> <b id="hMine">未定</b></span>
+  <span class="foe"><span class="k" id="hFoeK">宠物</span> <b id="hFoe">未定</b></span>
+  <span class="sep"></span>
+  <span><span class="k">杆数</span> <b id="hShots">0</b></span>
+  <span><span class="k">用时</span> <b id="hTime">0s</b></span>
+  <span><span class="k">犯规</span> <b id="hFouls">0</b></span>
+  <span class="sep"></span>
+  <button id="btnLevel">难度：普通</button>
+  <button id="btnSeat">对手：宠物</button>
+  <button id="btnReset">重开</button>
+  <button id="btnExit">退出台球</button>
+</div>
+<div id="msgBar"></div>
+<div id="pocketNotif"></div>
+<div id="win"><div class="card">
+  <h2 id="wTitle">你赢了</h2>
+  <div class="sub" id="wSub"></div>
+  <div class="row"><span>用时</span><b id="wTime">-</b></div>
+  <div class="row"><span>总杆数</span><b id="wShots">-</b></div>
+  <div class="row"><span>你：进球 / 犯规</span><b id="wMe">-</b></div>
+  <div class="row"><span>对手：进球 / 犯规</span><b id="wFoe">-</b></div>
+  <div class="btns"><button id="btnAgain">再来一局</button><button id="btnClose">退出台球</button></div>
+</div></div>
+<script src="billiards-rules.js"></script>
+<script>
+  // 桌面台球：整个工作区当球桌，球就是宠物窗口这层渲染出来的 16 颗小球。
+  // 物理口径与小窗台球一致：摩擦 0.988^(dt*60)、墙 0.88、等质量弹性、六洞。
+  // 2026-11-12：真规则全部交给 billiards-rules.js（开球 → 定组 → 犯规判定 → 自由球 →
+  // 8 号定胜负），本页只管几何、事件上报（第一接触·碰库·落袋）和 UI。
+  const Rules = window.BilliardsRules
+  const table = document.getElementById('table')
+  const guides = {
+    aim: document.getElementById('aim'), ghost: document.getElementById('ghost'),
+    tline: document.getElementById('tline'), power: document.getElementById('power'),
+  }
+  const winEl = document.getElementById('win')
+  const msgBar = document.getElementById('msgBar')
+  const hudEl = document.getElementById('hud')
+  const hud = {
+    turn: document.getElementById('hTurn'), phase: document.getElementById('hPhase'),
+    mine: document.getElementById('hMine'), foe: document.getElementById('hFoe'),
+    foeK: document.getElementById('hFoeK'), shots: document.getElementById('hShots'),
+    time: document.getElementById('hTime'), fouls: document.getElementById('hFouls'),
+    level: document.getElementById('btnLevel'),
+  }
+
+  let W = 0, H = 0, R = 30
+  let balls = [], cue = null, holes = []
+  let raf = null, lastT = 0, running = false
+  let ballAnimUrls = []
+  let game = Rules.createGame({ seats: ['你', '宠物'] })
+  let startedAt = Date.now()
+  let seat2IsPet = true
+  let gen = 0 // 每次重开自增：延时回调靠它作废，防止上一局的瞄准定时器打进新的一局
+  let noTimers = false // 调试同步跑局时不排宠物定时器
+  const LEVELS = [
+    { name: '新手', noise: 0.06 },
+    { name: '普通', noise: 0.022 },
+    { name: '高手', noise: 0.005 },
+  ]
+  let levelIdx = 1
+  let petTimer = null, msgTimer = null
+
+  // ---------- 落袋通知 ----------
+  let pocketNotifTimer = null
+  const POCKET_NAMES = ['左上', '上中', '右上', '左下', '下中', '右下']
+  function showPocketNotif(ballNum, pocketIdx) {
+    const el = document.getElementById('pocketNotif')
+    if (!el) return
+    const ballName = ballNum === 0 ? '白球' : ballNum + '号球'
+    const pocketName = POCKET_NAMES[pocketIdx] || '球袋'
+    el.textContent = `${ballName} → ${pocketName}`
+    el.classList.add('show')
+    if (pocketNotifTimer) clearTimeout(pocketNotifTimer)
+    pocketNotifTimer = setTimeout(() => el.classList.remove('show'), 2200)
+  }
+
+  // 标准 8 球颜色（1-7 全色，8 黑，9-15 花色）
+  const BALL_COLORS = {
+    1: '#f4d03f', 2: '#2874a6', 3: '#cb4335', 4: '#6c3483',
+    5: '#e67e22', 6: '#229954', 7: '#873600', 8: '#1c1c1c',
+    9: '#f4d03f', 10: '#2874a6', 11: '#cb4335', 12: '#6c3483',
+    13: '#e67e22', 14: '#229954', 15: '#873600',
+  }
+  const ballColor = (n) => n === 0 ? '#f7f7f2' : BALL_COLORS[n] || '#888'
+  const ballIsStripe = (n) => n >= 9 && n <= 15
+  const ballNumColor = (n) => n === 0 ? '#333' : (n >= 1 && n <= 7) ? '#1b5fd8' : n === 8 ? '#1c1c1c' : '#d81b1b'
+  const cueSpotX = () => Math.max(R * 1.8, W * 0.22)
+
+  function layout() {
+    W = window.innerWidth
+    H = window.innerHeight
+    R = Math.max(22, Math.min(56, Math.min(W, H * 2) / 46))
+    const D = R * 2, holeR = D * 0.6, inset = holeR * 0.62
+    holes = [
+      { x: inset, y: inset }, { x: W / 2, y: inset }, { x: W - inset, y: inset },
+      { x: inset, y: H - inset }, { x: W / 2, y: H - inset }, { x: W - inset, y: H - inset },
+    ].map((h) => ({ ...h, r: holeR }))
+    table.querySelectorAll('.hole').forEach((n) => n.remove())
+    for (const h of holes) {
+      const d = document.createElement('div')
+      d.className = 'hole'
+      d.style.width = d.style.height = holeR * 2 + 'px'
+      d.style.left = h.x - holeR + 'px'
+      d.style.top = h.y - holeR + 'px'
+      table.appendChild(d)
+    }
+  }
+
+  function makeBall(n, x, y) {
+    const el = document.createElement('div')
+    el.className = 'ball' + (n === 0 ? ' cue' : '')
+    el.style.width = el.style.height = R * 2 + 'px'
+    el.style.left = '0'
+    el.style.top = '0'
+    const body = document.createElement('div')
+    body.className = 'body'
+    body.style.background = n === 0 ? '#fff' : '#f8f8f5'
+    body.style.border = n === 0 ? '3px solid #fff' : `3px solid ${ballColor(n)}`
+    el.appendChild(body)
+    const num = document.createElement('div')
+    num.className = 'num'
+    num.textContent = n === 0 ? '白' : String(n)
+    num.style.color = n === 0 ? '#d0d0d0' : ballNumColor(n)
+    el.appendChild(num)
+    table.appendChild(el)
+    return { n, el, body, x, y, vx: 0, vy: 0, alive: true }
+  }
+
+  // 引擎要的几何快照：每次现取。规则侧不持有坐标，两边不可能不同步。
+  function ctx() {
+    return {
+      balls, R, holes, W, H,
+      cueSpot: { x: cueSpotX(), y: H / 2 },
+      footSpot: { x: W * 0.66, y: H / 2 },
+    }
+  }
+
+  function applyBallAnims() {
+    if (!ballAnimUrls.length) return
+    let i = 0
+    for (const b of balls) {
+      if (!b.alive) continue
+      // 白球也是桌宠（用户 2026-11-10 指定）：一样播动画，只靠外面那圈荧光边区分
+      const host = b.body || b.el
+      if (host.querySelector('video')) continue
+      const v = document.createElement('video')
+      v.src = ballAnimUrls[i++ % ballAnimUrls.length]
+      v.muted = true; v.autoplay = true; v.loop = true; v.playsInline = true
+      v.play().catch(() => {})
+      host.appendChild(v)
+    }
+  }
+  const bootAnims = window.arenaBridge && window.arenaBridge.ballAnims
+    ? window.arenaBridge.ballAnims() : null
+  if (Array.isArray(bootAnims) && bootAnims.length) {
+    ballAnimUrls = bootAnims.slice()
+    applyBallAnims()
+  }
+
+  function setup() {
+    if (raf) cancelAnimationFrame(raf)
+    raf = null; running = false
+    if (petTimer) { clearTimeout(petTimer); petTimer = null }
+    gen++
+    layout()
+    for (const b of balls) b.el.remove()
+    balls = []
+    cue = makeBall(0, cueSpotX(), H / 2)
+    balls.push(cue)
+    const gap = R * 2 + 2
+    const order = [1, 9, 2, 10, 8, 3, 11, 12, 4, 13, 5, 14, 6, 15, 7]
+    let idx = 1
+    for (let row = 0; row < 5; row++) {
+      for (let k = 0; k <= row; k++) {
+        const n = order[idx - 1] || idx
+        balls.push(makeBall(n, W * 0.66 + row * gap * 0.9, H / 2 + (k - row / 2) * gap))
+        idx++
+      }
+    }
+    game = Rules.createGame({ seats: ['你', seat2IsPet ? '宠物' : '玩家 2'] })
+    startedAt = Date.now()
+    winEl.style.display = 'none'
+    hideGuides()
+    applyBallAnims()
+    draw()
+    updateHud()
+    say(turnIsHuman() ? '你先开球：按住白球往后拖，松手出杆' : '宠物开球…', '', 4200)
+    maybePetTurn(700)
+  }
+  const turnIsHuman = () => game.turn === 0 || !seat2IsPet
+
+  function groupName(grp) { return grp === Rules.SOLID ? '全色' : grp === Rules.STRIPE ? '花色' : '未定' }
+
+  function updateHud() {
+    hud.turn.textContent = game.seats[game.turn]
+    hud.foeK.textContent = game.seats[1]
+    hud.phase.textContent = game.over ? '已结束'
+      : game.ballInHand ? '自由球'
+      : game.isBreak ? '开球'
+      : Rules.isOnEight(game, game.turn) ? '打 8' : ''
+    hud.mine.textContent = game.groups[0] ? groupName(game.groups[0]) + ' 剩 ' + Rules.remaining(game, 0) : '未定'
+    hud.foe.textContent = game.groups[1] ? groupName(game.groups[1]) + ' 剩 ' + Rules.remaining(game, 1) : '未定'
+    hud.shots.textContent = String(game.shotNo)
+    hud.time.textContent = Math.floor((Date.now() - startedAt) / 1000) + 's'
+    hud.fouls.textContent = String(game.stats[0].fouls + game.stats[1].fouls)
+    hud.level.textContent = '难度：' + LEVELS[levelIdx].name
+  }
+  function say(text, kind, ms) {
+    msgBar.textContent = text || ''
+    msgBar.className = kind === 'bad' ? 'bad' : kind === 'good' ? 'good' : ''
+    msgBar.style.display = text ? 'block' : 'none'
+    // 提示条贴在 HUD 下沿：窗口窄、HUD 折成多行时也不会压住读数
+    msgBar.style.top = hudEl.getBoundingClientRect().bottom + 10 + 'px'
+    if (msgTimer) clearTimeout(msgTimer)
+    if (text) msgTimer = setTimeout(() => { msgBar.style.display = 'none' }, ms || 2600)
+  }
+  function draw() {
+    for (const b of balls) {
+      if (!b.alive) continue
+      b.el.style.left = (b.x - R) + 'px'
+      b.el.style.top = (b.y - R) + 'px'
+    }
+  }
+  function hitWall(b) {
+    // 只有真的反弹（速度还指向墙里）才算碰库：贴墙时的位置修正不该喂给规则
+    if (b.x < R) { b.x = R; if (b.vx < 0) { b.vx = Math.abs(b.vx) * 0.88; Rules.noteRail(game) } }
+    else if (b.x > W - R) { b.x = W - R; if (b.vx > 0) { b.vx = -Math.abs(b.vx) * 0.88; Rules.noteRail(game) } }
+    if (b.y < R) { b.y = R; if (b.vy < 0) { b.vy = Math.abs(b.vy) * 0.88; Rules.noteRail(game) } }
+    else if (b.y > H - R) { b.y = H - R; if (b.vy > 0) { b.vy = -Math.abs(b.vy) * 0.88; Rules.noteRail(game) } }
+  }
+  function collide(a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y
+    const dist = Math.hypot(dx, dy), minD = R * 2
+    if (dist === 0 || dist >= minD) return
+    const nx = dx / dist, ny = dy / dist
+    const ov = minD - dist
+    a.x -= nx * ov / 2; a.y -= ny * ov / 2
+    b.x += nx * ov / 2; b.y += ny * ov / 2
+    const dvx = b.vx - a.vx, dvy = b.vy - a.vy
+    const vn = dvx * nx + dvy * ny
+    if (vn > 0) return
+    const imp = -vn
+    a.vx -= imp * nx; a.vy -= imp * ny
+    b.vx += imp * nx; b.vy += imp * ny
+    if (a.n === 0) Rules.noteFirstContact(game, b.n)
+    else if (b.n === 0) Rules.noteFirstContact(game, a.n)
+  }
+  function pocket(ball) {
+    for (let i = 0; i < holes.length; i++) {
+      if (Math.hypot(ball.x - holes[i].x, ball.y - holes[i].y) < holes[i].r * 0.68) return i
+    }
+    return -1
+  }
+
+  // 单帧推进。rAF 与调试用的同步跑局共用这一份物理，避免出现第二种口径。
+  function advance(dt) {
+    const k = Math.pow(0.988, dt * 60)
+    const maxStep = Math.max(4, R * 0.5)
+    let moving = false
+    for (const b of balls) {
+      if (!b.alive) continue
+      const speed = Math.hypot(b.vx, b.vy)
+      const n = Math.max(1, Math.ceil((speed * dt) / maxStep))
+      for (let s = 0; s < n; s++) { b.x += (b.vx * dt) / n; b.y += (b.vy * dt) / n; hitWall(b) }
+      b.vx *= k; b.vy *= k
+      if (Math.abs(b.vx) < 4) b.vx = 0
+      if (Math.abs(b.vy) < 4) b.vy = 0
+      if (b.vx || b.vy) moving = true
+    }
+    for (let i = 0; i < balls.length; i++) {
+      for (let j = i + 1; j < balls.length; j++) {
+        if (balls[i].alive && balls[j].alive) collide(balls[i], balls[j])
+      }
+    }
+    for (const b of balls) {
+      if (!b.alive) continue
+      const pIdx = pocket(b)
+      if (pIdx >= 0) {
+        Rules.notePocket(game, b.n)
+        showPocketNotif(b.n, pIdx)
+        // 白球落袋不当场复位：这杆结算成犯规后，由自由球流程决定摆哪
+        b.alive = false; b.vx = 0; b.vy = 0
+        b.el.style.display = 'none'
+      }
+    }
+    return moving
+  }
+  function step(now) {
+    const dt = Math.min(0.05, Math.max((now - lastT) / 1000, 1e-4))
+    lastT = now
+    const moving = advance(dt)
+    draw()
+    if (moving) raf = requestAnimationFrame(step)
+    else { running = false; raf = null; onShotEnd() }
+  }
+
+  // ---- 一杆打完：交给规则引擎结算 ----
+  function onShotEnd() {
+    hideGuides()
+    const out = Rules.resolveShot(game, ctx())
+    if (out.respot8) respot8()
+    if (cue && !cue.alive) respawnCue()
+    updateHud()
+    announce(out)
+    if (out.over) return finishGame(out)
+    maybePetTurn(900)
+  }
+  function respot8() {
+    const eight = Rules.findBall(balls, 8)
+    const p = Rules.respotSpot(game, ctx())
+    eight.alive = true; eight.vx = 0; eight.vy = 0
+    eight.x = p.x; eight.y = p.y
+    eight.el.style.display = ''
+    draw()
+  }
+  function respawnCue() {
+    const c = ctx()
+    const p = Rules.nearestLegalSpot(game, c, c.cueSpot.x, c.cueSpot.y)
+    cue.alive = true; cue.vx = 0; cue.vy = 0
+    cue.x = p.x; cue.y = p.y
+    cue.el.style.display = ''
+    cue.el.classList.remove('bad', 'placing')
+    cue.el.classList.toggle('placing', game.ballInHand && turnIsHuman())
+    draw()
+  }
+  function announce(out) {
+    const me = game.seats[out.seat]
+    if (out.foul) return say('犯规：' + out.reason + ' → ' + game.seats[1 - out.seat] + (out.ballInHand ? ' 自由球' : ''), 'bad', 4200)
+    if (out.groupAssigned) return say(me + ' 打进 ' + (out.groupAssigned[1] === Rules.SOLID ? '全色' : '花色') + '，' + game.seats[out.groupAssigned[0]] + ' 打这一组', 'good', 3600)
+    if (out.respot8) return say('开球把 8 号碰进袋，摆回摆球点', '', 3200)
+    if (out.continues) return say(me + ' 继续出杆', 'good', 1600)
+    if (out.turnChanged) return say('未进球 → 轮到 ' + game.seats[game.turn], '', 2200)
+  }
+  function finishGame(out) {
+    if (petTimer) { clearTimeout(petTimer); petTimer = null }
+    const secs = Math.round((Date.now() - startedAt) / 1000)
+    document.getElementById('wTitle').textContent = game.winner === 0 ? '你赢了' : (seat2IsPet ? '宠物赢了' : '玩家 2 赢了')
+    document.getElementById('wSub').textContent = out.reason || ''
+    document.getElementById('wTime').textContent = secs + ' 秒'
+    document.getElementById('wShots').textContent = String(game.shotNo)
+    document.getElementById('wMe').textContent = game.stats[0].pots + ' / ' + game.stats[0].fouls
+    document.getElementById('wFoe').textContent = game.stats[1].pots + ' / ' + game.stats[1].fouls
+    winEl.style.display = 'flex'
+    say('', '')
+  }
+
+  // ---- 宠物出杆 ----
+  function maybePetTurn(delay) {
+    if (noTimers || game.over || turnIsHuman()) return
+    if (petTimer) clearTimeout(petTimer)
+    petTimer = setTimeout(() => { petTimer = null; petShoot() }, delay)
+  }
+  function petShoot() {
+    const myGen = gen
+    if (game.over || turnIsHuman() || running) return
+    const c = ctx()
+    if (game.ballInHand) {
+      const p = Rules.bestCueSpot(game, c)
+      cue.alive = true; cue.el.style.display = ''
+      cue.x = p.x; cue.y = p.y
+      game.ballInHand = false
+      cue.el.classList.remove('bad', 'placing')
+      draw()
+      updateHud()
+    }
+    Rules.beginShot(game)
+    const pick = Rules.pickShot(game, c, { noise: LEVELS[levelIdx].noise })
+    if (!pick) return onShotEnd() // 死局：合法目标一颗都碰不到，按空杆结算
+    showGuideLine(cue.x, cue.y, pick.ghost.x, pick.ghost.y, false)
+    say(game.seats[game.turn] + ' 在瞄 ' + pick.target + ' 号' + (pick.safety ? '（没有袋口线路，先碰一杆不犯规）' : '…'), '', 1500)
+    setTimeout(() => {
+      if (myGen !== gen || game.over || running) return
+      hideGuides()
+      shoot(pick.vx, pick.vy)
+    }, 520)
+  }
+
+  // ---- 瞄准线 ----
+  function showGuideLine(x0, y0, x1, y1, bad) {
+    const dx = x1 - x0, dy = y1 - y0
+    guides.aim.style.left = x0 + 'px'
+    guides.aim.style.top = y0 + 'px'
+    guides.aim.style.width = Math.hypot(dx, dy) + 'px'
+    guides.aim.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`
+    guides.aim.style.display = 'block'
+    guides.aim.classList.toggle('bad', !!bad)
+  }
+  function showGuides(dirX, dirY) {
+    const p = Rules.predictContact(game, ctx(), dirX, dirY)
+    if (!p) return hideGuides()
+    showGuideLine(cue.x, cue.y, p.ghost.x, p.ghost.y, p.willFoul)
+    guides.ghost.style.width = guides.ghost.style.height = R * 2 + 'px'
+    guides.ghost.style.left = p.ghost.x - R + 'px'
+    guides.ghost.style.top = p.ghost.y - R + 'px'
+    guides.ghost.style.display = 'block'
+    guides.ghost.classList.toggle('bad', p.willFoul)
+    guides.tline.style.left = p.ball.x + 'px'
+    guides.tline.style.top = p.ball.y + 'px'
+    guides.tline.style.width = R * 3.2 + 'px'
+    guides.tline.style.transform = `rotate(${Math.atan2(p.dirY, p.dirX)}rad)`
+    guides.tline.style.display = 'block'
+    if (p.willFoul) say('这条线先碰到 ' + p.n + ' 号，会判犯规', 'bad', 12000)
+    else if (msgBar.textContent.indexOf('会判犯规') >= 0) say('', '')
+  }
+  function hideGuides() {
+    for (const key of Object.keys(guides)) guides[key].style.display = 'none'
+  }
+  function showPower(ang, k) {
+    // 力度条画在白球「背后」（拉杆方向），不然和瞄准线重叠看不清
+    guides.power.style.left = cue.x + 'px'
+    guides.power.style.top = cue.y + 'px'
+    guides.power.style.width = Math.max(6, k * R * 3) + 'px'
+    guides.power.style.transform = `rotate(${ang + Math.PI}rad)`
+    guides.power.style.display = 'block'
+  }
+
+  // ---- 指针交互：拖白球出杆 / 自由球摆位 ----
+  let drag = null
+  let lastPlaceLegal = null
+  table.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || running || game.over || !turnIsHuman()) return
+    if (game.ballInHand) {
+      drag = { mode: 'place', x: e.clientX, y: e.clientY }
+      lastPlaceLegal = null
+      cue.el.classList.add('dragging')
+      try { table.setPointerCapture(e.pointerId) } catch {}
+      return moveCueTo(e.clientX, e.clientY)
+    }
+    if (!cue.alive) return
+    if (Math.hypot(e.clientX - cue.x, e.clientY - cue.y) > R * 1.6) return
+    drag = { mode: 'shoot', x: e.clientX, y: e.clientY }
+    cue.el.classList.add('dragging')
+    try { table.setPointerCapture(e.pointerId) } catch {}
+  })
+  table.addEventListener('pointermove', (e) => {
+    if (!drag) return
+    drag.x = e.clientX; drag.y = e.clientY
+    if (drag.mode === 'place') return moveCueTo(e.clientX, e.clientY)
+    const dx = cue.x - drag.x, dy = cue.y - drag.y
+    const len = Math.hypot(dx, dy)
+    if (len < 1) return hideGuides()
+    showPower(Math.atan2(dy, dx), Math.min(1, len / (R * 3)))
+    showGuides(dx / len, dy / len)
+  })
+  function moveCueTo(x, y) {
+    const legal = Rules.isLegalSpot(game, ctx(), x, y)
+    cue.x = x; cue.y = y
+    cue.el.classList.toggle('bad', !legal)
+    cue.el.classList.toggle('placing', legal)
+    draw()
+    if (legal === lastPlaceLegal) return // 每帧都 say 会把提示刷成闪烁
+    lastPlaceLegal = legal
+    say(legal ? '自由球：挪到想放的位置松手，再拖白球出杆' : '这里不能放（压球 / 出界 / 堵洞口）', legal ? '' : 'bad', 6000)
+  }
+  const endDrag = () => {
+    if (!drag) return
+    const d = drag; drag = null
+    cue.el.classList.remove('dragging')
+    hideGuides()
+    if (d.mode === 'place') {
+      const c = ctx()
+      if (!Rules.isLegalSpot(game, c, cue.x, cue.y)) {
+        const p = Rules.nearestLegalSpot(game, c, cue.x, cue.y)
+        cue.x = p.x; cue.y = p.y
+        draw()
+        say('那个位置不合法，已挪到最近的空位', '', 2400)
+      } else say('放好了，拖白球出杆', '', 2000)
+      cue.el.classList.remove('bad', 'placing')
+      game.ballInHand = false
+      lastPlaceLegal = null
+      updateHud()
+      return
+    }
+    const dx = cue.x - d.x, dy = cue.y - d.y
+    const len = Math.hypot(dx, dy)
+    if (len < 8) return // 意图不足，不出杆
+    const k = Math.min(1, len / (R * 3))
+    const speed = 200 + k * 2000
+    const ang = Math.atan2(dy, dx)
+    shoot(Math.cos(ang) * speed, Math.sin(ang) * speed)
+  }
+  table.addEventListener('pointerup', endDrag)
+  table.addEventListener('pointercancel', () => {
+    if (!drag) return
+    drag = null
+    cue.el.classList.remove('dragging')
+    hideGuides()
+  })
+
+  function shoot(vx, vy) {
+    if (!cue.alive) return
+    Rules.beginShot(game)
+    cue.vx = vx; cue.vy = vy
+    running = true
+    lastT = performance.now()
+    raf = requestAnimationFrame(step)
+    updateHud()
+  }
+
+  document.getElementById('btnReset').addEventListener('click', setup)
+  document.getElementById('btnAgain').addEventListener('click', setup)
+  document.getElementById('btnLevel').addEventListener('click', () => {
+    levelIdx = (levelIdx + 1) % LEVELS.length
+    updateHud()
+    say('宠物难度：' + LEVELS[levelIdx].name, '', 1600)
+  })
+  document.getElementById('btnSeat').addEventListener('click', (e) => {
+    seat2IsPet = !seat2IsPet
+    e.currentTarget.textContent = '对手：' + (seat2IsPet ? '宠物' : '玩家 2')
+    game.seats[1] = seat2IsPet ? '宠物' : '玩家 2'
+    updateHud()
+    say(seat2IsPet ? '宠物接管第二个座位，会自动出杆' : '双人同机：两个人轮流拖白球', '', 2600)
+    maybePetTurn(400)
+  })
+  const exit = () => { if (window.arenaBridge && window.arenaBridge.exit) window.arenaBridge.exit() }
+  document.getElementById('btnExit').addEventListener('click', exit)
+  document.getElementById('btnClose').addEventListener('click', exit)
+  window.addEventListener('resize', () => { if (!running) setup() })
+
+  // ---- 命中穿透：只在球/面板上拦鼠标 ----
+  let hitState = null
+  document.addEventListener('mousemove', (e) => {
+    if (drag) return
+    const el = document.elementFromPoint(e.clientX, e.clientY)
+    const hit = !!(el && (el.closest('.ball') || el.closest('#hud') || el.closest('#win .card')))
+    if (hit !== hitState) { hitState = hit; window.arenaBridge && window.arenaBridge.setHit(hit) }
+  })
+
+  window.__dump = () => ({
+    W, H, R, running, shotNo: game.shotNo, turn: game.turn, open: game.open, isBreak: game.isBreak,
+    groups: game.groups, ballInHand: game.ballInHand, over: game.over, winner: game.winner,
+    remaining: [Rules.remaining(game, 0), Rules.remaining(game, 1)],
+    fouls: [game.stats[0].fouls, game.stats[1].fouls], pots: [game.stats[0].pots, game.stats[1].pots],
+    alive: balls.filter((b) => b.alive).length, videos: balls.filter((b) => b.el.querySelector('video')).length,
+    hudText: hud.turn.textContent + ' | ' + hud.mine.textContent + ' | ' + hud.foe.textContent + ' | ' + hud.phase.textContent,
+    shot: game.shot, log: game.log.slice(-8),
+  })
+  // 调试：两个座位都交给 AI，同步跑完整局（不用指针、不用等 rAF）
+  window.__autoGame = (maxShots) => {
+    noTimers = true
+    let n = 0
+    while (!game.over && n < (maxShots || 300)) {
+      n++
+      const c = ctx()
+      if (game.ballInHand) {
+        const p = Rules.bestCueSpot(game, c)
+        cue.alive = true; cue.el.style.display = ''
+        cue.x = p.x; cue.y = p.y
+        game.ballInHand = false
+      }
+      Rules.beginShot(game)
+      const pick = Rules.pickShot(game, c, { noise: LEVELS[levelIdx].noise })
+      if (!pick) { onShotEnd(); break }
+      cue.vx = pick.vx; cue.vy = pick.vy
+      let guard = 0
+      while (guard++ < 6000 && advance(1 / 60)) { /* 同步推进到静止 */ }
+      draw()
+      onShotEnd()
+    }
+    noTimers = false
+    return window.__dump()
+  }
+  // 调试：直接给白球一记（方向 + 力度），验证人侧出杆链路
+  window.__shoot = (kx, ky, speed) => {
+    if (running || game.over) return 'busy'
+    if (!turnIsHuman()) game.turn = 0
+    const n = Math.hypot(kx, ky) || 1
+    const v = Number(speed) || 1200
+    shoot((kx / n) * v, (ky / n) * v)
+    return 'ok'
+  }
+
+  setup()
+  setInterval(() => { if (running) updateHud() }, 1000)
+</script>
+</body>
+</html>

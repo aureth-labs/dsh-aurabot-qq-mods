@@ -37,6 +37,15 @@ const defaultState = () => ({
   hintChats: [],
   dreamHintUses: 0,
   lastSleepWindow: [],
+  // 「待会睡」的约定（2026-11-24 加）
+  // 对方说「看完这集就去睡」这种，不立刻睡，但记着，之后自己会提出来。
+  // { text, kind, chatId, at } —— text 是原话，kind 是 night/noon
+  snooze: null,
+  // 睡着期间压下的出站消息（2026-11-24 加）
+  // 原来是 index.mjs 里的内存数组，进程一重启就没了——日志写着「醒来再发」，
+  // 实际一条都不会发。改到状态里持久化，重启/热重载都还在。
+  // 每项 { chatId, message, note, at }
+  deferred: [],
 })
 
 function safeJson(file, fallback) {
@@ -274,9 +283,16 @@ export class NightService {
         atMe: Boolean(msg?.mentioned || msg?.atMe),
       })
       if (!attempt.woke) {
+        // 以前这里是彻底静默的：消息被吞、日志一个字不写，事后只能靠 chatlog 猜。
+        // 补上这行，下次一看日志就知道「不是没收到，是她睡着没叫醒」。
+        this.log?.info?.(
+          `长夜：睡着中，${chatId || '（无会话）'} 这条被挡下不发（${attempt.reason || '没叫醒'}）` +
+            `${s.pendingChats.length > 1 ? `｜累计待回 ${s.pendingChats.length} 个会话` : ''}`,
+        )
         await this.save()
         return { block: true, wake: attempt }
       }
+      this.log?.info?.(`长夜：睡着中被叫醒（${attempt.reason || '叫醒了'}）→ ${chatId || '（无会话）'} 这条正常处理`)
       await this._doWake('message')
       return { block: false, woke: true, wake: attempt, waking: s.mode === WAKING }
     }
@@ -287,8 +303,14 @@ export class NightService {
         s.fatigueEntered = Math.floor(Date.now() / 1000)
         s.fatigueTurns = 0
       }
-      s.fatigueTurns += 1
-      s.energy = energy.drain(s.energy, { messages: 1, perMessage: cfg.energyPerMessage })
+      // 只扣主人的：群里一屋子别的机器人刷屏，不能替她「累」。
+      // 以前每条群消息都扣 4 点，25 条就能把精力扣到 0 直接入睡。
+      const drainOwnerOnly = cfg.energyOwnerOnly !== false
+      const counted = drainOwnerOnly ? Boolean(this.api?.isOwner?.(msg?.userId)) : true
+      if (counted) {
+        s.fatigueTurns += 1
+        s.energy = energy.drain(s.energy, { messages: 1, perMessage: cfg.energyPerMessage })
+      }
       if (s.energy <= 0.5 && s.fatigueTurns >= Math.max(0, Number(cfg.minTurnsBeforeSleep) || 8)) {
         if (!cfg.allowSleep) {
           s.energy = Math.max(s.energy, Number(cfg.energyAfterWake) || 35)
@@ -309,6 +331,65 @@ export class NightService {
   // ------------------------------------------------------------ 睡 / 醒
   requestSleep(reason, kind, chatId = '') {
     if (!this.pendingSleep) this.pendingSleep = { reason, kind, chatId: String(chatId || ''), at: Date.now() }
+  }
+
+  /**
+   * 挂一个「待会再睡」的约定（2026-11-24 加）。
+   *
+   * 对方说的是「看完这集就去睡」这类——不是让 BOT 立刻睡，但也**不能说完全没这回事**。
+   * 记下来，之后聊天时它会出现在她的提示里，让她自己提一句「说好那集看完就睡的」。
+   *
+   * 过期就当没了：默认 3 小时。夜里说了看完就睡，结果第二天早上才想起来，那更怪。
+   */
+  requestSnooze(text, kind, chatId = '') {
+    const clean = String(text || '').trim().slice(0, 200)
+    if (!clean) return
+    this.state.snooze = { text: clean, kind: kind || 'night', chatId: String(chatId || ''), at: Date.now() }
+  }
+
+  /** 还在有效期内的待睡约定；没有就返回 null。 */
+  activeSnooze(now = Date.now()) {
+    const s = this.state.snooze
+    if (!s || !s.at) return null
+    const limit = Math.max(10, Number(this.cfg?.snoozeKeepMinutes) || 180) * MIN
+    if (now - s.at > limit) return null
+    return s
+  }
+
+  clearSnooze() {
+    this.state.snooze = null
+  }
+
+  // ------------------------------------------------------------ 睡着时压下的消息
+  /**
+   * 压一条出站消息（2026-11-24 改成持久化）。
+   *
+   * 原来存在 index.mjs 的内存数组里：进程一重启（热重载、崩溃、手机杀后台）就没了，
+   * 日志却写着「醒来再发」——等于骗人。现在写进 state.json，和作息状态一起存。
+   */
+  async pushDeferred({ chatId, message, note = '' }) {
+    const s = this.state
+    if (!Array.isArray(s.deferred)) s.deferred = []
+    s.deferred.push({ chatId: String(chatId || ''), message, note: String(note || ''), at: Date.now() })
+    // 压太多没意义：只留最近 30 条，早的丢掉
+    let dropped = 0
+    while (s.deferred.length > 30) { s.deferred.shift(); dropped += 1 }
+    if (dropped) this.log?.warn?.(`长夜：睡着期间压下的消息超过 30 条，丢掉最早的 ${dropped} 条`)
+    await this.save()
+  }
+
+  /** 取出所有压着的消息并清空队列（取出来就没了，调用方负责发送）。 */
+  async takeDeferred() {
+    const s = this.state
+    const list = Array.isArray(s.deferred) ? s.deferred.slice() : []
+    s.deferred = []
+    if (list.length) await this.save()
+    return list
+  }
+
+  /** 只看不清空（面板显示「还压着几条」用）。 */
+  deferredCount() {
+    return Array.isArray(this.state.deferred) ? this.state.deferred.length : 0
   }
 
   async _doSleep(reason, kind = 'night', force = false) {
@@ -458,6 +539,16 @@ export class NightService {
 
     if (this.pendingSleep) {
       lines.push(`这句话说完你就要去睡了（${this.pendingSleep.kind === 'noon' ? '午睡' : '夜里'}）。道别要自然，别解释原因，也别问问题。`)
+    }
+
+    // 「待会睡」的约定：只在他当初约定的那个会话里提，别在群里嚷嚷
+    const snooze = this.activeSnooze()
+    if (snooze && (!snooze.chatId || snooze.chatId === chatId)) {
+      const mins = Math.max(1, Math.round((Date.now() - snooze.at) / MIN))
+      lines.push(
+        `你之前说过要睡，但不是马上——他说的是「${String(snooze.text || '').slice(0, 60)}」（${mins} 分钟前）。` +
+        `现在可以自然提一句（比如「不是说看完就睡吗」），也可以不提，看当时聊到哪。别提「约定」「记录」这种词。`
+      )
     }
 
     if (s.morningDreamId && s.dreamHintUses < (isGroup ? 0 : 1)) {
