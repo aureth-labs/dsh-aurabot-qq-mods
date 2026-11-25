@@ -2172,6 +2172,41 @@
       "publishedAt": "2026-11-22T12:04:36.584Z"
     },
     {
+      "id": "shangxue-playmusic",
+      "name": "语音点歌",
+      "version": "1.0.0",
+      "description": "点歌功能：搜哔哩哔哩/网易云的原唱，按匹配度挑最优一首，下载后抽成 mp3 当语音条发到当前会话。这是省算力的点歌通道（不占用唱歌/翻唱）",
+      "category": "social",
+      "tags": [
+        "点歌",
+        "音乐",
+        "哔哩哔哩",
+        "网易云",
+        "语音条"
+      ],
+      "platforms": [
+        "qq"
+      ],
+      "author": "shangxue",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "network",
+        "process"
+      ],
+      "replacesBuiltin": false,
+      "tag": "shangxue-playmusic-v1.0.0",
+      "file": "shangxue-playmusic-v1.0.0.zip",
+      "path": "shangxue-playmusic-v1.0.0/shangxue-playmusic-v1.0.0.zip",
+      "size": 19167,
+      "sha256": "58accc19cce65617be291c82a63bf6016cca9d3dde928fa3f7fd04f88cb8878c",
+      "commit": "e7ea1535cdd155667eecf87641d34f8e83272e91",
+      "publishedAt": "2026-11-25T04:55:43.891Z"
+    },
+    {
       "id": "shitu",
       "name": "识图",
       "version": "1.0.0",
@@ -2666,5 +2701,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-25T04:54:28.904Z"
+  "generatedAt": "2026-11-25T04:55:43.891Z"
 }
