@@ -1,0 +1,22 @@
+{
+    "id":  "anti-ai",
+    "name":  "去 AI 味",
+    "version":  "1.0.0",
+    "description":  "清掉「作为 AI」「总而言之」「希望对你有帮助」这类客服腔，并认出模型写的「不说话」记号",
+    "category":  "social",
+    "tags":  [
+                 "去AI味",
+                 "客服腔",
+                 "沉默"
+             ],
+    "author":  "肥鱼鱼",
+    "license":  "MIT",
+    "api":  1,
+    "minPluginVersion":  "1.2.0",
+    "requires":  [
+
+                 ],
+    "capabilities":  [
+
+                     ]
+}

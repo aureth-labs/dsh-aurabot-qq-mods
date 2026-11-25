@@ -1,0 +1,14 @@
+{
+  "id": "poke-pro",
+  "name": "专业戳一戳",
+  "version": "1.0.0",
+  "description": "被戳时按权重随机反戳、LLM 回复、发表情、发表情包、发语音、禁言或触发命令；支持主动戳、关键词戳与定时戳。",
+  "category": "social",
+  "tags": ["戳一戳", "poke", "互动", "反戳"],
+  "author": "MOSS",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["plugin-config"]
+}

@@ -1,0 +1,14 @@
+{
+  "id": "digest",
+  "name": "群聊日报",
+  "version": "1.0.0",
+  "description": "每天到点把当天群聊压成几条要点私聊推给主人：谁在发愁、哪句话被岔开、什么事说定了没落地",
+  "category": "social",
+  "tags": ["日报", "群聊", "总结", "提醒"],
+  "author": "踏雪",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["filesystem", "plugin-config", "plugin-internals"]
+}
