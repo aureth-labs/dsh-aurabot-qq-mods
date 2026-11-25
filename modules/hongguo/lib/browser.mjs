@@ -26,6 +26,12 @@ const CANDIDATES = [
   '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
 ].filter(Boolean)
 
+// 启动等待预算：冷启动 + 杀毒逐个扫 chrome 的子进程时，15 秒经常不够，
+// 短了会把「启动慢」误报成「浏览器没起来，请检查路径」。（同 douyin 2.3.9 的修法）
+const LAUNCH_POLL_MS = 250
+const LAUNCH_POLLS = 120
+const LAUNCH_TIMEOUT_SEC = (LAUNCH_POLL_MS * LAUNCH_POLLS) / 1000
+
 /** 是不是一个能直接执行的浏览器文件（目录、非可执行文件都不算）。 */
 function isBrowserExe (p, exists = existsSync) {
   try {
@@ -37,9 +43,9 @@ function isBrowserExe (p, exists = existsSync) {
   }
 }
 
-/** 找浏览器：面板填了就用填的，否则 Edge 优先，再找 Chrome / Chromium。 */
+/** 找浏览器：面板填了且真实可用就用填的；填的路径不存在（磁盘清理/搬移后很常见）就回退去常见安装位置探测，Chrome 优先，再找 Edge / Chromium。 */
 export function findBrowser (explicit = '', exists = existsSync) {
-  if (explicit) return isBrowserExe(explicit, exists) ? explicit : ''
+  if (explicit && isBrowserExe(explicit, exists)) return explicit
   return CANDIDATES.find((p) => isBrowserExe(p, exists)) || ''
 }
 
@@ -358,10 +364,15 @@ export function createBrowser ({
     }
   }
 
-  function launchError (error, p) {
+  function launchError (error, p, why = '') {
     const detail = [error?.message, p?.error?.message, p?.stderr?.trim()].filter(Boolean).join('；')
     if (/SingletonLock|profile appears to be in use/i.test(detail)) return lockError()
-    return new Error(detail || '浏览器没起来，请检查浏览器路径和专用资料目录')
+    // 有具体报错就原样报，别再合并成一句怪路径的话——历史上把「进程静默退出」「启动太慢」
+    // 全报成「浏览器没起来，请检查浏览器路径和专用资料目录」，路径明明是对的，用户查路径查不出问题。
+    if (detail) return new Error(detail)
+    if (p?.exited) return new Error('浏览器进程启动后自己退出了，没有任何报错输出。最常见原因：已经有一个用同一资料目录的浏览器在跑（浏览器自动更新重启 / 上次的窗口没关干净；专用窗口平时放在屏幕外看不见）；另外磁盘清理或「把软件搬到别的盘」会弄坏浏览器安装（路径还在但起不来）。先在任务管理器结束全部 chrome.exe / msedge.exe 再重试；还不行就修复 / 重装浏览器，或在面板换一个浏览器路径')
+    if (why === 'timeout') return new Error(`浏览器进程 ${LAUNCH_TIMEOUT_SEC} 秒内没开出调试端口（进程还活着，路径多半没问题，是启动太慢或被杀毒软件拦了）。稍等再试一次；反复出现就检查杀毒软件对浏览器的拦截`)
+    return new Error('浏览器没起来，请检查浏览器路径和专用资料目录')
   }
 
   async function launch (source, check) {
@@ -392,7 +403,8 @@ export function createBrowser ({
       if (hasLock()) throw lockError()
       const path = browserPath()
       const bin = findBrowser(path)
-      if (!bin) throw new Error(path ? `浏览器路径不对：${path}` : '找不到 Chrome / Edge，先装一个，或在面板里填浏览器路径')
+      if (!bin) throw new Error(path ? `浏览器路径不对：${path}（这个文件不存在或不可执行，常见安装位置也没找到 Chrome / Edge；先装一个，或把路径改成 chrome.exe / msedge.exe 的完整路径）` : '找不到 Chrome / Edge，先装一个，或在面板里填浏览器路径')
+      if (path && bin !== path) log?.warn?.(`面板填的浏览器路径不存在：${path}，已自动改用 ${bin}`)
       mkdirSync(profileDir, { recursive: true })
       const port = await getPort()
       check()
@@ -419,8 +431,8 @@ export function createBrowser ({
       ], { stdio: ['ignore', 'ignore', 'pipe'], detached: true })
       p = owned = observe(child, port)
       child.unref()
-      for (let i = 0; i < 60; i++) {
-        await wait(250)
+      for (let i = 0; i < LAUNCH_POLLS; i++) {
+        await wait(LAUNCH_POLL_MS)
         check()
         if (p.exited || p.error) throw launchError(null, p)
         const version = await getBrowserJson(`http://127.0.0.1:${port}/json/version`, 1500).catch(() => null)
@@ -434,7 +446,7 @@ export function createBrowser ({
           return
         }
       }
-      throw launchError(null, p)
+      throw launchError(null, p, 'timeout')
     } catch (error) {
       try { await stopOwned(p) } catch (stopError) { throw new Error(`${launchError(error, p).message}；${stopError.message}`) }
       if (error.code === 'cancelled') throw error

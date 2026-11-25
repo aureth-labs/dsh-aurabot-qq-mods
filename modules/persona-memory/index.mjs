@@ -1,140 +1,94 @@
-import { createHash, randomUUID } from 'node:crypto'
-import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-
-const PAGE_SIZE = 20
-const STATS_FILE = 'preview-delivery.json'
-
-function previewBridge(api) {
-  const bridge = api.core?.personaMemoryBridge
-  const caps = bridge?.capabilities
-  return bridge?.api === 1 && bridge.state === 'preview' &&
-    Array.isArray(caps) && caps.includes('native-memory-view') && caps.includes('confirmed-delivery') &&
-    typeof bridge.readNativeMemory === 'function' && typeof bridge.onDelivery === 'function'
-    ? bridge : null
-}
-
-function currentScope(config) {
-  const owner = String(config.ownerQQ || '')
-  const personaId = String(config.persona?.current || '')
-  const dataOwner = String(config.persona?.dataOwner || '')
-  if (config.safeMode || config.debug || !/^\d+$/.test(owner) ||
-      !/^[a-zA-Z0-9_-]{1,40}$/.test(personaId) || !/^[a-zA-Z0-9_-]{1,40}$/.test(dataOwner)) return null
-  const botQQ = String(config.botQQ || '')
-  return { personaId, chatId: 'private:' + owner, botQQ, receive: !config.dryRun && /^\d+$/.test(botQQ) }
-}
-
-function readStats(file, scope) {
-  try {
-    const saved = JSON.parse(readFileSync(file, 'utf8'))
-    if (saved.scope === scope && Number.isSafeInteger(saved.count) && saved.count >= 1 &&
-        Number.isSafeInteger(saved.at) && saved.at > 0 && Number.isFinite(new Date(saved.at).getTime())) {
-      return { count: saved.count, at: saved.at }
-    }
-  } catch (error) {
-    // A missing or invalid preview cache does not affect the native memory view.
-  }
-  return { count: 0, at: null }
-}
-
-function saveStats(file, scope, stats) {
-  const pending = file + '.' + randomUUID() + '.tmp'
-  try {
-    writeFileSync(pending, JSON.stringify({ scope, ...stats }) + '\n', { flag: 'wx', mode: 0o600 })
-    renameSync(pending, file)
-  } finally {
-    rmSync(pending, { force: true })
-  }
-}
-
-function offsetFrom(req) {
-  const value = new URL(req?.url || '/', 'http://localhost').searchParams.get('offset')
-  const offset = Number(value)
-  return Number.isSafeInteger(offset) && offset > 0 ? offset : 0
-}
+import { MemoryService } from './lib/service.mjs'
+import { DEFAULTS, required } from './lib/policy.mjs'
+import { MemoryManagement } from './lib/management.mjs'
+import { MemoryRuntime } from './lib/runtime.mjs'
+import { LegacyMigration } from './lib/legacy.mjs'
+import { memoryFacade } from './lib/facade.mjs'
+import { inspectHostBridge } from './lib/host-contract.mjs'
 
 export default {
-  id: 'persona-memory',
-  name: '人设记忆预览',
-  description: '查看当前人格与主人的私聊原生记忆及确认送达统计。需支持记忆预览的 Aurabot。问题反馈 QQ 1365641547。',
-  version: '0.1.0',
-  api: 1,
-  panel: 'panel.js',
-  setup(api) {
-    let subscription = null
-
-    function stopDelivery() {
-      const previous = subscription
-      subscription = null
-      previous?.stop()
+  id:'persona-memory',name:'记忆管理器',version:'0.1.1',api:1,
+  description:'整理长期聊天与角色经历，按需回忆，支持编辑、忘记及保留人设重置。需完整版宿主接口，与「跨会话记忆」互斥。反馈 QQ 1365641547。',
+  panel:'panel.js',defaults:DEFAULTS,settings:[],flag:'enabled',
+  setup(api){
+    const candidate = api.core.personaMemoryBridge
+    const compatibility = inspectHostBridge(candidate)
+    const bridge = compatibility.ready ? candidate : null
+    const service=new MemoryService({
+      file:bridge ? api.dataDir('memory.sqlite') : null,
+      readSettings:()=>api.settings(),writeSettings:value=>api.saveSettings(value),
+      bridge,model:bridge?.model,
+    })
+    const runtime=new MemoryRuntime(service)
+    const moduleAPI = {
+      service, runtime, memoryAPI: 1,
+      dispose() {
+        bridge?.unbind(service)
+        runtime.stop()
+        return service.dispose()
+      },
+    }
+    const route=(path,handler)=>api.route(path,handler,{access:'panel'})
+    if (!bridge) {
+      route('/state', () => ({
+        ok: true, ...service.state(), capabilities: compatibility, currentPersona: '', personas: [],
+      }))
+      return moduleAPI
     }
 
-    function startDelivery(bridge, scope) {
-      if (!bridge || !scope?.receive) {
-        stopDelivery()
-        return
-      }
-      const key = createHash('sha256').update(JSON.stringify([scope.personaId, scope.chatId, scope.botQQ])).digest('hex')
-      if (subscription?.bridge === bridge && subscription.key === key) return
-      stopDelivery()
-      try {
-        const file = api.dataDir(STATS_FILE)
-        const next = { key, bridge, stats: readStats(file, key) }
-        next.stop = bridge.onDelivery(scope.chatId, receipt => {
-          if (subscription !== next || receipt.status !== 'confirmed' || receipt.chatId !== scope.chatId) return
-          if (!Number.isSafeInteger(receipt.at) || receipt.at <= 0 || !Number.isFinite(new Date(receipt.at).getTime())) return
-          if (next.stats.count >= Number.MAX_SAFE_INTEGER) return
-          next.stats = { count: next.stats.count + 1, at: receipt.at }
-          try {
-            saveStats(file, key, next.stats)
-          } catch (error) {
-            api.log.warn('人设记忆预览无法保存送达统计。')
-          }
-        })
-        subscription = next
-      } catch (error) {
-        // The gateway or host can withdraw access. Reading remains independent.
-      }
+    const migration=new LegacyMigration({root:bridge.root,dir:api.dataDir('legacy'),service})
+    bridge.bind(service,runtime,memoryFacade(service))
+    const dependent=id=>({id,version:1,
+      preview:()=>{const m=api.use(id);return {supported:!m||m.memoryResetAPI===1,reason:'关联模块未安装记忆重置适配'}},
+      activate:args=>{const m=api.use(id);return m?.memoryTakeover?.(args)},
+      clear:args=>{const m=api.use(id);if(!m)return {verified:true};if(m.memoryResetAPI!==1)throw new Error('缺少关联模块重置适配：'+id);return m.memoryReset(args)},
+    })
+    bridge.configure({migration,participants:[{id:'host-sessions',version:3,preview:(scopes,selection)=>bridge.previewSessionReset(scopes,selection),validatePreview:(preview,scopes,selection)=>bridge.validateSessionReset(preview,scopes,selection),clear:args=>bridge.clearSessions(args)},{id:'auxiliary-state',version:1,preview:()=>({supported:true,impact:'所涉角色的心情、夜间状态和自驱笔记一并重新开始；这些旧模块不能按单个聊天精确分离。配置保留，旧资料隔离，不再供角色读取。'}),clear:args=>bridge.clearAuxiliary(args)},dependent('character-photo'),dependent('diary')]})
+    const management=bridge.management || new MemoryManagement({getStore:()=>service._store,currentPersona:()=>bridge.persona(),ownerQQ:()=>bridge.ownerQQ(),invalidate:scopes=>service.invalidateSessions(scopes)})
+    const http=api.core.http
+    const action=fn=>async req=>{
+      if(req.method!=='POST' || !/^application\/json(?:\s*;|$)/i.test(req.headers?.['content-type'] || ''))return {ok:false,message:'请从管理页操作'}
+      try{
+        const bytes=await http.raw(req,128*1024),data=JSON.parse(bytes.toString('utf8'))
+        if(!data || typeof data!=='object' || Array.isArray(data))throw new Error('参数格式不正确')
+        return {ok:true,...await fn(data)}
+      }catch(error){return {ok:false,message:String(error.message).slice(0,400)}}
     }
-
-    function sync() {
-      const config = api.config()
-      const bridge = previewBridge(api)
-      const scope = currentScope(config)
-      startDelivery(bridge, scope)
-      return { bridge, scope, config }
+    const selected=data=>{
+      const scope=service.store.getScope(required(data.scopeKey))
+      if(!scope)throw new Error('请先选择已有互动范围')
+      if(data.epoch!==scope.epoch)throw new Error('资料已重新开始，请刷新')
+      return scope
     }
-
-    function unavailable(message) {
-      return { ok: true, available: false, message }
-    }
-
-    api.route('/state', req => {
-      if (req?.method && req.method !== 'GET') return { ok: false, message: '此接口只可读取。' }
-      const { bridge, scope, config } = sync()
-      if (config.safeMode || config.debug) return unavailable('安全模式或调试模式下无法查看记忆。')
-      if (!bridge) return unavailable('需要支持人设记忆预览的 Aurabot 版本。')
-      if (!scope) return unavailable('请先设置主人 QQ、当前人格和原生资料归属。')
-      const offset = offsetFrom(req)
-      let page
-      try {
-        page = bridge.readNativeMemory(scope.chatId, { offset, limit: PAGE_SIZE })
-      } catch (error) {
-        return unavailable('当前人格的主人私聊暂不可预览。')
-      }
-      if (!page || !Array.isArray(page.items)) return unavailable('当前人格的原生记忆暂不可读取。')
-      return {
-        ok: true,
-        available: true,
-        personaId: scope.personaId,
-        items: page.items.map(({ id, text, at }) => ({ id, text, at })),
-        offset,
-        nextOffset: page.nextOffset,
-        pageSize: PAGE_SIZE,
-        delivery: subscription ? { ...subscription.stats } : null,
-      }
-    }, { access: 'panel' })
-    api.on('config', sync)
-    api.onDispose(stopDelivery)
-    sync()
+    route('/state',()=>{let personas=[];try{personas=api.lib('persona/personas.js').listPersonas().map(({id,name})=>({id,name}))}catch{}return {ok:true,...service.state(),currentPersona:bridge?.persona?.()||'',personas}})
+    route('/save',action(data=>({settings:service.save(data)})))
+    route('/prepare',action(data=>service.prepareActivation(data)))
+    route('/activate',action(data=>service.activate(data.token)))
+    route('/pause',action(()=>service.pause()))
+    route('/native-preview',action(()=>bridge.prepareNative()))
+    route('/retry-preview',action(()=>service.previewRetry()))
+    route('/retry',action(data=>service.retryJobs(data)))
+    route('/native-activate',action(data=>bridge.activateNative(data.token)))
+    route('/organize',action(()=>{service.assertActive();return runtime.schedule({force:true})}))
+    route('/legacy',()=>({ok:true,...(migration?.list()||{snapshot:null,chats:[]})}))
+    route('/legacy-import',action(data=>{if(!migration)throw new Error('宿主未安装迁移适配');service.assertActive();return migration.importChat(data)}))
+    route('/search',action(data=>management.list({...data,status:'all'})))
+    route('/archive',action(data=>{const r=management.list({...data,layer:'raw'});return {...r,events:r.items}}))
+    route('/sources',action(data=>management.detail(data)))
+    route('/pin',action(data=>management.mark({...data,action:'pin',value:data.pinned})))
+    route('/correct',action(data=>management.edit(data)))
+    route('/suppress',action(data=>management.mark({...data,action:'suppress',value:data.suppressed})))
+    route('/export',action(data=>management.export(data)))
+    route('/forget-preview',action(data=>management.forgetPreview(data)))
+    route('/forget',action(data=>management.forget(data)))
+    route('/reset-preview',action(data=>service.previewReset({scopeKey:data.scopeKey,persona:data.persona,all:data.all===true,archiveWindows:data.archiveWindows===true})))
+    route('/reset',action(data=>service.reset(data.token)))
+    route('/reset-resume',action(data=>service.resetter().resume(required(data.id))))
+    // Resume only a previously active validated installation. An enabled setting by itself
+    // is insufficient to silently take over a never-initialized system.
+    if(api.settings().enabled===true)service.resume().catch(error=>api.log.warn('记忆尚未恢复：'+error.message))
+    if(api.tool&&api.defineTool)api.tool(({sessionId})=>!service.active()||!runtime.session(sessionId)?.snapshot||runtime.session(sessionId).snapshot.audience==='system'?[]:[api.defineTool({name:'persona_memory_recall',description:'按当前人格和聊天范围查以前的互动。可选原话、日摘要或月印象。返回未命中或故障时不得编造。多次读取共享本轮额度。',properties:{query:{type:'string'},layer:{type:'string',enum:['records','raw','day','month']},before:{type:'object',properties:{at:{type:'number'},id:{type:'string'}}}},execute:async args=>{try{return runtime.history(sessionId,args)}catch(error){return {status:'unavailable',message:error.message}}},render:(_args,value)=>[{type:'text',text:JSON.stringify(value)}]})])
+    if(api.tool&&api.defineTool)api.tool(({sessionId})=>!service.active()||!runtime.session(sessionId)?.snapshot||runtime.session(sessionId).snapshot.audience==='system'?[]:[api.defineTool({name:'persona_memory_note',description:'用户明确要记住或给出重要的新偏好时，保存最近用户原话。不要逐轮调用、保存AI自述或重复已有记忆。只保留原话中的否定和条件；冲突时先查来源，不能自行覆盖。',properties:{quote:{type:'string'},attribute:{type:'string'},value:{type:'string'},kind:{type:'string',enum:['fact','episode']},domain:{type:'string',enum:['real','roleplay','reported']}},execute:async args=>{try{return runtime.remember(sessionId,args)}catch(error){return {status:'not-saved',message:error.message}}},render:(_args,value)=>[{type:'text',text:JSON.stringify(value)}]})])
+    return moduleAPI
   },
 }

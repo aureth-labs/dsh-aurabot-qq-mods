@@ -6,7 +6,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createClicker } from '../lib/click.mjs'
+import { createClicker } from '../lib/room/click.mjs'
 import { createGate } from '../lib/gate.mjs'
 
 /** 假 CDP：靠表达式里独有的片段分清是 find / hit / mark / unmark / scroll（和真页面无关，只回灌状态）。 */

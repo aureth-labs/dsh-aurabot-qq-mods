@@ -9,7 +9,7 @@ import { createHongguo } from './lib/duty.mjs'
 export default {
   id: 'hongguo',
   name: '刷红果短剧',
-  version: '0.1.1',
+  version: '0.1.2',
   api: 1,
   description: '用专用浏览器刷红果短剧：看推荐、记下看过的，刷到好看的用 QQ 私聊告诉主人。',
   // 设置项和面板

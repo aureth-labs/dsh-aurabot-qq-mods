@@ -1,7 +1,7 @@
 {
   "id": "smart-search",
   "name": "联网搜索",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "需要时自己查资料、读网页，回答附上来源；默认沿用 DSH 搜索",
   "category": "tool",
   "tags": [

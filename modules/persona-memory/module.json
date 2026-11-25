@@ -1,14 +1,23 @@
 {
   "id": "persona-memory",
-  "name": "人设记忆预览",
-  "version": "0.1.0",
-  "description": "查看当前人格与主人的私聊原生记忆及确认送达统计。需支持记忆预览的 Aurabot。问题反馈 QQ 1365641547。",
+  "name": "记忆管理器",
+  "version": "0.1.1",
+  "description": "整理长期聊天与角色经历，按需回忆，支持编辑、忘记及保留人设重置。需完整版宿主接口，与「跨会话记忆」互斥。反馈 QQ 1365641547。",
   "category": "manage",
-  "tags": ["记忆", "人设", "只读预览"],
+  "tags": [
+    "记忆",
+    "人设",
+    "长期互动"
+  ],
   "author": "Yobak",
   "license": "MIT",
   "api": 1,
   "minPluginVersion": "1.3.0",
   "requires": [],
-  "capabilities": ["filesystem", "plugin-config", "plugin-internals"]
+  "capabilities": [
+    "network",
+    "filesystem",
+    "plugin-config",
+    "plugin-internals"
+  ]
 }

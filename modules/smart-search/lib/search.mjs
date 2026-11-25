@@ -24,9 +24,9 @@ export function routeSources(available, input, args, settings) {
   available = available.filter(x => WEB_SOURCES.includes(x));
   const requested = args.sources;
   if (requested !== undefined && (!Array.isArray(requested) || !requested.length || requested.some(x => !available.includes(x)))) throw new SearchError('source');
-  const preferred = /论文|研究|文档|官方|api\b|sdk\b|documentation|paper\b/iu.test(input.query) ? ['exa', 'firecrawl', 'dsh', 'searxng', 'tavily', 'zhipu']
-    : /[\u3400-\u9fff]/u.test(input.query) ? ['zhipu', 'dsh', 'tavily', 'searxng', 'exa', 'firecrawl']
-    : /news|latest/iu.test(input.query) || input.recency !== 'any' ? ['tavily', 'dsh', 'searxng', 'exa', 'zhipu', 'firecrawl'] : ['dsh', 'searxng', 'tavily', 'exa', 'zhipu', 'firecrawl'];
+  const preferred = /论文|研究|文档|官方|api\b|sdk\b|documentation|paper\b/iu.test(input.query) ? ['exa', 'firecrawl', 'dsh', 'searxng', 'tavily', 'zhipu', 'keenable']
+    : /[\u3400-\u9fff]/u.test(input.query) ? ['zhipu', 'dsh', 'tavily', 'searxng', 'exa', 'firecrawl', 'keenable']
+    : /news|latest/iu.test(input.query) || input.recency !== 'any' ? ['tavily', 'dsh', 'searxng', 'exa', 'zhipu', 'firecrawl', 'keenable'] : ['dsh', 'searxng', 'tavily', 'exa', 'zhipu', 'firecrawl', 'keenable'];
   const candidates = requested ? [...new Set(requested)] : preferred.filter(x => available.includes(x));
   if (!candidates.length) throw new SearchError('setup');
   if (args.mode !== undefined && !['quick', 'verify'].includes(args.mode)) throw new SearchError('request');

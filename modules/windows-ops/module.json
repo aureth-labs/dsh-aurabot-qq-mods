@@ -1,14 +1,14 @@
 {
   "id": "windows-ops",
   "name": "逛电脑（Windows 自动化）",
-  "version": "1.2.1",
-  "description": "经 PowerShell 操作这台电脑：读无障碍树（UIA）按元素点击/写值/读文本/触发表单，窗口枚举/激活/关闭、截屏、剪贴板读写、键鼠模拟。默认仅主人可用，带操作白名单与危险操作确认门槛。",
+  "version": "1.3.2",
+  "description": "经 PowerShell 操作这台电脑：读无障碍树（UIA）按元素点击/写值/读文本/触发表单，窗口枚举/激活/关闭、截屏、剪贴板读写、键鼠模拟；并通过机器人自己的 QQ 客户端（按机器人 QQ 号识别窗口）原生「屏幕共享」向主人或主人指定的好友共享屏幕、用「邀请对方远程协助」让对方直接接管；发起前先把当前屏幕截图发主人私聊确认。默认仅主人可用，带操作白名单与危险操作确认门槛。",
   "category": "platform",
-  "tags": ["windows", "自动化", "键鼠", "截屏"],
+  "tags": ["windows", "自动化", "键鼠", "屏幕共享", "远程协助"],
   "author": "RookieApe-tao",
   "license": "MIT",
   "api": 1,
   "minPluginVersion": "1.2.0",
   "requires": [],
-  "capabilities": ["filesystem", "process", "plugin-internals"]
+  "capabilities": ["filesystem", "process", "plugin-internals", "plugin-config"]
 }

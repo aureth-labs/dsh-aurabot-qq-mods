@@ -18,6 +18,14 @@ test('routing prefers appropriate channels and excludes Context7 from ordinary s
   assert.throws(() => routeSources(s.sources, { query: 'q' }, { sources: ['context7'] }, s), { code: 'source' });
   assert.throws(() => routeSources(s.sources, { query: 'q' }, { sources: ['firecrawl'] }, s), { code: 'source' });
 });
+test('Keenable is tried last for every kind of question and only when enabled', () => {
+  const s = options({ ...configured, sources: ['dsh', 'keenable', 'tavily', 'exa'] });
+  for (const query of ['最新中文消息', 'React API documentation', 'latest news', 'hello']) {
+    assert.equal(routeSources(s.sources, { query, recency: 'any' }, {}, s).candidates.at(-1), 'keenable');
+  }
+  assert.deepEqual(routeSources(['keenable'], { query: 'hello', recency: 'any' }, {}, options({ sources: ['keenable'] })).candidates, ['keenable']);
+  assert.throws(() => routeSources(['dsh'], { query: 'q', recency: 'any' }, { sources: ['keenable'] }, options()), { code: 'source' });
+});
 test('quick mode calls one source; cache is bounded and isolated by chat', async () => {
   let calls = 0; const h = harness(configured, { search: async () => { calls++; return { sources: [{ url: 'https://example.com/', title: 'Example' }] }; } });
   const service = createSearch(h.api);

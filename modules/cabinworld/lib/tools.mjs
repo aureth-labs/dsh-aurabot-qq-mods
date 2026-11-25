@@ -105,9 +105,9 @@ export const CORE = ['cabin_status', 'cabin_look', 'cabin_catalog', 'cabin_go', 
 /**
  * 从桥的工具清单生成模块工具定义。
  * 优先读副本（bridge-host，含我们把睡觉/姿势加进去的那两个），没有就读官方 bridge/。
- * all=true 时把官方全部工具都暴露（多住户、家具、更新等），否则只给 CORE + 自造的。
+ * 只留 CORE（常用的那几个）：桥清单里还有多住户、家具、更新等 20 多个，全挂给模型太费 token。
  */
-export function loadSpecs({ hostDir, bridgeDir, all = false, log = null }) {
+export function loadSpecs({ hostDir, bridgeDir, log = null }) {
   const dirs = [hostDir, bridgeDir].filter(Boolean)
   for (const dir of dirs) {
     let tools = null
@@ -125,7 +125,7 @@ export function loadSpecs({ hostDir, bridgeDir, all = false, log = null }) {
         required: Array.isArray(params.required) ? params.required : [],
       })
     }
-    const keep = all ? specs : specs.filter(function (s) { return CORE.indexOf(s.name) >= 0 })
+    const keep = specs.filter(function (s) { return CORE.indexOf(s.name) >= 0 })
     if (keep.length) return keep
   }
   if (log && log.warn) log.warn('小屋世界：读不到桥的工具清单，先用内置的短清单')

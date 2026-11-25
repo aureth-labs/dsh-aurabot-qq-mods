@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { stopProcessTree } from './process.mjs';
 export class BootstrapManager {
-  constructor({dir,runtimeDir,onReady,log,prepare,check=checkEnvironment}) {
-    Object.assign(this,{dir,runtimeDir,onReady,log});
+  constructor({dir,runtimeDir,onReady,log,prepare,check=checkEnvironment,downloadEnv=()=>({})}) {
+    Object.assign(this,{dir,runtimeDir,onReady,log,downloadEnv});
     this.check=check;
     this.prepare=prepare || (progress=>this.prepareFiles(progress));
     this.state={busy:false,phase:'checking',message:'正在检查表情库…',completed:0,total:0,error:''};this.disposed=false;this.child=null;
@@ -37,7 +37,7 @@ export class BootstrapManager {
     if(this.disposed)return;
     return new Promise((resolve,reject)=>{
       const child=spawn(process.execPath,[join(this.dir,'scripts','bootstrap.mjs'),this.runtimeDir],{
-        windowsHide:true,detached:process.platform!=='win32',stdio:['ignore','pipe','pipe'],env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}
+        windowsHide:true,detached:process.platform!=='win32',stdio:['ignore','pipe','pipe'],env:{...process.env,ELECTRON_RUN_AS_NODE:'1',...this.downloadEnv()}
       });this.child=child;let tail='';
       child.stderr.on('data',b=>{tail=(tail+b).slice(-4000);});
       const lines=createInterface({input:child.stdout});

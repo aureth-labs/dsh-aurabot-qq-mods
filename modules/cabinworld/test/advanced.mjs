@@ -19,7 +19,7 @@ const settings = {
 
 const api = {
   id: mod.id,
-  version: '1.3.0',
+  version: '1.2.1',
   apiVersion: 1,
   source: 'user',
   dir: process.cwd(),
@@ -45,7 +45,11 @@ const api = {
 
 await mod.setup(api)
 
-const ok = (cond, label, extra) => console.log((cond ? 'OK ' : 'FAIL ') + label + (extra ? ' - ' + extra : ''))
+const ok = (cond, label, extra) => {
+  if (cond) { console.log('OK ' + label + (extra ? ' - ' + extra : '')); return }
+  console.error('FAIL ' + label + (extra ? ' - ' + extra : ''))
+  process.exitCode = 1
+}
 const byName = (n) => calls.tools.find(t => t.name === n)
 const firstLine = (s) => String(s || '').split('\n')[0]
 const ADVANCED = ['cabin_toolpose', 'cabin_restaurant', 'cabin_sleep']
