@@ -70,3 +70,43 @@ test('already-bound tools resolve current module exports after a hot reload', as
   const r=await boundRead.execute({url:'https://tieba.baidu.com/p/12345678'});
   assert.equal(r.title,'NEW_BROWSER_RESULT');
 });
+
+test('login check falls back to newmoindex and tbs when json_userinfo is gone', async () => {
+  const seen = [];
+  const paths = [];
+  const client = createTieba({ getCookie: () => 'BDUSS=ok; evil=x', fetchImpl: async (url, init) => {
+    const path = new URL(String(url)).pathname; paths.push(path + ':' + init.method);
+    // 新版贴吧：json_userinfo 一律 302 跳 passport，newmoindex 才是有效判定。
+    if (path === '/f/user/json_userinfo') return new Response('', { status: 302, headers: { location: 'https://passport.baidu.com/' } });
+    if (path === '/mo/q/newmoindex') return new Response(JSON.stringify({ no: 0, error: 'success', data: { is_login: true, name: '测试昵称', name_show: '测试昵称' } }));
+    return new Response(JSON.stringify({ is_login: 1 }));
+  }, searchWeb: async () => ({ sources: [] }) });
+  seen.push(await client.account());
+  assert.equal(seen[0].loggedIn, true);
+  assert.equal(seen[0].name, '测试昵称');
+  assert.equal(paths[0], '/mo/q/newmoindex:GET');
+});
+
+test('login check reports anonymous accounts as not logged in, with a reason', async () => {
+  const client = createTieba({ getCookie: () => 'BDUSS=expired', fetchImpl: async (url) => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/mo/q/newmoindex') return new Response(JSON.stringify({ no: 1, error: 'not logined!', data: { is_login: false } }));
+    if (path === '/dc/common/tbs') return new Response(JSON.stringify({ tbs: 'x', is_login: 0 }));
+    return new Response('null');
+  }, searchWeb: async () => ({ sources: [] }) });
+  const r = await client.account();
+  assert.equal(r.loggedIn, false);
+  assert.match(r.message, /已失效|重新登录/);
+  assert.match(r.message, /诊断/);
+});
+
+test('tbs alone confirms a session when newmoindex cannot be read', async () => {
+  const client = createTieba({ getCookie: () => 'BDUSS=ok', fetchImpl: async (url, init) => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/mo/q/newmoindex') return new Response('boom', { status: 500 });
+    if (path === '/dc/common/tbs' && init.method === 'POST') return new Response(JSON.stringify({ is_login: 1 }));
+    return new Response('null');
+  }, searchWeb: async () => ({ sources: [] }) });
+  const r = await client.account();
+  assert.equal(r.loggedIn, true);
+});

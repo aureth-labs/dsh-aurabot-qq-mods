@@ -23,11 +23,11 @@ export const VERIFY_PROBE = `(() => {
   return (hit.innerText || hit.className || '页面弹了验证').toString().slice(0, 80)
 })()`
 
-export function createVerifier({ profileDir, browserPath = () => '', log, browser: injected } = {}) {
+export function createVerifier({ profileDir, browserPath = () => '', log, browser: injected, useEgo = () => false } = {}) {
   let browser = injected || null
   let session = null
   let disposed = false
-  const b = () => browser ||= createBrowser({ profileDir, browserPath, log })
+  const b = () => browser ||= createBrowser({ profileDir, browserPath, log, useEgo })
   const shot = () => b().screenshot().catch(() => '')
   async function verifyNow() {
     const why = await b().evaluate(VERIFY_PROBE)

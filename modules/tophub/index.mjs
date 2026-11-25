@@ -8,7 +8,7 @@ import { createBrowse } from './lib/browse.mjs'
 export default {
   id: 'tophub',
   name: '刷热榜',
-  version: '0.3.0',
+  version: '0.3.1',
   api: 1,
   description: '热榜巡游：每天定时逛全网热榜，看完写记忆、挑有意思的私聊分享给主人；对外提供 hot()/search() 热点控件',
   panel: 'panel.js',

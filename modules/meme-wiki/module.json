@@ -1,7 +1,7 @@
 {
   "id": "meme-wiki",
   "name": "梗百科",
-  "version": "0.2.5",
+  "version": "0.2.7",
   "description": "本地梗库：聊天里命中就把词条塞进上下文；词条从梗站按需导入，不随模块分发。",
   "category": "social",
   "tags": [
@@ -9,7 +9,7 @@
     "词典",
     "聊天"
   ],
-  "author": "Nightc",
+  "author": "Nightc-c",
   "license": "MIT",
   "api": 1,
   "minPluginVersion": "1.2.0",

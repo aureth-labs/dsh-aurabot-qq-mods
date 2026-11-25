@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<!-- Aurabot 桌宠 · 免界面语音对讲隐藏窗（voice-talk.html）—— 本文件是模板/生成物：
+     由「桌宠」模块生成到 <数据目录>/modules-data/pet/app/，随 main.js 一起更新。
+     设计权威：docs/VOICE-TALK-DESIGN.md。本窗永远 show:false，没有任何可见 UI、没有呼叫/挂断按钮：
+       · 只做两件事：录音（getUserMedia + MediaRecorder）、播放（new Audio + setSinkId）。
+       · 触发由主进程全局热键 toggle 调用 window.__voiceToggle()；状态/请求全走 ipcRenderer。
+       · 所有环节都有超时与失败恢复（8s 取麦、60s 录音、30s 网络、播放兜底），绝不卡死。 -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>voice-talk</title>
+</head>
+<body>
+<!-- 无可见内容：一个 1×1 的透明隐藏窗，仅承载录音与播放两条 Web API 链路。 -->
+<script src="voice-talk.js"></script>
+</body>
+</html>

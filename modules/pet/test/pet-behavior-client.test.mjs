@@ -1,4 +1,4 @@
-// pet-behavior-client.test.js —— 桌宠客户端行为层纯逻辑单测（node:test）
+﻿// pet-behavior-client.test.js —— 桌宠客户端行为层纯逻辑单测（node:test）
 // 被测对象：fork/src/modules/pet/pet-client/behavior.js（CommonJS，与 physics.js 同款求值方式加载，
 // 因为 fork/package.json 是 type:module，直接 require 会按 ESM 解析）。
 // 覆盖：未知动作 refused、第三批占位 refused、勾引判定（构造光标样本序列）、摸摸判定（时间序列）、
@@ -828,7 +828,7 @@ test('反应层禁用契约：/config 下发 disabledActions，反应层三处�
 
 test('客户端动作表自带 say：拿不到服务端台词时也能顶气泡（点击/勾引/摸摸不经过服务端）', () => {
   const acts = Object.keys(B.ACTIONS)
-  assert.equal(acts.length, 9)
+  assert.equal(acts.length, 10)
   for (const a of acts) {
     assert.equal(typeof B.ACTIONS[a].say, 'string', `${a} 必须有 say 字段（缺了就是没气泡）`)
     if (a === 'say') {

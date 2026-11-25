@@ -1,0 +1,15 @@
+{
+  "_comment": "按 playlists.md 的 /playlists/detail 字段构造的脱敏 fixture，不是真实回包",
+  "ret": 0,
+  "sub_ret": 0,
+  "dissId": 9012001,
+  "dissName": "AI 夜跑歌单",
+  "desc": "为你生成的夜跑节奏",
+  "picUrl": "https://y.qq.com/music/photo_new/T002R300x300M0000025NhlN2yWrP4.jpg",
+  "totalNum": 30,
+  "hasMore": true,
+  "trackList": [
+    { "songMid": "0039MnYb0qxYhV", "songName": "晴天", "singerName": "周杰伦" },
+    { "songMid": "000MkMni1yWrP4", "songName": "稻香", "singerName": "周杰伦" }
+  ]
+}
