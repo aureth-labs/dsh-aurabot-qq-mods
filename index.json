@@ -2933,6 +2933,34 @@
       "publishedAt": "2026-11-06T06:03:15.318Z"
     },
     {
+      "id": "topic-freshness",
+      "name": "话题时效",
+      "version": "1.0.0",
+      "description": "群聊里只在最近 N 分钟还在聊的话题上接话；超过时效的老话题不再回头捡，免得说重复的话显得累赘。",
+      "category": "social",
+      "tags": [
+        "群聊",
+        "话题",
+        "别翻旧账"
+      ],
+      "author": "旭光Ⅺ",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "plugin-config"
+      ],
+      "replacesBuiltin": false,
+      "tag": "topic-freshness-v1.0.0",
+      "file": "topic-freshness-v1.0.0.zip",
+      "path": "topic-freshness-v1.0.0/topic-freshness-v1.0.0.zip",
+      "size": 7395,
+      "sha256": "c5e189074f82da9ceb17d088a620a5a4f159e43760236219ed0a269eedead6a7",
+      "commit": "521656fd11000a042b3cd09f93bb5674a010c099",
+      "publishedAt": "2026-11-25T14:15:17.218Z"
+    },
+    {
       "id": "travel",
       "name": "真实世界",
       "version": "2.1.2",
@@ -3238,5 +3266,5 @@
       "reason": "作者主动撤回。"
     }
   ],
-  "generatedAt": "2026-11-25T13:53:46.777Z"
+  "generatedAt": "2026-11-25T14:15:17.218Z"
 }
