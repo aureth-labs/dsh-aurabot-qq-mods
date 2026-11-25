@@ -1,11 +1,11 @@
 {
   "id": "tophub",
   "name": "刷热榜",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "热榜巡游：每天定时逛全网热榜（微博/抖音/知乎/头条等），看完写记忆、挑有意思的私聊分享给主人；对外提供 hot()/search() 热点控件。",
   "category": "platform",
   "tags": ["热榜", "资讯", "巡游"],
-  "author": "Nightc",
+  "author": "RookieApe-tao",
   "license": "MIT",
   "api": 1,
   "minPluginVersion": "1.2.0",

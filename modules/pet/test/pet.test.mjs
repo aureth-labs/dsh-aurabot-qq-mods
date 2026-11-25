@@ -15,6 +15,8 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { deflateRawSync } from 'node:zlib'
 import { createHash } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 
 let mod
 const OWNER = '10000001'
@@ -35,12 +37,13 @@ function startModule({ settings = {}, hooks } = {}) {
   const routes = new Map()
   const sentToQQ = []
   let voiceFile = ''
+  const warnings = []
   const api = {
     id: 'pet',
     dir: MODULE_DIR,
     version: 'test',
     __petTestHooks: hooks || {}, // 测试注入 fake spawn/kill：不打真网络、不真启动 Electron
-    log: { info() {}, warn() {}, debug() {}, error() {} },
+    log: { info() {}, warn(...args) { warnings.push(args.join(' ')) }, debug() {}, error() {} },
     dataDir: (...parts) => {
       const d = join(process.env.AURABOT_DATA_DIR, 'modules-data', 'pet')
       mkdirSync(d, { recursive: true })
@@ -120,7 +123,7 @@ function startModule({ settings = {}, hooks } = {}) {
     return { cursor: first.json.cursor, events: r.json.events }
   }
   return {
-    api, exports, routes, call, connect, token, sentToQQ,
+    api, exports, routes, call, connect, token, sentToQQ, warnings,
     setVoiceFile: (f) => { voiceFile = f }, setMood: (v) => { moodValue = v },
     setMemory: (list) => { memItems = list }, setThinkReply: (t) => { thinkReply = t },
     holdThink: (p) => { thinkHold = p }, thinkCalls,
@@ -461,10 +464,109 @@ test('素材包：没配下载地址 → 明确报错不炸；包已就位 → �
   assert.match(r.json.message, /下载地址/, '提示去面板配置地址，而不是抛错')
 
   writePack(process.env.AURABOT_DATA_DIR, 'default', { 'anim-001.webm': WEBM }, { pools: {} })
+  mkdirSync(join(process.env.AURABOT_DATA_DIR, 'modules-data', 'pet', 'house'), { recursive: true })
+  const houseOk = join(process.env.AURABOT_DATA_DIR, 'modules-data', 'pet', 'house')
+  writeFileSync(join(houseOk, 'manifest.json'), '{}')
+  writeFileSync(join(houseOk, 'day.jpg'), 'fake-jpeg') // manifest + 至少一张图 = 完整（manifest-only 现在算缺）
   const skip = await env.exports.ensureDefaultPack(false)
   assert.equal(skip.ok, true)
   assert.equal(skip.skipped, true, '包已就位时非 force 调用跳过')
   assert.ok(!existsSync(env.api.dataDir('packs-staging')), '不留下暂存目录')
+})
+
+// ---------- 小屋素材自动落位（原素材源 404 后，素材收进素材仓 pet-home/，随素材包 zip 搭车落位） ----------
+
+test('素材包自动下载：zip 带 pet-home/ → 小屋素材（manifest.json+图片）一并落位 house/；README 不带', async () => {
+  const fakeZip = tinyZip([
+    ['dsh-aurabot-qq-mods-main/', Buffer.alloc(0)],
+    ['dsh-aurabot-qq-mods-main/pet-pack/', Buffer.alloc(0)],
+    ['dsh-aurabot-qq-mods-main/pet-pack/default-config.json', Buffer.from('{}')],
+    ['dsh-aurabot-qq-mods-main/pet-pack/default-animation/anim-001.webm', WEBM],
+    ['dsh-aurabot-qq-mods-main/pet-home/', Buffer.alloc(0)],
+    ['dsh-aurabot-qq-mods-main/pet-home/manifest.json', Buffer.from('{"world":{"w":1672,"h":941}}')],
+    ['dsh-aurabot-qq-mods-main/pet-home/day.jpg', Buffer.from('fake-jpeg')],
+    ['dsh-aurabot-qq-mods-main/pet-home/desk-a.png', Buffer.from('fake-png')],
+    ['dsh-aurabot-qq-mods-main/pet-home/README.md', Buffer.from('# pet-home')],
+  ])
+  const env = startModule({
+    settings: { petPackUrl: 'https://example.com/mods.zip' },
+    hooks: { fetchZip: async () => ({ ok: true, arrayBuffer: async () => fakeZip.buffer.slice(fakeZip.byteOffset, fakeZip.byteOffset + fakeZip.byteLength) }) },
+  })
+  const r = await env.call('/packs/fetch-default', { method: 'POST', json: {} })
+  assert.equal(r.json.ok, true, r.json.message)
+  assert.equal(r.json.houseCount, 3, 'manifest + 2 张图落位 3 个文件')
+  const house = join(process.env.AURABOT_DATA_DIR, 'modules-data', 'pet', 'house')
+  assert.ok(existsSync(join(house, 'manifest.json')), 'manifest.json 落位')
+  assert.ok(existsSync(join(house, 'day.jpg')), '底图落位')
+  assert.ok(existsSync(join(house, 'desk-a.png')), '姿势帧落位')
+  assert.ok(!existsSync(join(house, 'README.md')), 'README 不落位（只收清单与图片）')
+})
+
+test('素材包：形象包已就位但小屋素材缺失 → 非 force 也要下载（只缺小屋也触发落位）', async () => {
+  const fakeZip = tinyZip([
+    ['mods-main/pet-home/', Buffer.alloc(0)],
+    ['mods-main/pet-home/manifest.json', Buffer.from('{}')],
+    ['mods-main/pet-home/night.jpg', Buffer.from('fake-jpeg')],
+  ])
+  const env = startModule({
+    settings: { petPackUrl: 'https://example.com/mods.zip' },
+    hooks: { fetchZip: async () => ({ ok: true, arrayBuffer: async () => fakeZip.buffer.slice(fakeZip.byteOffset, fakeZip.byteOffset + fakeZip.byteLength) }) },
+  })
+  writePack(process.env.AURABOT_DATA_DIR, 'default', { 'anim-001.webm': WEBM }, { pools: {} }) // 形象包已就位
+  const r = await env.exports.ensureDefaultPack(false)
+  assert.equal(r.ok, true, r.message)
+  assert.equal(r.skipped, undefined, '只缺小屋时不跳过')
+  assert.equal(r.houseCount, 2, '小屋素材落位 2 个文件')
+  assert.ok(existsSync(join(env.api.dataDir('house'), 'night.jpg')))
+})
+
+test('小屋素材：manifest 在但一张图都没有（上次下载中断）→ 算缺，非 force 也要补齐落位', async () => {
+  const fakeZip = tinyZip([
+    ['mods-main/pet-home/', Buffer.alloc(0)],
+    ['mods-main/pet-home/manifest.json', Buffer.from(JSON.stringify({ poses: { desk: { frames: [{ src: 'desk-a.png' }] } } }))],
+    ['mods-main/pet-home/day.jpg', Buffer.from('fake-day')],
+    ['mods-main/pet-home/desk-a.png', Buffer.from('fake-desk')],
+  ])
+  const env = startModule({
+    settings: { petPackUrl: 'https://example.com/mods.zip' },
+    hooks: { fetchZip: async () => ({ ok: true, arrayBuffer: async () => fakeZip.buffer.slice(fakeZip.byteOffset, fakeZip.byteOffset + fakeZip.byteLength) }) },
+  })
+  // 上次中断的现场：manifest 落到了、图片一张都没落
+  const house = env.api.dataDir('house')
+  mkdirSync(house, { recursive: true })
+  writeFileSync(join(house, 'manifest.json'), '{"poses":{"desk":{"frames":[{"src":"desk-a.png"}]}}}')
+  writePack(process.env.AURABOT_DATA_DIR, 'default', { 'anim-001.webm': WEBM }, { pools: {} }) // 形象包已就位
+  const r = await env.exports.ensureDefaultPack(false)
+  assert.equal(r.ok, true, r.message)
+  assert.equal(r.skipped, undefined, '半截包要触发补全，不能跳过')
+  assert.equal(r.houseCount, 2, '已有 manifest 不重拷，补齐 2 张图')
+  assert.ok(existsSync(join(house, 'day.jpg')), '底图补上了')
+  assert.ok(existsSync(join(house, 'desk-a.png')), 'manifest 引用的姿势帧补上了')
+})
+
+test('小屋素材：补齐时不覆盖已有文件（手改的 manifest/图片保持原样，只补缺的）', async () => {
+  const fakeZip = tinyZip([
+    ['mods-main/pet-home/', Buffer.alloc(0)],
+    ['mods-main/pet-home/manifest.json', Buffer.from(JSON.stringify({ poses: { desk: { frames: [{ src: 'desk-a.png' }] } } }))],
+    ['mods-main/pet-home/day.jpg', Buffer.from('zip-version-day')],
+    ['mods-main/pet-home/desk-a.png', Buffer.from('zip-desk')],
+  ])
+  const env = startModule({
+    settings: { petPackUrl: 'https://example.com/mods.zip' },
+    hooks: { fetchZip: async () => ({ ok: true, arrayBuffer: async () => fakeZip.buffer.slice(fakeZip.byteOffset, fakeZip.byteOffset + fakeZip.byteLength) }) },
+  })
+  // 上次中断：manifest（主人改过内容）与底图已落，姿势帧缺
+  const house = env.api.dataDir('house')
+  mkdirSync(house, { recursive: true })
+  writeFileSync(join(house, 'manifest.json'), '{"poses":{"desk":{"frames":[{"src":"desk-a.png"}]}}, "_myCustom": true}')
+  writeFileSync(join(house, 'day.jpg'), 'my-custom-day')
+  writePack(process.env.AURABOT_DATA_DIR, 'default', { 'anim-001.webm': WEBM }, { pools: {} })
+  const r = await env.exports.ensureDefaultPack(false)
+  assert.equal(r.ok, true, r.message)
+  assert.equal(r.houseCount, 1, '只补缺的 1 个文件，已有的两个不动')
+  assert.equal(readFileSync(join(house, 'manifest.json'), 'utf8'), '{"poses":{"desk":{"frames":[{"src":"desk-a.png"}]}}, "_myCustom": true}', '手改过的 manifest 不被覆盖')
+  assert.equal(readFileSync(join(house, 'day.jpg'), 'utf8'), 'my-custom-day', '已有底图不被 zip 版覆盖')
+  assert.ok(existsSync(join(house, 'desk-a.png')), '缺的姿势帧补上了')
 })
 
 test('素材包：status().packInfo 给面板用（地址 / 是否就位 / 动画数 / 包列表）', async () => {
@@ -538,6 +640,26 @@ test('clientStatus：生成后 healthy，且 app/ 里留下签名凭据', async 
   assert.ok(existsSync(join(env.api.dataDir('app'), 'client-stamp.json')), '生成时写了 client-stamp.json')
 })
 
+test('生成客户端：主入口通过 ESM 语法检查，客户端包在 ESM 上层目录里按 CommonJS 加载', async () => {
+  const env = startModule()
+  writeFileSync(join(process.env.AURABOT_DATA_DIR, 'package.json'), '{"type":"module"}')
+  const { json } = await env.call('/client/install', { method: 'POST', json: {} })
+  assert.equal(json.ok, true, json.message)
+  assert.ok(json.files.includes('package.json'))
+  const app = env.api.dataDir('app')
+  const manifest = JSON.parse(readFileSync(join(app, 'package.json'), 'utf8'))
+  assert.equal(manifest.type, 'commonjs')
+  assert.equal(manifest.main, 'main.js')
+
+  const syntax = spawnSync(process.execPath, ['--input-type=module', '--check'], {
+    input: readFileSync(join(app, manifest.main)), encoding: 'utf8',
+  })
+  assert.equal(syntax.status, 0, syntax.stderr)
+  // physics.js 使用 module.exports，按 ESM 执行会因 module 未定义而失败。
+  const load = spawnSync(process.execPath, [join(app, 'physics.js')], { encoding: 'utf8' })
+  assert.equal(load.status, 0, load.stderr)
+})
+
 test('clientStatus：缺 behavior.js（典型旧壳）→ missing 点名、healthy=false', async () => {
   const env = startModule()
   await env.call('/client/install', { method: 'POST', json: {} })
@@ -568,12 +690,99 @@ test('clientStatus：手改 app/main.js → changed 点名，但不谎报「跑�
   assert.equal(st.healthy, true) // 内容不同 ≠ 缺文件：只是提醒「重新生成会覆盖」
 })
 
+// ---------- 升级自动重装（治「市场升级后点小屋还是白屏」：app/ 副本不随模块升级更新） ----------
+
+/** 与模块 clientTemplate/installedSig 同算法：算 app/ 现状的模板签名（模拟「旧版模板生成时的凭据」）。 */
+function appSig(app) {
+  const names = ['main.js', 'preload.js', 'index.html', 'physics.js', 'packmeta.js', 'behavior.js', 'chat.html', 'voice-talk.html', 'voice-talk.js', 'house.html', 'house.js']
+  const files = names.map((f) => {
+    try { return { name: f, hash: createHash('sha1').update(readFileSync(join(app, f))).digest('hex').slice(0, 12) } } catch { return null }
+  }).filter(Boolean)
+  if (!files.length) return ''
+  return createHash('sha1').update(files.map((f) => `${f.name}:${f.hash}`).join('|')).digest('hex').slice(0, 12)
+}
+
+test('autoRegenClient：升级后 app/ 未被手改 → 模块重启时自动重新生成，凭据跟上新模板', async () => {
+  const env = startModule()
+  await env.call('/client/install', { method: 'POST', json: {} })
+  const app = env.api.dataDir('app')
+  // 模拟 1.0.19 生成的客户端：旧入口、没有包清单，签名与这份旧内容一致。
+  writeFileSync(join(app, 'main.js'), '// 旧版 main.js\n')
+  unlinkSync(join(app, 'package.json'))
+  writeFileSync(join(app, 'client-stamp.json'), JSON.stringify({ sig: appSig(app), at: 1 }))
+  const st = env.exports.clientStatus()
+  assert.equal(st.outdated, true, '升级后模板与凭据签名不一致 = outdated')
+  assert.equal(st.healthy, false)
+  // 模拟插件重启：同一数据目录重新 setup（启动段会调 autoRegenClient）
+  startModule()
+  assert.equal(readFileSync(join(app, 'main.js'), 'utf8').includes('旧版 main.js'), false, '旧 main.js 已被新模板覆盖')
+  assert.equal(JSON.parse(readFileSync(join(app, 'package.json'), 'utf8')).type, 'commonjs')
+  const st2 = env.exports.clientStatus()
+  assert.equal(st2.healthy, true, st2.message)
+  assert.equal(st2.generatedSig, st2.sig, '生成凭据已跟上新模板')
+})
+
+test('autoRegenClient：手改过的过期 app/ → 绝不自动覆盖，维持面板提示', async () => {
+  const env = startModule()
+  await env.call('/client/install', { method: 'POST', json: {} })
+  const app = env.api.dataDir('app')
+  const p = join(app, 'main.js')
+  writeFileSync(p, readFileSync(p, 'utf8') + '\n// 用户手改：别动我的\n')
+  writeFileSync(join(app, 'client-stamp.json'), JSON.stringify({ sig: 'oldoldold123', at: 1 }))
+  startModule() // 模拟重启：签名对不上凭据 = 手改过，不许覆盖
+  assert.ok(readFileSync(p, 'utf8').includes('用户手改'), '手改内容原样保留')
+  const st = env.exports.clientStatus()
+  assert.deepEqual(st.changed, ['main.js']) // 面板点名手改文件，提示重新生成会覆盖
+  assert.match(st.message, /更新|重新生成/)
+})
+
 test('/status：带 client 对账字段（面板「桌宠」卡据此提示）', async () => {
   const env = startModule()
   await env.call('/client/install', { method: 'POST', json: {} })
   const r = await env.call('/status')
   assert.equal(r.json.client.installed, true)
   assert.equal(r.json.client.healthy, true)
+})
+
+// ---------- 通话配置回显（1.1.2）：面板「通话」卡控件取当前值的数据源 ----------
+// host.js /panel/pet/status 走 use('pet').status()，这条 HTTP 路由同口径；两处都带 call 字段。
+
+test('/status：带 call 字段，各键取自 settings（默认值）', async () => {
+  // 测试 helper 不并入模块 defaults，按 defaults 原值显式喂一份（对齐 makeApi 的合成结果）
+  const env = startModule({ settings: {
+    callEngine: 'native', sovitsUrl: 'http://127.0.0.1:9880',
+    callRvc: false, callRvcVoice: '', callTalkMode: 'free', callPttKey: 'Space',
+    callVadSilence: 0.7, callMaxChars: 120, callAsrUrl: 'http://127.0.0.1:8000',
+    callMicDeviceId: '', callSpeakerDeviceId: '',
+  } })
+  const json = (await env.call('/status')).json
+  assert.ok(json.call, '/status 返回里有 call 字段')
+  assert.deepEqual(json.call, {
+    engine: 'native', rvc: false, rvcVoice: '',
+    talkMode: 'free', pttKey: 'Space', vadSilence: 0.7,
+    maxChars: 120, asrUrl: 'http://127.0.0.1:8000', sovitsUrl: 'http://127.0.0.1:9880',
+    micDeviceId: '', speakerDeviceId: '',
+  })
+  // status() 导出（面板真正读的那份）与 HTTP 路由同口径
+  assert.deepEqual(env.exports.status().call, json.call, 'status() 导出的 call 与 /status 一致')
+})
+
+test('/status：call 字段回显自定义 settings（非默认值不被规范化吞掉）', async () => {
+  const custom = {
+    callEngine: 'sovits', sovitsUrl: 'http://10.0.0.5:9880',
+    callRvc: true, callRvcVoice: 'fish', callTalkMode: 'ptt', callPttKey: 'F2',
+    callVadSilence: 1.25, callMaxChars: 80, callAsrUrl: 'http://10.0.0.5:8000',
+    callMicDeviceId: 'mic-1', callSpeakerDeviceId: 'spk-2',
+  }
+  const env = startModule({ settings: custom })
+  const json = (await env.call('/status')).json
+  assert.deepEqual(json.call, {
+    engine: custom.callEngine, rvc: custom.callRvc, rvcVoice: custom.callRvcVoice,
+    talkMode: custom.callTalkMode, pttKey: custom.callPttKey, vadSilence: custom.callVadSilence,
+    maxChars: custom.callMaxChars, asrUrl: custom.callAsrUrl, sovitsUrl: custom.sovitsUrl,
+    micDeviceId: custom.callMicDeviceId, speakerDeviceId: custom.callSpeakerDeviceId,
+  }, 'call 各键直接取自 settings，所见即面板原值')
+  assert.deepEqual(env.exports.status().call, json.call, 'status() 导出的 call 同样回显自定义值')
 })
 
 // ---------- Electron 三键（面板「安装 Electron / 启动桌宠 / 停止桌宠」） ----------
@@ -597,7 +806,7 @@ function fakeSpawn({ exit = 0, makeExe } = {}) {
       pid: 42424,
       stdout: { on() {} }, stderr: { on() {} },
       on(event, fn) { if (event === 'close') setTimeout(() => fn(exit), 5) },
-      kill() {}, unref() {},
+      once() {}, kill() {}, unref() {},
     }
   }
   return { spawn, calls }
@@ -642,7 +851,7 @@ test('Electron 安装：走 node + npm-cli.js（不经 shell）、注入 ELECTRO
   const c = calls[0]
   assert.equal(c.cmd, process.execPath, '直接用当前 node 跑 npm-cli.js（Windows 上 spawn npm.cmd 无 shell 会被拒）')
   assert.ok(c.args[0].endsWith('npm-cli.js'), `第一个参数是 npm-cli.js：${c.args[0]}`)
-  assert.deepEqual(c.args.slice(1), ['install', '-D', 'electron'])
+  assert.deepEqual(c.args.slice(1), ['install', '--no-save', 'electron@45.1.0'])
   assert.equal(c.opts.cwd, appDir, '在 app 目录里装')
   assert.equal(c.env.ELECTRON_MIRROR, 'https://npmmirror.com/mirrors/electron/', '必须注入 npmmirror 镜像（直连 github release 会 fetch failed）')
   assert.ok(!('shell' in c.opts) || !c.opts.shell, '不经 shell 拼接')
@@ -1024,7 +1233,8 @@ test('安全：zip 与 SHASUMS256 校验不符 → 拒绝安装且不落盘（�
 test('启动桌宠：分离进程 + 清 ELECTRON_RUN_AS_NODE；心跳活着提示已在跑；stop 杀记录的 pid', async () => {
   const killed = []
   const { spawn, calls } = fakeSpawn()
-  const env = startModule({ hooks: { spawn, kill: (pid) => { killed.push(pid); return true } } })
+  const launchHooks = { spawn, probePid: () => true, startupGraceMs: 0 }
+  const env = startModule({ hooks: { ...launchHooks, kill: (pid) => { killed.push(pid); return true } } })
   const appDir = env.api.dataDir('app')
   const exe = join(appDir, 'node_modules', 'electron', ELECTRON_REL)
   await env.exports.download()
@@ -1068,7 +1278,7 @@ test('启动桌宠：分离进程 + 清 ELECTRON_RUN_AS_NODE；心跳活着提�
 
     // 进程本来就不在（ESRCH）：按已停止处理并清记录，不让面板卡「停不掉」
     mkdirSync(dirname(exe), { recursive: true })
-    const env2 = startModule({ hooks: { spawn, kill: () => { const e = new Error('no such process'); e.code = 'ESRCH'; throw e } } })
+    const env2 = startModule({ hooks: { ...launchHooks, kill: () => { const e = new Error('no such process'); e.code = 'ESRCH'; throw e } } })
     await env2.exports.download()
     writeFileSync(exe, 'fake electron')
     await env2.exports.launch()
@@ -1096,7 +1306,76 @@ test('启动失败路径：Electron 没装 / main.js 不见 → 明确报错不 
   const r2 = await env.exports.launch()
   assert.equal(r2.ok, false, 'main.js 不见了')
   assert.match(r2.message, /main\.js/)
-  assert.equal(calls.length, 0, '两条失败路径都没 spawn')
+  await env.exports.download()
+  unlinkSync(join(appDir, 'package.json'))
+  const r3 = await env.exports.launch()
+  assert.equal(r3.ok, false)
+  assert.match(r3.message, /package\.json.*重新生成/)
+  assert.equal(calls.length, 0, '失败路径都没 spawn')
+})
+
+test('启动检查：并发启动共用检查，Electron 提前退出时状态保持离线并记录退出码', async () => {
+  const children = []
+  const env = startModule({ hooks: {
+    spawn: () => {
+      const child = Object.assign(new EventEmitter(), { pid: 42424 + children.length, unref() {} })
+      children.push(child)
+      return child
+    },
+    probePid: () => true,
+    startupGraceMs: 0,
+  } })
+  await env.exports.download()
+  const exe = join(env.api.dataDir('app'), 'node_modules', 'electron', ELECTRON_REL)
+  mkdirSync(dirname(exe), { recursive: true })
+  writeFileSync(exe, 'fake electron')
+
+  const launch = env.call('/launch', { method: 'POST', json: {} })
+  const duplicate = env.exports.launch()
+  assert.equal((await env.call('/status')).json.pid, null)
+  assert.equal(children.length, 1)
+  children[0].emit('exit', 1, null)
+
+  const result = (await launch).json
+  assert.equal(result.ok, false)
+  assert.match(result.message, /启动检查期间退出.*退出码 1/)
+  assert.deepEqual(await duplicate, result)
+  assert.ok(env.warnings.includes(result.message))
+  assert.equal(existsSync(env.api.dataDir('process.json')), false)
+  const { json: status } = await env.call('/status')
+  assert.equal(status.pid, null)
+  assert.equal(status.client.running, false)
+  assert.deepEqual(status.online, { online: false, lastSeenAt: 0, clients: 0 })
+
+  const retry = await env.exports.launch()
+  assert.equal(retry.ok, true, retry.message)
+  assert.equal(env.exports.status().pid, retry.pid)
+  assert.equal((await env.exports.launch()).alreadyRunning, true, '进程存活但暂无心跳时也不重复启动')
+  assert.equal(children.length, 2)
+  children[1].emit('exit', null, 'SIGTERM')
+  assert.equal(env.exports.status().pid, null)
+  assert.equal(env.exports.status().client.running, false)
+  assert.equal(existsSync(env.api.dataDir('process.json')), false)
+  assert.match(env.warnings.at(-1), /进程已退出.*SIGTERM/)
+})
+
+test('启动检查：进程失联时启动失败，状态丢弃上次遗留的无效 PID', async () => {
+  const { spawn } = fakeSpawn()
+  const env = startModule({ hooks: { spawn, startupGraceMs: 0, probePid: () => false } })
+  await env.exports.download()
+  const exe = join(env.api.dataDir('app'), 'node_modules', 'electron', ELECTRON_REL)
+  mkdirSync(dirname(exe), { recursive: true })
+  writeFileSync(exe, 'fake electron')
+  const record = env.api.dataDir('process.json')
+  writeFileSync(record, JSON.stringify({ pid: 42424, startedAt: 1 }))
+  assert.equal(env.exports.status().pid, null)
+  assert.equal(existsSync(record), false)
+  const result = await env.exports.launch()
+  assert.equal(result.ok, false)
+  assert.match(result.message, /未能通过启动后的存活检查/)
+  assert.ok(env.warnings.includes(result.message))
+  assert.equal(env.exports.status().client.running, false)
+  assert.equal(existsSync(record), false)
 })
 
 // ---------- P3：拖拽物理移植（dsh-pet MIT 物理模块的去 TS 单文件版） ----------
@@ -1919,6 +2198,7 @@ test('安全：客户端包只含客户端源码，不含 node_modules（消除 
     ptr += 46 + nameLen + zip.readUInt16LE(ptr + 30) + zip.readUInt16LE(ptr + 32)
   }
   assert.ok(names.includes('main.js'), '必须含 main.js')
+  assert.ok(names.includes('package.json'), '下载包必须含 CommonJS 包清单')
   assert.ok(names.includes('host.json'), '必须含内嵌 host.json')
   assert.equal(names.some((n) => n.includes('node_modules')), false, '不得把 node_modules（electron.exe 等）打进包')
   assert.ok(zip.length < 1024 * 1024, `包体积应远小于 1MB（实际 ${zip.length} 字节）`)
@@ -2003,4 +2283,118 @@ test('客户端包：/client-package 返回合法 zip（含 main.js 与内嵌远
   const r2 = await env2.call('/client-package')
   assert.equal(r2.status, 200, '同机模式打包照常工作（面板不展示该按钮）')
 })
+
+// ---------- 1.0.14：面板六键（physics / animRate / 互动开关）+ 余额路由 ----------
+
+test('1.0.14：defaults 与 /config 下发甩抛物理与互动开关；坏值回落 defaults 口径', async () => {
+  const env = startModule()
+  // 默认值口径（与 defaults 一致，别让默认配置就「飞起来」或「砸地上」）。
+  // 注：fake api 的 settings() 不合 defaults（真实 makeApi 才合），所以 defaults 单独从 mod.defaults 验
+  assert.equal(mod.defaults.petGravity, 1400)
+  assert.equal(mod.defaults.petRestitution, 0.78)
+  assert.equal(mod.defaults.petAnimRate, 1)
+  assert.equal(mod.defaults.petShowBalance, true)
+  assert.equal(mod.defaults.petClickChase, false)
+  assert.equal(mod.defaults.petTeaseChase, false)
+  // 版本三处同步：module.json 与 index.mjs 一起升（以 module.json 为准比对，免得每次升版本都改测试）
+  const modVersion = JSON.parse(readFileSync(join(MODULE_DIR, 'module.json'), 'utf8')).version
+  assert.equal(mod.version, modVersion)
+  assert.match(modVersion, /^\d+\.\d+\.\d+$/)
+
+  const cfg = await env.call('/config')
+  assert.equal(cfg.status, 200)
+  assert.deepEqual(cfg.json.physics, { gravity: 1400, restitution: 0.78 }, '/config.physics 默认口径')
+  assert.equal(cfg.json.animRate, 1, '/config.animRate 默认口径')
+  assert.equal(cfg.json.balanceEnabled, true, '/config.balanceEnabled 默认开')
+  assert.equal(cfg.json.clickChase, false, '/config.clickChase 默认关')
+  assert.equal(cfg.json.teaseChase, false, '/config.teaseChase 默认关')
+
+  // 正常值原样透传
+  env.api.saveSettings({ petGravity: 800, petRestitution: 0.5, petAnimRate: 1.5 })
+  const cfg2 = await env.call('/config')
+  assert.deepEqual(cfg2.json.physics, { gravity: 800, restitution: 0.5 })
+  assert.equal(cfg2.json.animRate, 1.5)
+
+  // 坏值回落：超界夹回 min/max；非数字回落 defaults（别让坏配置把桌宠弄失灵）
+  env.api.saveSettings({ petGravity: 99, petRestitution: 5, petAnimRate: 'abc' })
+  const cfg3 = await env.call('/config')
+  assert.deepEqual(cfg3.json.physics, { gravity: 200, restitution: 0.95 }, '超界夹回 200~4000 / 0.3~0.95')
+  assert.equal(cfg3.json.animRate, 1, '坏倍率回落 1')
+  env.api.saveSettings({ petGravity: 'x', petRestitution: null })
+  const cfg4 = await env.call('/config')
+  assert.deepEqual(cfg4.json.physics, { gravity: 1400, restitution: 0.78 }, '非数字回落默认')
+})
+
+test('1.0.14：status() 下发同款字段（面板守卫 pet.physics 等看的就是这份）', async () => {
+  const env = startModule()
+  const st = env.exports.status()
+  assert.deepEqual(st.physics, { gravity: 1400, restitution: 0.78 })
+  assert.equal(st.animRate, 1)
+  assert.equal(st.balanceEnabled, true)
+  assert.equal(st.clickChase, false)
+  assert.equal(st.teaseChase, false)
+  env.api.saveSettings({ petGravity: 3000, petAnimRate: 2, petShowBalance: false, petClickChase: true, petTeaseChase: true })
+  const st2 = env.exports.status()
+  assert.deepEqual(st2.physics, { gravity: 3000, restitution: 0.78 })
+  assert.equal(st2.animRate, 2)
+  assert.equal(st2.balanceEnabled, false)
+  assert.equal(st2.clickChase, true)
+  assert.equal(st2.teaseChase, true)
+})
+
+test('1.0.14：开关布尔口径——balanceEnabled !== false、click/teaseChase === true', async () => {
+  const env = startModule()
+  // balance：只有明确 false 才关；缺失/任意真值都当开
+  env.api.saveSettings({ petShowBalance: false })
+  assert.equal((await env.call('/config')).json.balanceEnabled, false, '明确 false 才关')
+  env.api.saveSettings({ petShowBalance: true })
+  assert.equal((await env.call('/config')).json.balanceEnabled, true)
+  // click/tease：只有明确 true 才开；缺失/任意非 true 都当关（高危偏好默认关）
+  env.api.saveSettings({ petClickChase: true, petTeaseChase: true })
+  const on = await env.call('/config')
+  assert.equal(on.json.clickChase, true)
+  assert.equal(on.json.teaseChase, true)
+  env.api.saveSettings({ petClickChase: 1, petTeaseChase: 'yes' })
+  const truthy = await env.call('/config')
+  assert.equal(truthy.json.clickChase, false, '非严格 true 不算开（=== true 口径）')
+  assert.equal(truthy.json.teaseChase, false)
+})
+
+test('1.0.14：/balance 默认诚实降级（ok:false）；注入 petHooks.fetchBalance 时透传结果', async () => {
+  // 默认：插件拿不到 DeepSeek key，回 ok:false + 友好文案（绝不造假数据）
+  const env = startModule()
+  const r = await env.call('/balance')
+  assert.equal(r.status, 502)
+  assert.equal(r.json.ok, false)
+  assert.ok(r.json.message, '带友好文案给客户端气泡')
+  // 注入：未来宿主开放 key 通道时，petHooks.fetchBalance 注入实现，路由透传 { ok, balance, currency }
+  const env2 = startModule({ hooks: { fetchBalance: async () => ({ ok: true, balance: '10.00', currency: 'CNY' }) } })
+  const r2 = await env2.call('/balance')
+  assert.equal(r2.status, 200)
+  assert.deepEqual(r2.json, { ok: true, balance: '10.00', currency: 'CNY' })
+  // 注入抛错也不炸：兜底回 ok:false（key 绝不出现在响应里）
+  const env3 = startModule({ hooks: { fetchBalance: async () => { throw new Error('sk-xxx 泄漏尝试') } } })
+  const r3 = await env3.call('/balance')
+  assert.equal(r3.status, 502)
+  assert.equal(r3.json.ok, false)
+  assert.ok(!r3.raw.includes('sk-xxx'), '注入抛出的内容绝不透传（防 key 进响应）')
+  // 鉴权：坏令牌 401，与其它路由同口径
+  const bad = await env.call('/balance', { token: 'deadbeef'.repeat(6) })
+  assert.equal(bad.status, 401)
+})
+
+// ---------- 渲染页静态自检：index.html 不许有重复声明（1.0.15 真实翻车回归） ----------
+
+test('index.html：animRate / __setAnimRate 各只声明一次（重复声明=SyntaxError 整页挂=桌宠全透明）', () => {
+  // 1.0.15 真实事故：`let animRate` 在文件开头与 L285 各写了一遍，渲染页一启动就
+  // 抛 "Identifier 'animRate' has already been declared"，整段 <script> 不执行，
+  // 窗口/进程/心跳全活着但画面全透明——用户看到的就是「更新后桌宠不显示」。
+  // 这里做静态断言把这类「同一标识符声明两遍」挡在打包前。
+  const html = readFileSync(join(MODULE_DIR, 'pet-client', 'index.html'), 'utf8')
+  const letAnimRate = [...html.matchAll(/^\s*let animRate\b/gm)].length
+  assert.equal(letAnimRate, 1, `let animRate 只能声明一次，现在 ${letAnimRate} 次`)
+  const setAnimRate = [...html.matchAll(/window\.__setAnimRate\s*=/g)].length
+  assert.equal(setAnimRate, 1, `window.__setAnimRate 只能定义一次，现在 ${setAnimRate} 次`)
+})
+
 

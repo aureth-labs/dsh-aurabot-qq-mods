@@ -1,0 +1,699 @@
+// 小红书专用浏览器（移植自 mods-fork/modules/douyin/lib/browser.mjs，MIT，Aurabot）。
+// 独立用户资料目录的 Edge / Chrome，经 CDP（Node 自带 WebSocket）控制。
+// 只管「开 / 连 / 点 / 打字 / 传文件 / 截图 / 等接口返回」这些通用动作，
+// 小红书页面上的具体操作（看笔记、点赞、评论、发帖、私信）都在 site.mjs。
+// 不用无头模式：小红书对自动化浏览器同样有风控，Linux 没桌面就配 Xvfb。
+
+import { createServer } from 'node:net'
+import { execFile, spawn } from 'node:child_process'
+import { existsSync, lstatSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
+import { createEgoBackend, acquireEgoTarget } from './ego.mjs'
+
+const CANDIDATES = [
+  process.env.EDGE_PATH,
+  process.env.CHROME_PATH,
+  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+  '/usr/bin/microsoft-edge',
+  '/usr/bin/microsoft-edge-stable',
+  '/usr/bin/google-chrome',
+  '/usr/bin/google-chrome-stable',
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser',
+  '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+].filter(Boolean)
+
+// 启动等待预算：冷启动 + 杀毒逐个扫 msedge 的子进程时，15 秒经常不够，
+// 短了会把「启动慢」误报成「浏览器没起来，请检查路径」。（同 douyin 2.3.9 的修法）
+const LAUNCH_POLL_MS = 250
+const LAUNCH_POLLS = 120
+const LAUNCH_TIMEOUT_SEC = (LAUNCH_POLL_MS * LAUNCH_POLLS) / 1000
+
+/** 找浏览器：面板填了且真实存在就用填的；填的路径不存在（磁盘清理/搬移后很常见）就回退去常见安装位置探测，Edge 优先，再找 Chrome / Chromium。 */
+export function findBrowser(explicit = '', exists = existsSync) {
+  if (explicit && exists(explicit)) return explicit
+  return CANDIDATES.find((p) => exists(p)) || ''
+}
+
+/** 本机空闲端口。 */
+export function freePort() {
+  return new Promise((resolve, reject) => {
+    const s = createServer()
+    s.unref()
+    s.on('error', reject)
+    s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)) })
+  })
+}
+
+/** 资料目录里记下的调试端口（我们启动时自己写的；DSH 重启后靠它接回已经开着的窗口）。 */
+export function readPortFile(profileDir, read = readFileSync) {
+  try {
+    const n = Number(String(read(join(profileDir, 'DevToolsActivePort'), 'utf8')).split(/\r?\n/)[0].trim())
+    return Number.isInteger(n) && n > 0 && n < 65536 ? n : 0
+  } catch (error) {
+    return 0
+  }
+}
+
+/** 从标签页列表里挑要用的那个：优先小红书页（creator.xiaohongshu.com 发帖域也算），没有就第一个普通页。其余小红书页一并返回，好关掉（多点几次面板不会越攒越多）。 */
+export function pickPage(targets) {
+  const pages = (targets || []).filter((t) => t.type === 'page' && t.webSocketDebuggerUrl)
+  const xhs = pages.filter((t) => /^https:\/\/[^/]*xiaohongshu\.com/.test(t.url || ''))
+  const page = xhs[0] || pages[0] || null
+  return { page, extra: xhs.slice(1) }
+}
+
+async function getJson(url, ms = 5000) {
+  const r = await fetch(url, { signal: AbortSignal.timeout(ms) })
+  if (!r.ok) throw new Error(`${url} → ${r.status}`)
+  return r.json()
+}
+
+/** 一条 CDP 连接：send 发命令，on 收事件。 */
+export function connectCdp(wsUrl, { WS = globalThis.WebSocket } = {}) {
+  if (!WS) throw new Error('当前 Node 没有 WebSocket（要 Node 22 以上）')
+  const sock = new WS(wsUrl)
+  let nextId = 1
+  let closed = false
+  const pending = new Map()
+  const listeners = new Map()
+  sock.addEventListener('message', (ev) => {
+    let msg
+    try { msg = JSON.parse(typeof ev.data === 'string' ? ev.data : Buffer.from(ev.data).toString()) } catch (error) { return }
+    if (msg.id != null && pending.has(msg.id)) {
+      const p = pending.get(msg.id)
+      pending.delete(msg.id)
+      if (msg.error) p.reject(new Error(msg.error.message || 'CDP 出错'))
+      else p.resolve(msg.result || {})
+    } else if (msg.method) {
+      for (const fn of listeners.get(msg.method) || []) try { fn(msg.params || {}) } catch (error) {}
+    }
+  })
+  let finishReady = () => {}
+  sock.addEventListener('close', () => {
+    closed = true
+    finishReady(new Error('浏览器连接断了'))
+    for (const p of pending.values()) p.reject(new Error('浏览器连接断了'))
+    pending.clear()
+  })
+  const ready = new Promise((resolve, reject) => {
+    let done = false
+    const t = setTimeout(() => finishReady(new Error('连不上浏览器调试端口')), 10000)
+    finishReady = (error) => {
+      if (done) return
+      done = true
+      clearTimeout(t)
+      if (error) reject(error)
+      else resolve()
+    }
+    sock.addEventListener('open', () => finishReady())
+    sock.addEventListener('error', () => finishReady(new Error('连不上浏览器调试端口')))
+  })
+  return {
+    ready,
+    get closed() { return closed },
+    send(method, params = {}, ms = 30000) {
+      if (closed) return Promise.reject(new Error('浏览器连接断了'))
+      const id = nextId++
+      return new Promise((resolve, reject) => {
+        const t = setTimeout(() => { pending.delete(id); reject(new Error(`浏览器没响应（${method}）`)) }, ms)
+        pending.set(id, { resolve: (v) => { clearTimeout(t); resolve(v) }, reject: (e) => { clearTimeout(t); reject(e) } })
+        try { sock.send(JSON.stringify({ id, method, params })) } catch (error) { pending.delete(id); clearTimeout(t); reject(error) }
+      })
+    },
+    on(method, fn) {
+      if (!listeners.has(method)) listeners.set(method, new Set())
+      listeners.get(method).add(fn)
+      return () => listeners.get(method)?.delete(fn)
+    },
+    close() { try { sock.close() } catch (error) {} },
+  }
+}
+
+/** Windows 按进程树关闭；只传入本次 spawn 返回的进程号。 */
+function windowsKillTree(pid) {
+  return new Promise((resolve) => {
+    execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: 5000 }, (error) => resolve(!error))
+  })
+}
+
+/**
+ * 专用浏览器。open() 才会真的启动 / 连接；只读状态的地方不要调它（打开面板不该弹窗口）。
+ * 只接回本实例启动的进程：旧端口文件和 SingletonLock 都不能证明其他进程是我们的。
+ */
+export function createBrowser({ profileDir, browserPath = () => '', log, now = Date.now, spawnProcess = spawn, getPort = freePort, getBrowserJson = getJson, connect = connectCdp, wait = sleep, platform = process.platform, killGroup = (pid, signal) => process.kill(-pid, signal), killTree = windowsKillTree, stopWaitMs = 3000, stderrWaitMs = 250, useEgo = () => false } = {}) {
+  let cdp = null
+  let attaching = null
+  let opening = null
+  let openingSource = ''
+  let closing = null
+  let owned = null
+  let generation = 0
+  let failures = 0
+  let retryAt = 0
+  let lastError = ''
+
+  const connected = () => (egoTarget ? Boolean(cdp && !cdp.closed) : Boolean(owned && !owned.exited && !owned.needsStop && cdp && !cdp.closed))
+
+    // —— DSH 侧边浏览器（ego）模式：连 DSH 共享实例、认领自己的标签页；
+    // 绝不 spawn、绝不杀进程（共享实例归 DSH 管）。
+    let egoTarget = null, egoPort = 0
+    let egoBackend = null
+    const useEgoNow = () => { try { return useEgo() === true } catch (error) { return false } }
+    async function egoConnect(check, extra) {
+      if (egoTarget && cdp && !cdp.closed) return
+      if (egoTarget) { // 上一条连接断了：把自己那个标签页关掉再认领新的，别在共享实例里堆僵尸页
+        const stale = egoTarget, stalePort = egoPort
+        egoTarget = null; egoPort = 0
+        fetch(`http://127.0.0.1:${stalePort}/json/close/${stale.id}`).catch(() => {})
+      }
+      if (!egoBackend) egoBackend = createEgoBackend({ getJson, log })
+      const { port } = await egoBackend.ensure(check)
+      const target = await acquireEgoTarget(port, getBrowserJson, connect)
+      check()
+      const c = connect(target.webSocketDebuggerUrl)
+      try {
+        await c.ready
+        check()
+        await c.send('Page.enable')
+        await c.send('Runtime.enable')
+        if (extra) await extra(c)
+        cdp = c
+        egoTarget = target
+        egoPort = port
+      } catch (error) {
+        c.close()
+        fetch(`http://127.0.0.1:${port}/json/close/${target.id}`).catch(() => {})
+        throw error
+      }
+    }
+    async function egoDisconnect() {
+      const t = egoTarget, port = egoPort
+      egoTarget = null; egoPort = 0
+      cdp?.close(); cdp = null
+      if (t && port) fetch(`http://127.0.0.1:${port}/json/close/${t.id}`).catch(() => {})
+    }
+
+  const cancelled = () => Object.assign(new Error('小红书已关闭，请先打开小红书开关'), { code: 'cancelled' })
+  const lockError = () => new Error('小红书浏览器资料目录被占用（SingletonLock / profile appears to be in use），请先关闭占用该目录的浏览器')
+
+  // Linux 的 SingletonLock 往往是指向不存在路径的符号链接，existsSync 会漏掉。
+  function hasLock() {
+    try { lstatSync(join(profileDir, 'SingletonLock')); return true } catch (error) {
+      if (error.code === 'ENOENT') return false
+      throw error
+    }
+  }
+
+  function observe(child, port) {
+    let done
+    let outputDone
+    const p = { child, port, exited: false, error: null, stderr: '', done: new Promise((resolve) => { done = resolve }), outputClosed: false, outputDone: new Promise((resolve) => { outputDone = resolve }), stopping: null, needsStop: false, terminate: null }
+    child.on('error', (error) => {
+      p.error = error
+      if (!child.pid) { p.exited = true; done() }
+    })
+    child.once('exit', () => {
+      p.exited = true
+      done()
+      if (owned === p) { attaching?.close(); cdp?.close(); cdp = null }
+    })
+    child.once('close', () => { p.outputClosed = true; outputDone() })
+    child.stderr?.on('data', (data) => { p.stderr = (p.stderr + String(data)).slice(-4000) })
+    child.stderr?.on('error', () => {})
+    child.stderr?.unref?.()
+    return p
+  }
+
+  function waitExit(p, ms) {
+    if (p.exited) return Promise.resolve()
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, ms)
+      p.done.then(() => { clearTimeout(timer); resolve() })
+    })
+  }
+
+  // exit 可能先于 stderr 数据到达，稍等输出关闭才能认出资料目录锁错误。
+  function waitOutput(p) {
+    if (!p?.exited || p.outputClosed || !p.child.stderr) return Promise.resolve()
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, stderrWaitMs)
+      p.outputDone.then(() => { clearTimeout(timer); resolve() })
+    })
+  }
+
+  /** 结束自己启动的浏览器及其子进程；没确认退出前不允许启动下一个。 */
+  async function stopOwned(p) {
+    if (!p) return
+    if (p.stopping) return p.stopping
+    p.needsStop = true
+    p.stopping = Promise.resolve().then(async () => {
+      // 对已确认连上的自己进程先走浏览器的正常退出，避免留下旧锁。
+      if (!p.exited && p.terminate) {
+        try { await p.terminate.send('Browser.close', {}, 3000) } catch (error) {}
+        await waitExit(p, stopWaitMs)
+        p.terminate.close()
+        p.terminate = null
+      }
+      if (!p.exited && p.child.pid) {
+        if (platform === 'win32') {
+          let killed = false
+          try { killed = await killTree(p.child.pid) } catch (error) {}
+          if (!killed && !p.exited) try { p.child.kill('SIGKILL') } catch (error) {}
+        } else {
+          // 正常退出不可用时结束整个自有进程组，避免主进程退出后子进程残留。
+          try { killGroup(p.child.pid, 'SIGKILL') } catch (error) { try { p.child.kill('SIGKILL') } catch (e) {} }
+        }
+        await waitExit(p, stopWaitMs)
+        if (!p.exited) {
+          try { p.child.kill('SIGKILL') } catch (error) {}
+          await waitExit(p, stopWaitMs)
+        }
+      }
+      if (p.terminate) { p.terminate.close(); p.terminate = null }
+      if (!p.exited && p.child.pid) throw new Error('无法确认自己启动的浏览器已退出，请检查该进程')
+      // 自己的窗口确实关了，端口记录也作废，下次别去接它
+      try { rmSync(join(profileDir, 'DevToolsActivePort'), { force: true }) } catch (error) {}
+      if (owned === p) owned = null
+    })
+    try { await p.stopping } finally { p.stopping = null }
+  }
+
+  async function attach(port, check) {
+    const { page, extra } = pickPage(await getBrowserJson(`http://127.0.0.1:${port}/json/list`))
+    check()
+    for (const t of extra) await fetch(`http://127.0.0.1:${port}/json/close/${t.id}`).catch(() => {})
+    let target = page
+    if (!target) target = await getBrowserJson(`http://127.0.0.1:${port}/json/new?about:blank`).catch(() => null)
+    check()
+    if (!target?.webSocketDebuggerUrl) throw new Error('浏览器里没有能控制的标签页')
+    const c = connect(target.webSocketDebuggerUrl)
+    attaching = c
+    try {
+      await c.ready
+      check()
+      await c.send('Page.enable')
+      await c.send('Runtime.enable')
+      await c.send('Network.enable', { maxResourceBufferSize: 20e6, maxTotalBufferSize: 100e6 })
+      await c.send('Page.setMuted', { muted: true }).catch(() => {}) // 老版本没有这个命令，静音再靠 --mute-audio
+      // 反自动化特征（和小红书 404「当前笔记暂时无法浏览」直接相关）：
+      // 每个新文档注入前先把 webdriver / 插件数 / 语言这些手指印抹成正常浏览器，
+      // 光靠 --disable-blink-features 还不够（页面仍能读到残留特征）。
+      await c.send('Page.addScriptToEvaluateOnNewDocument', {
+        source: `(() => {
+          try { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }) } catch (e) {}
+          try {
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] })
+            Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] })
+          } catch (e) {}
+          try {
+            const orig = window.chrome
+            if (!orig) window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} }
+          } catch (e) {}
+        })()`,
+      }).catch(() => {})
+      check()
+      cdp = c
+    } catch (error) {
+      c.close()
+      throw error
+    } finally {
+      if (attaching === c) attaching = null
+    }
+  }
+
+  function launchError(error, p, why = '') {
+    const detail = [error?.message, p?.error?.message, p?.stderr?.trim()].filter(Boolean).join('；')
+    if (/SingletonLock|profile appears to be in use/i.test(detail)) return lockError()
+    // 有具体报错就原样报，别再合并成一句怪路径的话——历史上把「进程静默退出」「启动太慢」
+    // 全报成「浏览器没起来，请检查浏览器路径和专用资料目录」，路径明明是对的，用户查路径查不出问题。
+    if (detail) return new Error(detail)
+    if (p?.exited) return new Error('浏览器进程启动后自己退出了，没有任何报错输出。最常见原因：已经有一个用同一资料目录的浏览器在跑（浏览器自动更新重启 / 上次的窗口没关干净，任务栏找找那个窗口）；另外磁盘清理或「把软件搬到别的盘」会弄坏 Edge 安装（路径还在但起不来）。先在任务管理器结束全部 msedge.exe / chrome.exe 再重试；还不行就修复 / 重装 Edge，或在面板换一个浏览器路径')
+    if (why === 'timeout') return new Error(`浏览器进程 ${LAUNCH_TIMEOUT_SEC} 秒内没开出调试端口（进程还活着，路径多半没问题，是启动太慢或被杀毒软件拦了）。稍等再试一次；反复出现就检查杀毒软件对 Edge 的拦截`)
+    return new Error('浏览器没起来，请检查浏览器路径和专用资料目录')
+  }
+
+  async function launch(source, check) {
+    if (useEgoNow()) {
+      await egoConnect(check, async (c) => {
+        await c.send('Network.enable', { maxResourceBufferSize: 20e6, maxTotalBufferSize: 100e6 })
+        await c.send('Page.setMuted', { muted: true }).catch(() => {})
+        // 反自动化特征（小红书 404 防线）：ego 模式同样要注入
+        await c.send('Page.addScriptToEvaluateOnNewDocument', {
+          source: `(() => {
+            try { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }) } catch (e) {}
+            try {
+              Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] })
+              Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] })
+            } catch (e) {}
+            try {
+              const orig = window.chrome
+              if (!orig) window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} }
+            } catch (e) {}
+          })()`,
+        }).catch(() => {})
+      })
+      return
+    }
+    let p = owned
+    try {
+      check()
+      if (p?.exited || p?.needsStop) { await stopOwned(p); p = null }
+      if (p) {
+        cdp?.close()
+        cdp = null
+        await attach(p.port, () => { check(); if (p.exited || p.error) throw launchError(null, p) })
+        return
+      }
+      // DSH 被强制重启时上一个窗口还开着：接回去，不然它一直占着资料目录
+      const left = readPortFile(profileDir)
+      if (left && await getBrowserJson(`http://127.0.0.1:${left}/json/version`, 1500).catch(() => null)) {
+        check()
+        p = owned = { child: { pid: 0, kill() {} }, port: left, exited: false, error: null, stderr: '', done: new Promise(() => {}), outputClosed: true, outputDone: Promise.resolve() }
+        await attach(left, check)
+        return
+      }
+      if (hasLock()) throw lockError()
+      const path = browserPath()
+      const bin = findBrowser(path)
+      if (!bin) throw new Error(path ? `浏览器路径不对：${path}（这个文件不存在，常见安装位置也没找到 Edge / Chrome；先装一个，或把路径改成 msedge.exe / chrome.exe 的完整路径）` : '找不到 Edge / Chrome，先装一个，或在面板里填浏览器路径')
+      if (path && bin !== path) log?.warn?.(`面板填的浏览器路径不存在：${path}，已自动改用 ${bin}`)
+      mkdirSync(profileDir, { recursive: true })
+      const port = await getPort()
+      check()
+      // 在分配端口期间也可能有别的浏览器占用资料目录。
+      if (hasLock()) throw lockError()
+      check()
+      log?.info?.(`启动小红书专用浏览器，触发来源：${source}`)
+      const child = spawnProcess(bin, [
+        `--user-data-dir=${profileDir}`,
+        `--remote-debugging-port=${port}`,
+        '--remote-debugging-address=127.0.0.1',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--mute-audio',
+        '--autoplay-policy=no-user-gesture-required',
+        // 反自动化检测：不关掉的话 navigator.webdriver 是 true，
+        // 小红书会把页面判成脚本流量，笔记详情直接跳 404「当前笔记暂时无法浏览」（实测）。
+        '--disable-blink-features=AutomationControlled',
+        '--exclude-switches=enable-automation',
+        '--disable-infobars',
+        // 窗口在屏幕外也照常加载页面、跑页面脚本（不然会被当成后台窗口限速）
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--disable-features=Translate,MediaRouter,CalculateNativeWinOcclusion',
+        '--window-size=1280,860',
+        // 窗口必须留在屏幕内且可见：实测放到屏幕外(-2400,-2400)时 Edge 会清掉布局，
+        // 卡片 getBoundingClientRect() 全变 0×0，真鼠标点不到、页面也判成不可见 → 笔记一律 404。
+        // 所以起始位置给屏幕右下角靠内的正常坐标（不抢中间主视野）。
+        '--window-position=80,60',
+        'about:blank',
+      ], { stdio: ['ignore', 'ignore', 'pipe'], detached: true })
+      p = owned = observe(child, port)
+      child.unref()
+      for (let i = 0; i < LAUNCH_POLLS; i++) {
+        await wait(LAUNCH_POLL_MS)
+        check()
+        if (p.exited || p.error) throw launchError(null, p)
+        const version = await getBrowserJson(`http://127.0.0.1:${port}/json/version`, 1500).catch(() => null)
+        check()
+        if (p.exited || p.error) throw launchError(null, p)
+        if (version) {
+          // Edge 经常不写这个文件，自己写一份，DSH 重启后才能接回这个窗口
+          try { writeFileSync(join(profileDir, 'DevToolsActivePort'), `${port}\n/devtools/browser/xhs\n`) } catch (error) {}
+          await attach(port, () => { check(); if (p.exited || p.error) throw launchError(null, p) })
+          return
+        }
+      }
+      throw launchError(null, p, 'timeout')
+    } catch (error) {
+      try { await stopOwned(p) } catch (stopError) { throw new Error(`${launchError(error, p).message}；${stopError.message}`) }
+      if (error.code === 'cancelled') throw error
+      await waitOutput(p)
+      throw launchError(error, p)
+    }
+  }
+
+  /** 连上自己启动的浏览器；失败统一退避，手动和定时入口共用。 */
+  async function open(source = '主人要求', canStart = () => true) {
+    if (closing) await closing
+    if (!canStart()) return { ok: false, message: '小红书已关闭，请先打开小红书开关' }
+    if (connected()) return { ok: true }
+    if (opening) {
+      const pendingSource = openingSource
+      const started = generation
+      const result = await opening
+      // 定时启动被关闭开关取消时，登录不能跟着失败，改由登录来源重新启动。
+      if (source === '登录' && pendingSource !== '登录' && !result.ok && canStart() && generation === started && now() >= retryAt) return open(source, canStart)
+      return result
+    }
+    if (now() < retryAt) return { ok: false, message: `${lastError}；浏览器将在 ${Math.ceil((retryAt - now()) / 60_000)} 分钟后重试` }
+    const started = generation
+    const check = () => { if (generation !== started || !canStart()) throw cancelled() }
+    // 延后执行，确保同步抛错也能清除 opening，不会把失败结果一直缓存。
+    openingSource = source
+    opening = Promise.resolve().then(async () => {
+      try {
+        await launch(source, check)
+        check()
+        failures = 0
+        retryAt = 0
+        lastError = ''
+        return { ok: true }
+      } catch (error) {
+        if (error.code === 'cancelled' || generation !== started || !canStart()) {
+          if (owned && !owned.exited && cdp && !cdp.closed) owned.terminate ||= cdp
+          else cdp?.close()
+          cdp = null
+          try { await stopOwned(owned) } catch (stopError) { log?.warn?.('关闭小红书浏览器失败：', stopError.message) }
+          return { ok: false, message: error.message }
+        }
+        failures++
+        const delay = Math.min(60, 5 * 2 ** Math.min(failures - 1, 4))
+        retryAt = now() + delay * 60_000
+        lastError = error.message
+        log?.warn?.(`小红书浏览器启动失败：${lastError}；${delay} 分钟后重试`)
+        return { ok: false, message: `${lastError}；浏览器将在 ${delay} 分钟后重试` }
+      }
+    }).finally(() => { opening = null; openingSource = '' })
+    return opening
+  }
+
+  function need() {
+    if (!connected()) throw new Error('浏览器没连上')
+    return cdp
+  }
+
+  /** 只读状态：上次启动失败的原因与下次重试时间（退避期内才带 lastError）。绝不启动浏览器。 */
+  function status() {
+    return { connected: connected(), lastError: retryAt && now() < retryAt ? lastError : '', retryAt: retryAt || 0 }
+  }
+
+  /** 在页面里跑一段表达式，返回值（可以是 Promise）。 */
+  async function evaluate(expression, ms = 30000) {
+    const r = await need().send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, ms)
+    if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description?.split('\n')[0] || r.exceptionDetails.text || '页面脚本出错')
+    return r.result?.value
+  }
+
+  /** 打开网址，等页面加载完（最多 ms；小红书的 load 事件常常很晚，后面再按需 waitFor 具体元素）。 */
+  async function goto(url, ms = 8000) {
+    const c = need()
+    const loaded = new Promise((resolve) => {
+      const off = c.on('Page.loadEventFired', () => { off(); resolve() })
+      setTimeout(() => { off(); resolve() }, ms)
+    })
+    await c.send('Page.navigate', { url })
+    await loaded
+  }
+
+  /** 等某个选择器出现，返回它的中心点和属性；超时返回 null。 */
+  async function waitFor(selector, ms = 10000) {
+    const end = Date.now() + ms
+    while (Date.now() < end) {
+      const box = await evaluate(`(() => {
+        const n = document.querySelector(${JSON.stringify(selector)})
+        if (!n) return null
+        n.scrollIntoView({ block: 'center', inline: 'center' })
+        const r = n.getBoundingClientRect()
+        if (r.width <= 0 || r.height <= 0) return null
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, h: r.height, left: r.x, top: r.y, state: '', text: (n.innerText || '').slice(0, 200) }
+      })()`).catch(() => null)
+      if (box) return box
+      await sleep(300)
+    }
+    return null
+  }
+
+  /** 真鼠标点一下（页面看到的是正常的点击事件，不是脚本 .click()）。 */
+  async function click(x, y) {
+    const c = need()
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+      await c.send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 })
+      await sleep(40 + Math.random() * 60)
+    }
+  }
+
+  /**
+   * 点一个元素。页面看得见时用真鼠标点在它中间；看不见时（锁屏、关屏、窗口被系统判成被遮挡）
+   * 浏览器会吞掉模拟的鼠标输入，只能在页面里派发鼠标事件。找不到元素返回 false。
+   */
+  async function press(selector) {
+    const r = await evaluate(`(() => {
+      const n = document.querySelector(${JSON.stringify(selector)})
+      if (!n) return null
+      n.scrollIntoView({ block: 'center', inline: 'center' })
+      if (document.visibilityState !== 'visible') {
+        for (const t of ['mouseover', 'mousedown', 'mouseup', 'click']) n.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window, button: 0 }))
+        return { dom: true }
+      }
+      const b = n.getBoundingClientRect()
+      return { x: b.x + b.width / 2, y: b.y + b.height / 2 }
+    })()`)
+    if (!r) return false
+    if (!r.dom) await click(r.x, r.y)
+    return true
+  }
+
+  /** 往当前焦点打字（和输入法上屏一样，富文本编辑器也认）。 */
+  async function type(text) {
+    await need().send('Input.insertText', { text })
+  }
+
+  /** 清空当前焦点输入框：真按 Ctrl+A、退格（小红书评论框的编辑器不认 execCommand）。 */
+  async function clearFocused() {
+    const c = need()
+    const key = async (k, code, vk, modifiers = 0) => {
+      await c.send('Input.dispatchKeyEvent', { type: 'keyDown', key: k, code, windowsVirtualKeyCode: vk, modifiers })
+      await c.send('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code, windowsVirtualKeyCode: vk, modifiers })
+    }
+    await key('a', 'KeyA', 65, process.platform === 'darwin' ? 4 : 2)
+    await key('Backspace', 'Backspace', 8)
+  }
+
+  async function pressEnter() {
+    const c = need()
+    const key = { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }
+    await c.send('Input.dispatchKeyEvent', { type: 'keyDown', ...key, text: '\r' })
+    await c.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
+  }
+
+  /**
+   * 往页面里的 <input type="file"> 塞本地文件（发帖传图用，页面自己会触发 change 事件）。
+   * 找不到目标节点返回 false。contract 要求的流程：DOM.getDocument → DOM.querySelector →
+   * DOM.setFileInputFiles；不用滚进视图，塞文件不需要元素可见。
+   */
+  async function setFiles(selector, files) {
+    const c = need()
+    const doc = await c.send('DOM.getDocument')
+    const root = doc?.root?.nodeId
+    if (!root) return false
+    const { nodeId } = await c.send('DOM.querySelector', { nodeId: root, selector }).catch(() => ({}))
+    if (!nodeId) return false
+    await c.send('DOM.setFileInputFiles', { files: [...files], nodeId })
+    return true
+  }
+
+  /**
+   * 经 CDP 读某域名下的 cookie（含 HttpOnly —— 页面里 document.cookie 读不到 web_session）。
+   * 返回 [{ name, value, domain, httpOnly, ... }]；读不到返回空数组，不抛。
+   */
+  async function cookies(domainRe = /xiaohongshu\.com/) {
+    try {
+      const c = need()
+      const r = await c.send('Network.getAllCookies', {}, 8000).catch(() => null)
+      const all = r?.cookies || []
+      return all.filter((x) => domainRe.test(String(x.domain || '')))
+    } catch (error) { return [] }
+  }
+
+  /**
+   * 开始等一个接口的返回（先调它、再做动作、再 await），拿到 { status, headers, json }；超时 null。
+   * 小红书接口带 x-s/x-t 签名，页面里自造签名行不通；这条只「听」页面自己发出去的请求回执，
+   * 用来确认点赞 / 评论到底成功没有，而不是点完就当成功。
+   */
+  function waitResponse(urlRe, ms = 10000) {
+    const c = need()
+    return new Promise((resolve) => {
+      const ids = new Map()
+      const done = (v) => { offA(); offB(); clearTimeout(t); resolve(v) }
+      const offA = c.on('Network.responseReceived', (p) => { if (urlRe.test(p.response?.url || '')) ids.set(p.requestId, { status: p.response.status, headers: p.response.headers || {} }) })
+      const offB = c.on('Network.loadingFinished', async (p) => {
+        if (!ids.has(p.requestId)) return
+        const b = await c.send('Network.getResponseBody', { requestId: p.requestId }).catch(() => null)
+        let json = null
+        try { json = JSON.parse(b?.base64Encoded ? Buffer.from(b.body, 'base64').toString() : b?.body) } catch (error) {}
+        done({ ...ids.get(p.requestId), json })
+      })
+      const t = setTimeout(() => done(null), ms)
+    })
+  }
+
+  /** 截图（可截一块），返回 data:image/png。 */
+  async function screenshot(clip) {
+    const r = await need().send('Page.captureScreenshot', { format: 'png', ...(clip ? { clip: { ...clip, scale: 1 } } : {}) })
+    return r.data ? 'data:image/png;base64,' + r.data : ''
+  }
+
+  /**
+   * 窗口挪到屏幕里给人看 / 收回去。
+   * 「收回去」也只是挪到屏幕边缘，绝不放到屏幕外：实测放到 (-2400,-2400) 时 Edge 会清布局，
+   * 卡片尺寸变 0×0、真鼠标点不到，笔记详情一律 404。收起来时挪到右下角一小块，页面仍可见。
+   */
+  async function show(visible) {
+    if (egoTarget) {
+      // 共享窗口归 DSH 管，但「显示浏览器窗口」不能是空操作 —— 主人扫码、做
+      // 安全验证时点它，要把窗口从屏幕外 (-2400,-2400) 挪回屏幕内、带到前台、
+      // 切到本模块的标签页。收起（visible=false）挪回屏幕外并取消置顶焦点。
+      try {
+        const { windowId } = await cdp.send('Browser.getWindowForTarget')
+        if (visible) {
+          await cdp.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } }).catch(() => {})
+          await cdp.send('Browser.setWindowBounds', { windowId, bounds: { left: 80, top: 60, width: 1280, height: 860 } }).catch(() => {})
+        } else {
+          await cdp.send('Browser.setWindowBounds', { windowId, bounds: { left: -2400, top: -2400 } }).catch(() => {})
+        }
+      } catch { /* 挪窗失败不拦着 bringToFront：能带到前台也算数 */ }
+      if (visible) await cdp?.send('Page.bringToFront').catch(() => {})
+      return
+    }
+    const c = need()
+    const { windowId } = await c.send('Browser.getWindowForTarget')
+    await c.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } }).catch(() => {})
+    const bounds = visible
+      ? { left: 80, top: 60, width: 1280, height: 860 }
+      : { left: 40, top: 40, width: 900, height: 620 } // 仍在屏幕内，只是小一点、不盖住主视野
+    await c.send('Browser.setWindowBounds', { windowId, bounds })
+    if (visible) await c.send('Page.bringToFront').catch(() => {})
+  }
+
+  async function close() {
+    if (closing) return closing
+    // 先让关闭标记生效，再异步清理，避免同步完成时覆盖 closing。
+    generation++
+    const pending = opening
+    closing = Promise.resolve().then(async () => {
+      if (pending) await pending
+      if (egoTarget) { await egoDisconnect(); return } // 共享实例：只断连接，不关浏览器
+      attaching?.close()
+      if (owned && !owned.exited && cdp && !cdp.closed) owned.terminate ||= cdp
+      else cdp?.close()
+      cdp = null
+      let failed = null
+      try { await stopOwned(owned) } catch (error) { failed = error }
+      if (pending) await pending
+      if (owned) try { await stopOwned(owned); failed = null } catch (error) { failed = error }
+      else failed = null
+      if (failed) throw failed
+    }).finally(() => { closing = null })
+    return closing
+  }
+
+  return { open, connected, status, evaluate, goto, waitFor, click, press, type, clearFocused, pressEnter, waitResponse, screenshot, show, close, setFiles, cookies }
+}
