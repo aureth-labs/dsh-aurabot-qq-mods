@@ -1,0 +1,18 @@
+{
+  "id": "persona-runtime",
+  "name": "人格运行时",
+  "version": "1.0.0",
+  "description": "每轮回复层的人格：自我指向 / 情感倾向 / 语气 / 情绪残余。九开关分段可关，全关等于「安静日的她」。与自驱引擎协同（观察桥/点火/duty 申报），非必需依赖：引擎没开时独立降级运行。",
+  "category": "social",
+  "tags": ["人格", "情绪", "注入", "自驱协同"],
+  "author": "RookieApe-tao",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.3.0",
+  "requires": [],
+  "capabilities": [
+    "plugin-internals",
+    "filesystem",
+    "plugin-config"
+  ]
+}

@@ -66,7 +66,7 @@ export function createXhs({ getConfig, setOwnerConfirmed, think, sendOwnerQQ, se
   const cfg = () => getConfig()
   const sleep = wait || ((ms) => new Promise((r) => setTimeout(r, ms)))
   const source = new AsyncLocalStorage()
-  const browser = injectedBrowser || (injected ? null : createBrowser({ profileDir: dataDir('xhs', 'edge-profile'), browserPath: () => cfg().browserPath, log, now }))
+  const browser = injectedBrowser || (injected ? null : createBrowser({ profileDir: dataDir('xhs', 'edge-profile'), browserPath: () => cfg().browserPath, log, now, useEgo: () => cfg().browser?.useDshSidebar === true }))
   // 登录可以在开关关闭时进行；其他来源仍在真正启动前检查开关。
   const site = injected || createSite({ browser: { ...browser, open: () => {
     const from = source.getStore() || '主人要求'
@@ -971,7 +971,12 @@ export function createXhs({ getConfig, setOwnerConfirmed, think, sendOwnerQQ, se
     return loginAction(async () => {
       try {
         const r = await ready(s, '登录')
-        return { ...(s.account || { loggedIn: false }), ...(r.ok ? {} : { message: r.message }) }
+        if (!r.ok) {
+          // 失败也落盘并刷新时间戳：否则面板把本次的报错文案搭在上次成功检查的
+          // 「X 天前查的」上——文案是新的、时间是旧的，看起来像旧缓存没刷新。
+          s.account = { ...(s.account || { loggedIn: false }), loggedIn: false, at: now(), message: r.message }
+        }
+        return { ...s.account }
       } catch (error) {
         return { loggedIn: false, error: error.message }
       } finally {
@@ -1048,6 +1053,7 @@ export function createXhs({ getConfig, setOwnerConfirmed, think, sendOwnerQQ, se
       shots: shotCount,
       newAccount: isNew(s), lastRun: s.lastRun, nextDueAt: s.nextDueAt, lastSkipReason: s.lastSkipReason,
       pauseReason: paused(s) ? s.pauseReason : '', account: s.account, busy, browserOpen: site.connected(),
+      browser: typeof browser?.status === 'function' ? browser.status() : null, // { connected, lastError, retryAt }：浏览器启动失败的原因与重试时间
       pendingDrafts: s.drafts.filter((d) => d.status === 'pending').length,
       history: s.history.slice(0, 30),
     }

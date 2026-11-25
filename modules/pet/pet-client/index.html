@@ -19,7 +19,7 @@
     position: absolute; right: 24px; bottom: 8px; width: 96px; height: 96px;
     border-radius: 50%; background: rgba(60, 170, 220, .85);
     display: flex; align-items: center; justify-content: center;
-    font-size: 46px; transition: transform .2s;
+    font-size: 46px; transition: transform .05s ease-out;
     transform-origin: 50% 100%;
   }
   #pet.mood-very-happy { transform: scale(1.12) rotate(-6deg); }
@@ -29,8 +29,18 @@
   #pet.mood-sad { transform: scale(.88) rotate(4deg); filter: saturate(.4) brightness(.9); }
   /* webm 动画层（P1）：素材就绪时盖住静态形象。默认按 240 宽渲染（640×360 素材 → 135 高），
      首帧后由 applyStageCrop 放大平移，让人物填满舞台（行内 width/height/left/bottom 会覆盖这里） */
-  #anim { position: absolute; left: 0; bottom: 0; width: 240px; display: none; }
+  #anim { position: absolute; left: 0; bottom: 0; width: 240px; display: none;
+    transform-origin: 50% 100%; /* 原来只挂在 .squashing 上，2026-11-07 挪成常态：hold 微捏/落地挤压共用同一原点 */
+    transition: transform .05s ease-out; }
   #anim.squashing { transform-origin: 50% 100%; }
+  /* 按住微捏（hold-squash，2026-11-07 新增）：pointerdown 起人物被捏扁（下压 50%、横鼓 8%；
+     少爷实测反馈：要扁一半、按下和恢复都要在 ~50ms 内完成——调过两轮：
+     .94/1.03+.16s → .88/1.06+.09s → 现在 .5/1.08+.05s），
+     松手（pointerup/pointercancel）即移除恢复。优先级关系：__squash（落地/捏捏）的 rAF 动画写
+     **内联 transform**，内联永远盖过类 → 动画期间以动画为准，动画结束清内联后本类自然生效，
+     所以按住时被甩出去再落地，挤压照常播、播完回到微捏——不用改 __squash。
+     放在 mood 系列之后（同特异性，后者胜出）：被捏的手感优先于心情形变。 */
+  #pet.hold-squash, #anim.hold-squash { transform: scale(1.08, .5); }
   /* 气泡：锚在宠物头顶（人物裁切后头顶≈舞台上沿，即窗口底往上 16+240=256px），向上生长、中心对齐。
      窗口高随内容伸缩：气泡收起 264，弹出时主进程按气泡实高向上长（上限 430）。 */
   #bubble {
@@ -50,6 +60,10 @@
   #bubble .tag { display: inline-block; font-size: 10px; color: #2a86c6; margin-bottom: 3px; }
   /* 长文本最多 6 行：窗口高 430，气泡区只有 ~154px，再高会顶出窗口被裁掉 */
   #bubbleText { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; overflow: hidden; }
+  /* 大字模式（2026-11-07，余额气泡）：数字要看清，字号 17px、行数降到 4——字号变大后 4 行
+     的像素高度与原 6 行 12.5px 相当，不会把窗口顶爆（refitWindow 照常量实高再上报）。 */
+  #bubble.big { font-size: 17px; }
+  #bubble.big #bubbleText { -webkit-line-clamp: 4; }
 </style>
 </head>
 <body>
@@ -70,6 +84,15 @@
   const stage = document.getElementById('stage')
   const video = document.getElementById('anim')
   const P = window.PetPhysics
+
+  // ---------- 动画节奏倍率（/config 的 animRate，0.5~2，缺省 1；2026-11-07 参数化契约）----------
+  // 只管渲染端的节拍：落地挤压时长、idle 轮播间隔都按它缩放（值越大节奏越快）。
+  // 物理（重力/弹力）归主进程，不经这里；服务端没下发时保持 1，照常能跑。
+  let animRate = 1
+  window.__setAnimRate = (r) => {
+    const v = Number(r)
+    if (Number.isFinite(v) && v > 0) animRate = Math.min(2, Math.max(0.5, v))
+  }
 
   // ---------- 素材裁边（修「桌宠上方空白区域过大」）----------
   // 实测：素材真实规格是 **640×360（16:9）**，人物只画在画面中下部约 222×268 的框里，
@@ -257,9 +280,8 @@
     playAnim(name, null, 'idle') // 播完走 afterAnim：autoIdle 才继续接，否则停在这一段末尾回静态
   }
   let idleTimer = null
-  // 动画节奏倍率（1.0.14，服务端 /config 的 animRate，经主进程 __setAnimRate 推下来）：空闲轮播间隔 ÷ 它。
-  // 口径说明：只缩「排下一段 idle 的等待时间」，不碰物理/移动/气泡时长——1 = 正常，2 = 更活泼，0.5 = 更慵懒。
-  let animRate = 1
+  // 动画节奏倍率：声明与 __setAnimRate 见文件开头（2026-11-07 参数化契约块），此处只消费——
+  // 1.0.15 曾在此重复 `let animRate` 引发 SyntaxError 整页挂掉（桌宠全透明不显示），已删。
   function scheduleIdle() {
     clearTimeout(idleTimer)
     if (!autoIdle) return // 自动轮播关着：不排下一段（动作全交给 AI 行为 / 说话 / 点击）
@@ -271,8 +293,7 @@
     }, (6000 + Math.random() * 8000) / pace)
   }
   // 主进程/调试用：恢复自动轮播 / 单播一段 idle 池动画（AI 的 idle_anim 动作走这条）
-  window.__setAnimRate = (v) => { animRate = Number(v) || 1 } // 只影响下一次 scheduleIdle 的间隔，不重排正在等的定时
-  // 主进程/调试用：恢复自动轮播 / 单播一段 idle 池动画（AI 的 idle_anim 动作走这条）
+  // （__setAnimRate 的定义也在文件开头块里，1.0.15 曾在此重复定义，已删）
   window.__setAutoIdle = (v) => { autoIdle = !!v; if (autoIdle && !currentAnim) playIdle(); else if (!autoIdle) scheduleIdle() }
   window.__playIdleOnce = () => { const name = pickFrom('idle'); return name ? playAnim(name, null, 'idle') : false }
 
@@ -308,10 +329,13 @@
 
   // ---------- 气泡（主动事件 / 碎碎念）：优先播点播 anim（P2），否则从 speak 池抽一段 ----------
   let bubbleTimer = null
-  window.__bubble = (t, mood, secs, anim, playbackId, tag, emo) => {
+  window.__bubble = (t, mood, secs, anim, playbackId, tag, emo, big) => {
     bubbleText.textContent = t
     bubbleTag.textContent = String(tag || '主动来找你')
     bubble.classList.add('show')
+    // 大字模式（2026-11-07）：余额等「要看清数字」的气泡用（CSS #bubble.big，字号 17px、4 行截断）；
+    // 其余调用不传 big，行为不变。hide() 时一并移除，别让大字号漏给下一条普通气泡。
+    bubble.classList.toggle('big', big === true)
     pet.className = 'mood-' + (mood || 'neutral')
     // 情绪画像 → 气泡辉光：冷暖色随 valence（正=暖金 / 负=冷蓝），强弱随 arousal（幅度+亮度）。
     // 没带画像（老插件/非目的回合）就清掉，回到默认描边。
@@ -337,6 +361,7 @@
   }
   function hide() {
     bubble.classList.remove('show')
+    bubble.classList.remove('big') // 大字模式只属于当次气泡，收起即还原
     refitWindow() // 气泡收起：窗口缩回贴合宠物本体（见下方 refitWindow）
   }
   window.__hideBubble = hide
@@ -357,7 +382,7 @@
   let squashToken = 0 // 单飞行：新的挤压直接接管旧的，避免多次回调叠出一堆并发的 rAF 循环
   window.__squash = (impactSpeed) => {
     const squash = P ? P.landingSquash(impactSpeed) : 0.55
-    const duration = 220
+    const duration = P ? P.SQ_DURATION_MS / animRate : 220 / animRate // 节奏倍率：捏/落地都用同一基准
     const target = video.style.display !== 'none' ? video : pet
     const token = ++squashToken
     target.classList.add('squashing')
@@ -419,60 +444,95 @@
   // 右键「碎碎念」本地兜底：插件不可达/拒绝时，直接播一段说话动画 + 气泡
   window.__whisper = (text) => window.__bubble(String(text || '……'), 'happy', 9, '', '', '碎碎念')
 
-  // ---------- 拖拽 + 甩抛（P3）：JS 拖拽采轨迹，松手按初速度交给主进程抛 ----------
-  let dragging = null // { trail:[{t,x,y}], base:{x,y}, start:{px,py} }
-  /** 原地掉落：零初速抛掷 = 只受重力。用于「温柔放下」和「中途打断了飞行」——
-   *  否则 pointerdown 停掉物理循环后，松手不满足抛掷条件，桌宠会永远挂在半空不动（看起来就是卡死）。 */
-  const drop = () => { window.petBridge && window.petBridge.throwWith(0, 0) }
+  // ---------- 拖拽 + 甩抛（P3；2026-11-07 改主进程权威）----------
+  // 旧机制（已删）：渲染页拿 petBridge.screenInfo() 的窗口坐标加「指针屏幕坐标差值」自算窗口目标，
+  // 并在渲染页采轨迹 → pet:move/pet:throw。真实客户端里 forwarded-input 穿透窗 + setZoomFactor
+  // 会让这套自算坐标错位——这就是「拖拽偏移」的根因（纯 Electron 探针已验证：指针事件的屏幕坐标
+  // 与 screen.getCursorScreenPoint() 完全一致，DIP 1:1；错的是渲染页自己的几何链路）。
+  // 新机制：渲染页只发三个信号——dragStart() / dragMove()（rAF 节流的心跳，**不带坐标**）/
+  // dragEnd(isClick)。挪窗、轨迹采样、初速估算、甩抛积分全部在主进程（见 main.js pet:drag-*）。
+  // 保留的教训：高回报率鼠标下 pointermove 一秒几百上千次，必须按 rAF 合并再发 IPC。
+  let dragging = null // { start:{x,y}, moved, pinchTimer, pinched, holdEl }
+  /** 按住微捏的收尾：移除 .hold-squash（endDrag / pointercancel 共用）。 */
+  const releaseHold = () => {
+    if (dragging && dragging.holdEl) dragging.holdEl.classList.remove('hold-squash')
+  }
+  let dragKeepalive = null // 按住期间保活心跳句柄（见 pointerdown；pointermove 心跳只在移动时才有）
+  const PINCH_DELAY_MS = 450  // 捏：按住静止的触发时长（任务书默认值）
+  const PINCH_MOVE_PX = 8     // 捏：位移超过它（CSS px）视为拖动，取消捏
+  const stopKeepalive = () => { if (dragKeepalive) { clearInterval(dragKeepalive); dragKeepalive = null } }
   stage.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return
-    window.petBridge && window.petBridge.stopThrow()
-    window.petBridge && window.petBridge.screenInfo().then((info) => {
-      if (!info) return
-      dragging = { trail: [{ t: Date.now(), x: e.clientX, y: e.clientY }], base: { x: info.x, y: info.y }, start: { px: e.screenX, py: e.screenY } }
-      stage.classList.add('dragging')
-      stage.setPointerCapture(e.pointerId)
-    })
+    window.petBridge && window.petBridge.stopThrow() // 旧教训：中途按住必须先停飞行循环，否则松手不满足抛掷条件会挂半空（主进程 drag-start 里也会再停一次，双保险）
+    dragging = { start: { x: e.clientX, y: e.clientY }, moved: false, pinchTimer: null, pinched: false }
+    stage.classList.add('dragging')
+    try { stage.setPointerCapture(e.pointerId) } catch {}
+    window.petBridge && window.petBridge.dragStart()
+    // 按住微捏（hold）：按住的全程人物被轻轻捏扁（CSS 类 .hold-squash，见样式区注释），
+    // 松手/取消即恢复。纯 class 切换，无定时器无 rAF；拖拽中按住也生效（抓着她走=被捏着走），
+    // 松手甩抛时移除类、落地挤压照常由 __squash 接管。取元素口径与 __squash 一致。
+    // 【三个触感的关系】① 按住微捏：pointerdown 即生效、全程保持的轻微形变（scaleY .94）；
+    //  ② 450ms 捏捏：按住**不动**够久才触发的重一点挤压 + 气泡（下方 pinchTimer，一次按住最多一次）；
+    //  ③ 落地挤压：松手甩抛落地后主进程回调 __squash 播的冲击挤压（rAF 内联 transform，
+    //     优先级最高，动画期间盖过 ① 的类，结束清内联后 ① 若仍在按住会自然接回）。
+    const holdEl = video.style.display !== 'none' ? video : pet
+    dragging.holdEl = holdEl
+    holdEl.classList.add('hold-squash')
+    // 保活心跳（2026-11-07 复审必修补）：pointermove 心跳只在移动时才有，用户「按住不动」（捏着
+    // 不放/按住想放哪儿）超过主进程的丢失阈值会被误判成拖拽丢失而原地掉落。按住期间每 300ms 发
+    // 一次 dragMove 刷新 lastSeen；与 rAF 节流那条共存无害（drag-move 只是刷时间戳）。松手即清。
+    stopKeepalive()
+    dragKeepalive = setInterval(() => { window.petBridge && window.petBridge.dragMove() }, 300)
+    // 捏（pinch）：按住不动 ~450ms → 挤一下 + 气泡。一次按住最多触发一次；松手/拖动即取消。
+    // 只用一次 setTimeout，不起常驻定时器。
+    dragging.pinchTimer = setTimeout(() => {
+      if (!dragging || dragging.moved || dragging.pinched) return
+      dragging.pinched = true
+      window.__squash && window.__squash(300) // 轻捏：中等冲击档的挤压幅度
+      window.__bubble && window.__bubble('（被捏了…）', 'neutral', 5, '', '', '捏捏')
+    }, PINCH_DELAY_MS)
   })
-  // 拖拽移动节流（修「拖动掉帧」）：高回报率鼠标下 pointermove 一秒能来几百上千次，
-  // 每次都同步 IPC + 主进程 setPosition 会把窗口线程打满。这里只记最新目标，
-  // 用 requestAnimationFrame 每帧最多发一次 pet:move，视觉不丢帧、主进程负载减一个数量级。
-  let movePending = null        // 最新目标 {x,y}（还没发出去的那次）
-  let moveFlushQueued = false   // 本帧是否已排队
+  // pointermove 只做两件事：记录位移（区分单击/捏）+ 按 rAF 节流发心跳；坐标一个都不传。
+  let moveFlushQueued = false
   const flushMove = () => {
     moveFlushQueued = false
-    if (!movePending || !dragging) { movePending = null; return }
-    window.petBridge && window.petBridge.moveTo(movePending.x, movePending.y)
-    movePending = null
+    if (dragging) window.petBridge && window.petBridge.dragMove()
   }
   stage.addEventListener('pointermove', (e) => {
     if (!dragging) return
-    dragging.trail.push({ t: Date.now(), x: e.clientX, y: e.clientY })
-    if (dragging.trail.length > 64) dragging.trail.shift()
-    const dx = e.screenX - dragging.start.px
-    const dy = e.screenY - dragging.start.py
-    movePending = { x: dragging.base.x + dx, y: dragging.base.y + dy }
+    if (Math.hypot(e.clientX - dragging.start.x, e.clientY - dragging.start.y) >= PINCH_MOVE_PX) {
+      dragging.moved = true
+      if (dragging.pinchTimer) { clearTimeout(dragging.pinchTimer); dragging.pinchTimer = null }
+    }
     if (!moveFlushQueued) { moveFlushQueued = true; requestAnimationFrame(flushMove) }
   })
   const endDrag = (e) => {
     if (!dragging) return
     const d = dragging
+    if (d.pinchTimer) { clearTimeout(d.pinchTimer); d.pinchTimer = null }
+    stopKeepalive()
+    releaseHold() // 松手：解除按住微捏（甩抛/落地挤压随后由主进程 __squash 照常接管）
     dragging = null
     stage.classList.remove('dragging')
-    d.trail.push({ t: Date.now(), x: e.clientX, y: e.clientY })
-    // 原地轻点（位移 < 6px）：当单击互动，播 click 池动作（仿 dsh-pet 的 clicks）
-    const p0 = d.trail[0]
-    const moved = Math.hypot(e.clientX - p0.x, e.clientY - p0.y)
-    if (moved < 6) { window.__playClick && window.__playClick(); drop(); window.petBridge && window.petBridge.reportClick && window.petBridge.reportClick(); return }
-    if (!P || !window.petBridge) return
-    const params = physicsParams || P.DEFAULT_PHYSICS
-    const trail = P.trimTrail(d.trail, Date.now())
-    const v = P.estimateReleaseVelocity(trail, Date.now(), params)
-    if (v && (Math.abs(v.vx) > 0 || Math.abs(v.vy) > 0)) window.petBridge.throwWith(v.vx, v.vy) // 甩出去：主进程积分抛物线+反弹
-    else drop() // 温柔放下：零初速落回地面（不是悬在原处）
+    const isClick = Math.hypot(e.clientX - d.start.x, e.clientY - d.start.y) < 6
+    if (isClick) {
+      // 原地轻点：单击互动照旧；原地掉落由主进程 drag-end 统一处理（等价旧 drop()，受 releaseLand 门控）
+      window.__playClick && window.__playClick()
+      window.petBridge && window.petBridge.reportClick && window.petBridge.reportClick()
+    }
+    // 甩抛 / 温柔放下 / 原地掉落全在主进程按 DIP 轨迹决定；releaseLand 关 → 停在哪就在哪
+    window.petBridge && window.petBridge.dragEnd(isClick)
   }
   stage.addEventListener('pointerup', endDrag)
-  stage.addEventListener('pointercancel', () => { if (!dragging) return; dragging = null; stage.classList.remove('dragging'); drop() })
+  stage.addEventListener('pointercancel', () => {
+    if (!dragging) return
+    if (dragging.pinchTimer) { clearTimeout(dragging.pinchTimer); dragging.pinchTimer = null }
+    stopKeepalive()
+    releaseHold()
+    dragging = null
+    stage.classList.remove('dragging')
+    window.petBridge && window.petBridge.dragEnd(false) // 取消按普通松手收尾（主进程兜底原地掉落）
+  })
 
   // ---------- 右键菜单（仿 dsh-pet）：整个窗口任意位置右键 → 主进程原生菜单 ----------
   document.addEventListener('contextmenu', (e) => {

@@ -1,0 +1,24 @@
+{
+  "ext": {
+    "travel": {
+      "enabled": true,
+      "hub_showOutings": true,
+      "hub_panelWrite": true,
+      "trip_pythonPath": "",
+      "trip_enginePath": "",
+      "trip_personName": "乘客",
+      "trip_flightProvider": "",
+      "trip_flightKey": "",
+      "trip_stayNotify": false,
+      "real_enabled": false,
+      "real_amapKey": "",
+      "real_amapKeyBackup": "",
+      "real_tdtTk": "",
+      "out_enabled": true,
+      "out_farLimitPerDay": 2,
+      "out_tripMaxDays": 3,
+      "out_allowAutoTrip": true,
+      "out_locSource": "authorized"
+    }
+  }
+}

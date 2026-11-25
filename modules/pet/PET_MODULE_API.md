@@ -35,8 +35,8 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/events?since=&wait=&client=` | **长轮询**。`since` 空=只取水位不重放；`since > 当前序号`（bootId 变过）同样只回水位；`wait≤60s`（客户端用 25）。返回 `{ok, bootId, cursor, events[], focus, serverTime}`。每次调用刷新该 `client` 的心跳（60s TTL） |
-| GET | `/status` | `{online:{online,lastSeenAt,clients}, focus, bootId, seq, carrier, modality, fallbackToQQ, pack, playbackCount, portReady, port, electronInstalled, pid, hostFile, clientDir}`。`portReady:false` = 端口未就绪（宿主还没注入）；`electronInstalled` = app/node_modules/electron 里的 electron.exe 在不在；`pid` = 记录的桌宠进程号 |
-| GET | `/config` | 客户端配置：carrier/modality/fallbackToQQ/focus + `moods` 表情枚举 + `pack`（当前形象包视图，null=无素材走静态形象）+ `behavior{enabled, idleCursorMinutes}`（客户端反应层靠它尊重总开关与闲置分钟，见 §4.3）。**顺带刷新素材路由**（新放素材被发现） |
+| GET | `/status` | `{online:{online,lastSeenAt,clients}, focus, bootId, seq, carrier, modality, fallbackToQQ, pack, playbackCount, portReady, port, electronInstalled, pid, hostFile, clientDir}`。`portReady:false` = 端口未就绪（宿主还没注入）；`electronInstalled` = app/node_modules/electron 里的 electron.exe 在不在；`pid` = 已通过存活检查的桌宠进程号，启动检查期间或进程退出后为 `null`。另有 `physics{gravity,restitution}`、`animRate`、`balanceEnabled`、`clickChase`、`teaseChase`（面板回显物理参数/动作频率/余额开关/抓鼠标两开关，2026-11-07 起） |
+| GET | `/config` | 客户端配置：carrier/modality/fallbackToQQ/focus + `moods` 表情枚举 + `pack`（当前形象包视图，null=无素材走静态形象）+ `behavior{enabled, idleCursorMinutes, disabledActions[]}`（客户端反应层靠它尊重总开关、闲置分钟与禁用动作清单，见 §4.3）+ `physics{gravity,restitution}`（客户端覆盖 DEFAULT_PHYSICS 同名项，throwPower 仍由素材包管）+ `animRate`（0.5~2 动作频率倍率）+ `balanceEnabled`（右键「查看余额」菜单显隐）。坏值一律回落默认。**顺带刷新素材路由**（新放素材被发现） |
 | GET | `/history` | 最近推过的气泡（≤60 条）+ 最近动画回执 `playbacks`（≤20 条） |
 | POST | `/focus` | body `{enabled, source?}` → 写 focus.json + 广播 `focus` 事件（唤醒长轮询） |
 | POST | `/bubble` | body `{text, modality?, force?, anim?}`：测试气泡，默认 `force=true`（绕过专注模式）；`anim` 点播动作 |
@@ -51,9 +51,10 @@
 | GET | `/asset/<包>/<文件>.webm?token=` | 形象包素材（P1）。**严格隔离**：只服务该包 `-animation/` 目录里的文件；缺文件/越包访问/路径穿越一律 404，**绝不回落 default**。`Cache-Control: private` |
 | GET | `/audio/<sha1>.wav?token=` | 语音文件；`Cache-Control: private`；不存在 404 |
 | POST | `/client/install` | 把模块自带 `pet-client/` 生成到 `app/`，返回 `{ok, dir, files, message}` |
-| POST | `/electron-install` | 两档自动安装（已装则跳过并提示）：① 环境里有 npm-cli.js → 在 `app/` 下 `npm i -D electron`（注入 `ELECTRON_MIRROR=<electronMirror>`，默认 npmmirror，真机直连 github release 会 fetch failed；不走 shell），**npm 失败自动回退 ②**；② 没有 npm（DSH 自带运行时不带 npm-cli、目标电脑可能没装 Node）→ **zip 直装**：从同一镜像下载 electron 官方 zip（版本取 `app/package.json`），Node 自带 zlib 纯 JS 解压到 `app/node_modules/electron/dist/`（官方 zip 是扁平包，先解到临时目录认出 payload 根再搬进 `dist/`，与 npm 布局一致），零环境依赖。**解压/搬运/清理必须走 `original-fs`**（宿主是 Electron，主进程 `node:fs` 的 asar 补丁会把写 `resources/default_app.asar` 拦成 `Invalid package <path>`；详见下方「Electron 安装」）。返回进度摘要 |
-| POST | `/launch` | 分离进程启动 `electron.exe main.js`。**启动前必须清掉子进程环境的 `ELECTRON_RUN_AS_NODE`**（宿主环境必带，不清则 Electron 以纯 Node 模式启动即崩）。已在跑（心跳活着）则提示；pid 记进 `process.json` |
+| POST | `/electron-install` | 两档自动安装（已装则跳过并提示）：① 有 npm-cli.js 和客户端 `package.json` → 在 `app/` 下用 `npm install --no-save electron@<固定版本>`（注入 `ELECTRON_MIRROR=<electronMirror>`，默认 npmmirror，真机直连 github release 会 fetch failed；不走 shell），**npm 失败自动回退 ②**；② 没有 npm（DSH 自带运行时不带 npm-cli、目标电脑可能没装 Node）→ **zip 直装**：从同一镜像下载 electron 官方 zip（版本取 `app/package.json`），Node 自带 zlib 纯 JS 解压到 `app/node_modules/electron/dist/`（官方 zip 是扁平包，先解到临时目录认出 payload 根再搬进 `dist/`，与 npm 布局一致），零环境依赖。**解压/搬运/清理必须走 `original-fs`**（宿主是 Electron，主进程 `node:fs` 的 asar 补丁会把写 `resources/default_app.asar` 拦成 `Invalid package <path>`；详见下方「Electron 安装」）。返回进度摘要 |
+| POST | `/launch` | 分离进程启动 `electron.exe main.js`。**启动前必须清掉子进程环境的 `ELECTRON_RUN_AS_NODE`**（宿主环境必带，不清则 Electron 以纯 Node 模式启动即崩）。已有心跳或存活进程则提示。新进程通过 3.5 秒启动检查后才把 PID 记进 `process.json`；启动失败会在响应和模块日志中说明，后续退出会清除进程记录 |
 | POST | `/stop` | 杀 `process.json` 记录的 pid 并清记录；进程已不在（ESRCH）按已停止处理 |
+| GET | `/ext/pet/balance` | **DeepSeek 余额**（2026-11-07，客户端右键菜单「查看余额」用）。成功 → `{ok:true, text:'余额 ¥xx.xx（已用 ¥yy）'}`（HTTP 200）；失败 → `{ok:false, reason:'no-key'\|'http-<status>'\|'http-timeout'\|…}`（HTTP 502）。key 来源按序：`petHooks.balanceKey`（测试）→ 环境变量 `DEEPSEEK_API_KEY` → `<DSH_HOME|~/.dsh>/.credentials.yaml` 的 `DEEPSEEK_API_KEY` 字段（只读解析）；**没 key 绝不发网络请求**。请求 DeepSeek 官方 `GET https://api.deepseek.com/user/balance`（Bearer，20s 超时），结果（成功失败都算）内存缓存 60s 防刷 |
 
 > 实现细节：模块 route 是全路径**精确匹配**（`mods.handle` 不做前缀匹配），所以素材路由是按文件
 > 一条条注册的（`ensureAssetRoutes()`：启动时 + 每次 `/config` `/packs` `/pack` 时刷新）。
@@ -238,6 +239,11 @@ pet.dispatch({ text, modality?, purpose?, force?, anim?, emotion?, emotionProfil
 | `behaviorMoodCloseWindowBelow` | 35 | 心情低于此值 AI 才可能选 `close_window` |
 | `behaviorWindowWhitelist` | 空 | 窗口动作白名单（标题关键词，逗号/换行分隔；空=不额外放行） |
 | `petReleaseLand` | true | 松手后落地：开 = 拖动松手后按甩出速度抛出去、落回屏幕底部；关 = 松手停在哪就在哪（不抛也不落）。坏值一律当开 |
+| `petGravity` | 1400 | 重力（px/s²，200~4000）：越界钳到边界、坏值回落默认；经 `/config` 的 `physics.gravity` 下发给客户端（1.0.14 起） |
+| `petRestitution` | 0.78 | 弹力（0.3~0.95）：越界钳到边界、坏值回落默认；经 `physics.restitution` 下发（1.0.14 起） |
+| `petAnimRate` | 1 | 动作频率倍率（0.5~2，步进 0.1）：挤压/动画节奏按它缩放；越界钳到边界、坏值回落默认；经 `/config` 的 `animRate` 下发（1.0.14 起） |
+| `petShowBalance` | true | 右键菜单「查看余额」显隐：只有显式 false 才关；经 `/config` 的 `balanceEnabled` 下发（1.0.14 起） |
+| `petClickChase` / `petTeaseChase` | **false** / **false** | 🔴 抓鼠标两开关（2026-11-07 起默认关）：「点击追鼠标」「晃鼠标勾引追」。**任一为 false 就把 `chase_cursor` 合并进禁用清单**（AI 动作表、反应层、聊天联动简报同一份口径）；两个都开才解锁 |
 
 ### 4.4 对话框（petChat：主人找她聊的小窗；设计稿 docs/PET-CHAT-DESIGN.md）
 
@@ -271,7 +277,7 @@ pet.dispatch({ text, modality?, purpose?, force?, anim?, emotion?, emotionProfil
 | `setWebPort(port)` | 宿主启动时注入真实 Web 端口（host.js 读 `ctx.webServer.port`，取不到退 `DSH_WEB_URL` env；注入时机 = pet 每次 module/start + boot 完成兜底）。非法端口拒绝返回 false；写 host.json 幂等 |
 | `portReady()` | 端口是否已注入 |
 | `electronInstall()` | 异步：装 Electron，npm 与 zip 直装双路径（见 `/electron-install`） |
-| `launch()` | 分离进程启动桌宠（见 `/launch`） |
+| `launch()` | 异步：分离进程启动桌宠并确认存活（见 `/launch`） |
 | `stop()` | 停止桌宠（见 `/stop`） |
 | `whisperNow({force,text?})` | 立即碎碎念一句（面板「现在碎碎念一句」/右键菜单走 `/whisper`）；上一句还在想（后台回合没结束）时返回 `reason:'thinking'` |
 | `whisperStatus()` | 同步返回碎碎念设置与状态（面板设置卡渲染用：含 `thinking`、`turnTitle`、今日次数、`nextAt`） |
@@ -336,7 +342,7 @@ Electron 运行时**不是本插件的依赖**，也**不会在启动/更新时�
    模板**从本机拷贝**到 `modules-data/pet/app/`，零网络请求、零远程代码。
 2. **安装 Electron**（面板「安装 Electron」→ `POST /electron-install`）：用户**手动点击**才执行，
    两条路径按环境自动二选一，**目标电脑不需要预装 Node/npm**：
-   - **有 npm-cli.js** → 在 `app/` 目录跑 `npm i -D electron`。下载源走 **`electronMirror`** 指到的镜像
+   - **有 npm-cli.js** → 在有客户端包清单的 `app/` 目录运行 `npm install --no-save electron@<固定版本>`。下载源走 **`electronMirror`** 指到的镜像
      （默认 `https://npmmirror.com/mirrors/electron/`，真机直连 github release 会 fetch failed；面板「桌宠」页
      「Electron 镜像」可改），不走 shell（当前 node 直接跑 npm-cli.js），安装前清掉子进程的 `ELECTRON_RUN_AS_NODE`。
      **npm 失败会自动回退到下面的 zip 直装**，不用再点第二次。

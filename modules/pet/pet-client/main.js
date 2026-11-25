@@ -10,9 +10,9 @@
 //     否则从当前形象包的 speak 池里按权重抽一段（P1）；播完回 idle。
 //   · 素材经 GET /asset/<包>/<文件>.webm?token= 拉（P1/P4；packs 目录在插件数据目录）。
 //   · 端口漂移：baseUrl 失败或轮询出错都会重读 host.json 再试。
-//   · 窗口：置顶、透明无边框、JS 拖拽 + 甩抛（physics.js，P3）、托盘退出、单实例锁。
+//   · 窗口：置顶、透明无边框、主进程权威拖拽（pet:drag-start/move/end，2026-11-07）+ 甩抛（physics.js，P3）、托盘退出、单实例锁。
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, screen, globalShortcut, shell } = require('electron')
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, screen, globalShortcut, shell, session } = require('electron')
 const fs = require('node:fs')
 const path = require('node:path')
 const { execFile, spawn } = require('node:child_process')
@@ -182,16 +182,17 @@ let fitBaseH = REST_H
 // 关 = 拖到哪松手就停在哪（不抛也不落，连「温柔放下」的原地掉落也一并停掉）。
 // 拦截点放主进程 pet:throw 一处：渲染页的甩抛（pet:throw）和原地掉落（throwWith(0,0)）都走这条通道。
 let releaseLand = true
-// 甩抛物理与互动开关（1.0.14，服务端 /config 下发，8 秒轮询即时生效）：
-//   serverPhysics：{gravity, restitution} —— 甩抛时叠在素材包默认之上（设置优先于素材包默认）；
-//   animRate：动画节奏倍率 —— 推给渲染页，空闲轮播间隔 ÷ 它（>1 更活泼）；
-//   clickChase / teaseChase：点击扑鼠标 / 晃鼠标勾引追的独立闸（默认关；=== true 口径，服务端已收口）；
-//   balanceEnabled：右键菜单「查看余额」显隐（!== false 口径，默认开）。
-let serverPhysics = null
-let animRate = 1
-let clickChase = false
-let teaseChase = false
-let balanceEnabled = true
+// ---------- /config 参数化契约（服务端 /config 下发，8 秒轮询即时生效）----------
+let animRate = 1          // 动画节奏倍率 0.5~2（缺省 1）：渲染端挤压/idle 节拍按它缩放
+let balanceEnabled = true // 右键「查看余额」显隐（缺省 true；菜单没有这一项时其他项照常可点）
+let cfgPhysics = null     // /config 的 physics.{gravity,restitution}（缺省 null = 只用默认/包物理）
+let clickChase = false    // 点击扑鼠标独立闸（默认关；=== true 口径，服务端已收口）
+let teaseChase = false    // 晃鼠标勾引追独立闸（默认关；=== true 口径，服务端已收口）
+/** 生效物理参数：默认值 ← pack.physics ← /config.physics 逐层覆盖（后者优先）。
+ *  甩抛循环与松手初速估算统一走这里，别再各自拼一份（口径不一致是老 bug 温床）。 */
+function effectivePhysics() {
+  return { ...physics.DEFAULT_PHYSICS, ...(pack && pack.physics ? pack.physics : {}), ...(cfgPhysics || {}) }
+}
 function applyScale(s) {
   if (!win || win.isDestroyed()) return
   const v = Math.min(2, Math.max(0.5, Number(s) || 1))
@@ -199,7 +200,7 @@ function applyScale(s) {
   curScale = v
   try {
     win.setResizable(true) // 创建时是 resizable:false，编程改尺寸前临时放开
-    win.setSize(Math.round(BASE_W * v), Math.round(fitBaseH * v)) // 高度跟当前贴合值走，别按 430 撑回原样
+    setSizeDip(Math.round(BASE_W * v), Math.round(fitBaseH * v)) // 高度跟当前贴合值走，别按 430 撑回原样
     win.setResizable(false)
     win.webContents.setZoomFactor(v)
   } catch {}
@@ -213,14 +214,21 @@ async function refreshConfig() {
       focusOn = cfg.focus === true
       applyScale(cfg.scale)
       releaseLand = cfg.releaseLand !== false
-      // 甩抛物理与互动开关（1.0.14）：坏值一律回落安全口径，别让坏配置把桌宠弄失灵
-      serverPhysics = (cfg.physics && typeof cfg.physics === 'object') ? cfg.physics : null
-      const rate = Number(cfg.animRate)
-      animRate = Number.isFinite(rate) && rate > 0 ? Math.min(2, Math.max(0.5, rate)) : 1
+      // 参数化契约消费（坏值/缺字段一律回落默认，参考 releaseLand/petScale 的写法口径）：
+      const ph = cfg.physics && typeof cfg.physics === 'object' ? cfg.physics : {}
+      const g = Number(ph.gravity)
+      const r = Number(ph.restitution)
+      cfgPhysics = {
+        ...(Number.isFinite(g) ? { gravity: Math.max(0, Math.min(10000, g)) } : {}),
+        ...(Number.isFinite(r) ? { restitution: Math.max(0, Math.min(1, r)) } : {}),
+      }
+      if (!cfgPhysics.gravity && cfgPhysics.restitution == null) cfgPhysics = null // 一个有效字段都没有 = 服务端没实现，整体回落
+      const ar = Number(cfg.animRate)
+      const newRate = Number.isFinite(ar) && ar > 0 ? Math.min(2, Math.max(0.5, ar)) : 1
+      if (Math.abs(newRate - animRate) > 1e-6) { animRate = newRate; pushAnimRate() } // 节奏倍率推给渲染页（8 秒轮询内生效，不用重启桌宠）
+      balanceEnabled = cfg.balanceEnabled !== false
       clickChase = cfg.clickChase === true
       teaseChase = cfg.teaseChase === true
-      balanceEnabled = cfg.balanceEnabled !== false
-      pushAnimRate() // 节奏倍率推给渲染页（改设置后 8 秒轮询内生效，不用重启桌宠）
       // 行为层配置：总开关 + 鼠标闲置分钟数 + 禁用清单，本地缓存，读不到用默认
       const b = cfg.behavior || {}
       behaviorCfg = {
@@ -240,6 +248,16 @@ async function refreshConfig() {
         blurHide: c.blurHide !== false,
       }
       applyChatHotkey()
+      // 语音对讲配置（服务端 /config 的 voiceTalk 段 + 顶层 voiceHotkey，见 VOICE-TALK-DESIGN.md §3）。
+      // 与 chatCfg 同路径：面板改键后 8 秒轮询内跟上来，不用重启桌宠。
+      const vt = (cfg.voiceTalk && typeof cfg.voiceTalk === 'object') ? cfg.voiceTalk : {}
+      voiceTalkCfg = {
+        enabled: vt.enabled !== false,
+        hotkey: String(vt.hotkey || cfg.voiceHotkey || '').trim() || 'Alt+Space',
+        micDeviceId: String(vt.micDeviceId || '').trim(),
+        speakerDeviceId: String(vt.speakerDeviceId || '').trim(),
+      }
+      applyVoiceTalkHotkey()
       if (changed || !win.__packPushed) { win.__packPushed = true; pushPackToRenderer() }
       // 干活状态：/config 也带当前档位（客户端重启/漏事件时靠它对一次，不弹提示、不再提醒）
       const key = `${(cfg.work && cfg.work.state) || ''}|${(cfg.work && cfg.work.task) || ''}`
@@ -253,13 +271,13 @@ async function refreshConfig() {
 
 // ---------- 气泡 / 动画点播（P2） ----------
 const BUBBLE_TAG = { test: '碎碎念', whisper: '碎碎念' }
-async function showBubble(text, mood, modality, anim, playbackId, purpose, tagOverride, emotionProfile) {
+async function showBubble(text, mood, modality, anim, playbackId, purpose, tagOverride, emotionProfile, big) {
   if (!win) return
   const secs = Math.min(30, Math.max(6.5, 4.5 + String(text).length * 0.11))
   // 标签：菜单「碎碎念」/ 定时碎碎念 / 干活结束各有各的标签，别都标成「主动来找你」
   const tag = tagOverride || BUBBLE_TAG[purpose] || ''
   const emo = emotionProfile && typeof emotionProfile === 'object' ? { valence: emotionProfile.valence ?? 0, arousal: emotionProfile.arousal ?? 0.4 } : null
-  const js = `window.__bubble && window.__bubble(${JSON.stringify(String(text || ''))}, ${JSON.stringify(String(mood || 'neutral'))}, ${secs}, ${JSON.stringify(String(anim || ''))}, ${JSON.stringify(String(playbackId || ''))}, ${JSON.stringify(tag)}, ${JSON.stringify(emo)})`
+  const js = `window.__bubble && window.__bubble(${JSON.stringify(String(text || ''))}, ${JSON.stringify(String(mood || 'neutral'))}, ${secs}, ${JSON.stringify(String(anim || ''))}, ${JSON.stringify(String(playbackId || ''))}, ${JSON.stringify(tag)}, ${JSON.stringify(emo)}, ${big === true ? 'true' : 'false'})`
   try {
     const played = await win.webContents.executeJavaScript(js)
     // __bubble 返回实际起播的动画与回执号（没有可用素材时 anim 为空 → 不上报）
@@ -328,6 +346,17 @@ async function pollLoop() {
       for (const e of data.events || []) {
         if (e.type === 'pack') { pack = null; win.__packPushed = false; refreshConfig(); continue }
         if (e.type === 'work') { applyWork(e); continue }
+        // 服务端 voiceTalk 状态事件（listening/thinking/speaking/idle）：切桌宠气泡/动作，无窗无挂断 UI。
+        // 去重：本地状态机已经在播同一状态时不要再弹一次（同一个气泡会闪一下 + 回执重复）；
+        // 只有服务端报的状态与最近一次本地状态不同、或本地这一轮已结束时才补位显示。
+        if (e.type === 'voiceTalk') {
+          const st = String((e && e.state) || '')
+          if (voiceTalkBusy && st === voiceTalkLastState) continue // 本地同状态已显示：吞掉
+          if (!voiceTalkBusy && st === 'idle') continue            // 空闲 idle 无需弹/清（本地 done 已收）
+          voiceTalkLastState = st
+          voiceTalkBubble(st)
+          continue
+        }
         if (e.type === 'behavior' && !firstBoot) { handleBehavior(e).catch((err) => console.error('行为动作执行失败：', err && err.stack ? err.stack : err)); continue } // 下发层：行为动作单
         if (e.type === 'proactive' && String(e.text || '').trim() && !firstBoot) {
           await showBubble(e.text, e.mood, e.modality, e.anim, e.playbackId, e.purpose, '', e.emotionProfile)
@@ -366,10 +395,40 @@ const THROW_MAX_MS = 10000  // 一次抛掷最多算 10 秒，之后强制落地
 const BODY = { left: 20, bottom: 16, width: 240, height: 240 } // 与 index.html 的 #stage 一致（裁切后人物填满舞台）
 let thrower = null          // 抛掷循环定时器句柄（非空 = 正在飞）
 
+// ---------- 统一尺寸入口（2026-11-07 E2E 实测补）：运行时自标定，不赌平台语义 ----------
+// 实测事实：dsf≠1 时 win.getSize()/setSize() 的单位语义会漂——forced 1.25 下 getSize 返回过物理
+// 像素量级（463→2290 的正反馈），fit 链路 h=round(fitBaseH*curScale) 与 setSize 实际吃的单位差一档
+// dsf，每 fit 放大 ~1.25 倍，最终把窗口撑爆、身体盒被放大 → 一切钳制算出的边界本身在屏外。
+// 解法：sizeK = 「setSize/getSize 实际语义」与「DIP 意图」的比值。1 = 平台就是 DIP；
+// ≈scaleFactor = 平台吃物理像素。所有尺寸意图一律按 DIP 表达，经这两个口子换算。
+let sizeK = 1
+/** 按 DIP 意图设窗高宽：内部乘 sizeK。调用后读回真实尺寸比对，偏差 >2 就重新标定 sizeK
+ *  （夹到 [1,4]）——运行时自标定，不赌 getSize 语义（dsf≠1 的 Windows 上实测可能是物理像素）。 */
+function setSizeDip(w, h) {
+  if (!win || win.isDestroyed()) return
+  try {
+    win.setResizable(true) // 创建时是 resizable:false，编程改尺寸前临时放开
+    win.setSize(Math.round(w * sizeK), Math.round(h * sizeK))
+    win.setResizable(false)
+    const read = win.getSize()
+    if (read && read.length >= 2 && Math.abs(read[0] - Math.round(w * sizeK)) > 2) {
+      sizeK = Math.min(4, Math.max(1, read[0] / Math.max(1, w)))
+    }
+  } catch {}
+}
+/** 读窗口尺寸并换算回「DIP 意图尺寸」（round 到整数）：所有 getSize 的消费点必须走这里。 */
+function winSizeDip() {
+  if (!win || win.isDestroyed()) return [BASE_W, fitBaseH]
+  const s = win.getSize()
+  return [Math.round((s[0] || 0) / sizeK), Math.round((s[1] || 0) / sizeK)]
+}
 /** 可见身体（#stage）在窗口内的盒子：offsetX/offsetY 是身体左上角相对窗口左上角的偏移。
- *  人物大小可调（petScale）后窗口按比例变，身体盒也要跟着变：按窗口宽 / 280（基准宽）反推倍率。 */
+ *  入参 w/h 必须是 winSizeDip() 的 DIP 意图尺寸。
+ *  E2E 实测教训（2026-11-07）：缩放倍率不能再按「窗口宽 / 280」反推——dsf≠1 时窗口宽语义漂移
+ *  （可能已是物理像素），反推出来的倍率是错的，身体盒跟着被放大、钳制边界全在屏外。
+ *  现在以 /config 下发的 curScale 为唯一权威倍率（0.5~2，面板声明式配置，服务端坏值已回落）。 */
 function bodyBox(w, h) {
-  const s = Math.min(2, Math.max(0.5, w / BASE_W)) // 实际缩放倍率（窗口宽是唯一可靠来源，别信缓存）
+  const s = Math.min(2, Math.max(0.5, curScale)) // 权威倍率 = /config 的 scale，别再从窗口宽反推
   const bw = Math.round(BODY.width * s)
   const bh = Math.round(BODY.height * s)
   const offX = Math.round(BODY.left * s)
@@ -397,7 +456,7 @@ function setWinPos(x, y) {
 function clampWindowToArea() {
   if (!win || win.isDestroyed()) return
   const [wx, wy] = win.getPosition()
-  const [w, h] = win.getSize()
+  const [w, h] = winSizeDip()
   const area = screen.getDisplayNearestPoint({ x: wx + w / 2, y: wy + h / 2 }).workArea
   const nx = Math.round(Math.min(Math.max(wx, area.x), area.x + area.width - w))
   const ny = Math.round(Math.min(Math.max(wy, area.y), area.y + area.height - h))
@@ -413,46 +472,46 @@ function virtualDesktopBounds() {
   const b = Math.max(...ds.map((d) => d.bounds.y + d.bounds.height))
   return { x, y, w: r - x, h: b - y }
 }
-// 逃生网（自愈「跑到屏幕外」）：每 30s 查一次，窗口可见面积不足 20%（基本看不见了）
-// 才拉回最近工作区。正常的贴边摆放 / 跨屏 / 压任务栏不受打扰；历史 bug 逃出去的也能自己回来。
+// 逃生网（自愈「跑到屏幕外」，2026-11-07 改口径）：每 30s 查一次，判定对象改成**可见身体矩形**
+// （窗口位置 + bodyBox 偏移）而不是整个 280×430 窗口——窗口上沿的透明气泡区越界无害，旧口径会误拉；
+// 身体哪怕缺一角（看不见她本人）就必须救回。飞行/拖拽中跳过（两者都有自己的逐帧钳制）。
 setInterval(() => {
   if (!win || win.isDestroyed()) return
+  if (thrower || drag) return
   const [wx, wy] = win.getPosition()
-  const [w, h] = win.getSize()
+  const [w, h] = winSizeDip()
+  // 尺寸正反馈自愈（2026-11-07 E2E 实测补）：fit 链路在平台语义漂移（sizeK 标定不及时）时可能
+  // 一层层把窗口撑爆。期望尺寸 = round(BASE_W*curScale) × round(fitBaseH*curScale)，任一边偏差
+  // 超过 max(40, 期望*0.25) 就直接 setSizeDip 拉回——防任何平台语义下把窗口撑爆。
+  const expW = Math.round(BASE_W * curScale)
+  const expH = Math.round(fitBaseH * curScale)
+  const tolW = Math.max(40, expW * 0.25)
+  const tolH = Math.max(40, expH * 0.25)
+  if (Math.abs(w - expW) > tolW || Math.abs(h - expH) > tolH) { setSizeDip(expW, expH); return } // 尺寸刚拉回，位置下一轮再钳
+  const b = bodyBox(w, h)
   const d = virtualDesktopBounds()
-  const visW = Math.max(0, Math.min(wx + w, d.x + d.w) - Math.max(wx, d.x))
-  const visH = Math.max(0, Math.min(wy + h, d.y + d.h) - Math.max(wy, d.y))
-  if (visW * visH < w * h * 0.2) clampWindowToArea()
+  const body = { x: wx + b.offsetX, y: wy + b.offsetY, width: b.width, height: b.height }
+  const fixed = physics.clampBodyRect(body, d)
+  if (fixed.x !== Math.round(body.x) || fixed.y !== Math.round(body.y)) {
+    // 身体夹回多少，窗口就跟着挪多少（身体相对窗口的偏移不变）
+    setWinPos(wx + (fixed.x - Math.round(body.x)), wy + (fixed.y - Math.round(body.y)))
+  }
 }, 30_000)
 function startThrow(vx, vy) {
   if (!win || win.isDestroyed()) return
   stopThrow()
   stopMover()     // 甩飞时位置由物理接管：先掐掉行为移动循环
   stopMoveAnim()  // 也别踏步了——被扔出去还在原地踏步很怪
+  // 2026-11-07 改绝对 DIP 坐标：st.x/y 现在是窗口左上角的**屏幕绝对值**（旧实现是工作区相对值，
+  // 跨屏/窗口挪动时要二次换算，容易漏）。bounds 每帧按当前窗口中心重算工作区并经 throwBounds 的
+  // areaX/areaY 入参拿到绝对边界，每步硬钳——「甩出去飞出屏幕」从机制上不可能。
   const [wx, wy] = win.getPosition()
-  const [w, h] = win.getSize()
-  const area = screen.getDisplayNearestPoint({ x: wx + w / 2, y: wy + h / 2 }).workArea
-  const body = bodyBox(w, h)
-  const bounds = physics.throwBounds({
-    W: area.width,
-    H: area.height,
-    bodyW: body.width,
-    bodyH: body.height,
-    offsetX: body.offsetX,
-    offsetY: body.offsetY,
-    sideAllow: Math.round(body.width * 0.08), // 身体左右各内缩一点才贴边反弹
-  })
+  const [w0, h0] = winSizeDip()
+  const d0 = virtualDesktopBounds()
   const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi)
-  // 起点也夹进边界：上次若被扔到屏幕外，这一次甩就自动把桌宠拉回来
-  let st = { x: clamp(wx - area.x, bounds.minX, bounds.maxX), y: clamp(wy - area.y, bounds.minY, bounds.maxY), vx, vy }
-  // 叠加顺序（1.0.14）：内置默认 ← 素材包 physics ← 服务端下发的 physics（/config 的 cfg.physics）。
-  // 设置优先于素材包默认：面板改了「下落加速度/反弹系数」要立刻压过包里的默认手感；
-  // 坏值兜底在服务端 petPhysics() 已做过，这里只做浅合并，没有下发就维持包默认（老包零退化）。
-  const ph = {
-    ...physics.DEFAULT_PHYSICS,
-    ...(pack && pack.physics ? pack.physics : {}),
-    ...(serverPhysics && typeof serverPhysics === 'object' ? serverPhysics : {}),
-  }
+  // 起点也先钳回虚拟桌面（历史 bug 已把桌宠扔出屏时，这一甩自动拉回来）
+  let st = { x: clamp(wx, d0.x, d0.x + d0.w - w0), y: clamp(wy, d0.y, d0.y + d0.h - h0), vx, vy }
+  const ph = effectivePhysics()
   const t0 = Date.now()
   let last = t0
   let lastPos = ''
@@ -460,7 +519,11 @@ function startThrow(vx, vy) {
   let squashCount = 0
   const finish = () => {
     stopThrow()
-    if (win && !win.isDestroyed()) win.webContents.executeJavaScript('window.__onThrowEnd && window.__onThrowEnd()').catch(() => {})
+    if (win && !win.isDestroyed()) {
+      clampWindowToArea() // 收尾兜底：把窗口贴回工作区（粗钳整窗，足够收口）
+      applyFitWindow(true) // 飞行期间被跳过的窗高调整也在这里补
+      win.webContents.executeJavaScript('window.__onThrowEnd && window.__onThrowEnd()').catch(() => {})
+    }
   }
   const stepFrame = () => {
     thrower = null
@@ -468,16 +531,39 @@ function startThrow(vx, vy) {
     const now = Date.now()
     const dt = Math.min(0.05, Math.max((now - last) / 1000, 1e-4)) // 巨帧/同毫秒多帧都夹住
     last = now
+    // 每帧按**当前窗口中心**重算工作区与身体盒：窗口跨屏/被外部挪动后边界立刻跟上
+    const [cx, cy] = win.getPosition()
+    const [w, h] = winSizeDip()
+    const area = screen.getDisplayNearestPoint({ x: cx + w / 2, y: cy + h / 2 }).workArea
+    const body = bodyBox(w, h)
+    const bounds = physics.throwBounds({
+      W: area.width,
+      H: area.height,
+      bodyW: body.width,
+      bodyH: body.height,
+      offsetX: body.offsetX,
+      offsetY: body.offsetY,
+      areaX: area.x, // 绝对边界（新入参，向后兼容缺省 0）
+      areaY: area.y,
+      sideAllow: Math.round(body.width * 0.08), // 身体左右各内缩一点才贴边反弹
+    })
     let impact = 0
     const n = physics.throwSubsteps(st.vx, st.vy, dt)
     for (let i = 0; i < n; i++) {
       st = physics.throwStep(st, dt / n, bounds, ph)
+      // 硬保险（任务书口径）：throwStep 已按当帧 bounds 反弹；若因跨屏边界突变仍越界，
+      // 硬钳回并清该轴速度——宁可少弹一下也绝不飞出屏。正常单屏反弹不受影响（取舍见任务留言）。
+      if (st.x < bounds.minX) { st.x = bounds.minX; st.vx = 0 }
+      else if (st.x > bounds.maxX) { st.x = bounds.maxX; st.vx = 0 }
+      if (st.y < bounds.minY) { st.y = bounds.minY; st.vy = 0 }
+      else if (st.y > bounds.maxY) { st.y = bounds.maxY; st.vy = 0 }
       if (st.bounced && st.vy > 0) impact = Math.max(impact, Math.abs(st.vy))
       if (st.atRest) break
     }
-    if (now - t0 > THROW_MAX_MS) st = { ...st, y: bounds.maxY, vx: 0, vy: 0, atRest: true } // 超时兜底：直接落地
-    const px = Math.round(area.x + st.x)
-    const py = Math.round(area.y + st.y)
+    // 超时兜底也用当帧 bounds：直接贴到当帧地面（旧实现按首帧 area，跨屏后会把 y 钉错地方）
+    if (now - t0 > THROW_MAX_MS) st = { ...st, y: bounds.maxY, vx: 0, vy: 0, atRest: true }
+    const px = Math.round(st.x)
+    const py = Math.round(st.y)
     const key = px + ',' + py
     if (key !== lastPos) { // 位置没变就不调原生接口：每秒几百次空搬运同样能把窗口拖死
       lastPos = key
@@ -551,7 +637,7 @@ function stopMoveAnim() {
 function bodyRect() {
   if (!win || win.isDestroyed()) return null
   const [wx, wy] = win.getPosition()
-  const [w, h] = win.getSize()
+  const [w, h] = winSizeDip()
   const b = bodyBox(w, h)
   return { x: wx + b.offsetX, y: wy + b.offsetY, width: b.width, height: b.height }
 }
@@ -595,7 +681,7 @@ function moveWindowTo(getTarget, opts) {
       const target = getTarget()
       if (!target) { debugIconLog({ kind: 'move', phase: 'abort', why: 'target-null' }); return done(false) }
       const now = Date.now()
-      const [w, h] = win.getSize()
+      const [w, h] = winSizeDip()
       const [x, y] = win.getPosition()
       const b = bodyBox(w, h)
       const area = screen.getDisplayNearestPoint({ x: x + w / 2, y: y + h / 2 }).workArea
@@ -1540,7 +1626,7 @@ const behaviorCtx = () => ({
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   pickWanderTarget: (from) => {
     if (!win || win.isDestroyed()) return null
-    const [w, h] = win.getSize()
+    const [w, h] = winSizeDip()
     const b = bodyBox(w, h)
     const area = screen.getPrimaryDisplay().workArea
     // 返回的是**身体中心**的可达点（moveWindowTo 现在按身体中心对齐）：
@@ -1670,7 +1756,7 @@ setInterval(() => {
 ipcMain.on('pet:move', (_e, { x, y }) => {
   stopThrow()
   if (!win || !Number.isFinite(x) || !Number.isFinite(y)) return
-  const [w, h] = win.getSize()
+  const [w, h] = winSizeDip()
   const d = virtualDesktopBounds()
   // 夹进虚拟桌面：窗口整体留在屏幕可及范围里（松手后甩抛/落地再把身体精确夹回工作区）
   const nx = Math.round(Math.min(Math.max(x, d.x), d.x + d.w - w))
@@ -1680,6 +1766,68 @@ ipcMain.on('pet:move', (_e, { x, y }) => {
   if (lastMove && lastMove.x === nx && lastMove.y === ny) return
   setWinPos(nx, ny)
 })
+
+// ---------- 主进程权威拖拽（2026-11-07 新通道 pet:drag-start/move/end；pet:move 保留向后兼容）----------
+// 旧机制偏移根因：渲染页自算坐标（screenInfo + e.screenX）在 forwarded-input 穿透窗 + setZoomFactor
+// 下会与真实光标错位（纯 Electron 探针已验证 e.screenX == screen.getCursorScreenPoint()，DIP 1:1）。
+// 新机制：渲染页只发信号不带坐标；主进程 drag-start 记 grabOffset（光标 - 窗口左上角，全 DIP），
+// 起 60fps 循环：读光标 → winPos = cursor - grabOffset → 夹虚拟桌面 → setWinPos，同时采 DIP 轨迹
+// （≤64 条，trimTrail 按时间裁剪）。drag-end 用 trimTrail + estimateReleaseVelocity 算初速：
+// releaseLand 关 → 停在哪就在哪；isClick → 原地掉落（等价旧 drop()，同样受 releaseLand 门控）。
+const DRAG_FRAME_MS = 16   // 拖拽循环节拍 ≈60fps（与甩抛/移动循环一致；主进程没有 rAF，用定时器）
+const DRAG_STALE_MS = 3000 // 心跳兜底：渲染页按住期间每 300ms 有保活心跳，3s 内任何心跳都没有才判丢失（pointerup 丢失/指针捕获异常），绝不永久拖着
+const DRAG_TRAIL_MAX = 64  // 轨迹上限（与旧渲染页口径一致，时间窗口由 trimTrail 裁）
+let drag = null // { grabOffset:{x,y}, trail:[{t,x,y}], lastPos, timer, lastSeen }
+function stopDrag() {
+  if (!drag) return
+  clearTimeout(drag.timer)
+  drag = null
+}
+/** 拖拽收尾：按 isClick / 轨迹初速决定原地掉落或甩抛（统一走 startThrow，物理口径单一来源）。 */
+function endDragSession(isClick) {
+  const d = drag
+  stopDrag()
+  if (!d) return // 孤立 drag-end（异常路径/没发生过拖拽）：不做任何收尾，更不能原地掉落
+  if (!win || win.isDestroyed()) return
+  if (!releaseLand) return // 松手落地关：停在哪就在哪（与旧 pet:throw 拦截口径一致）
+  const trail = physics.trimTrail(d ? d.trail : [], Date.now())
+  const v = isClick ? null : physics.estimateReleaseVelocity(trail, Date.now(), effectivePhysics())
+  startThrow(v ? v.vx : 0, v ? v.vy : 0) // isClick / 温柔放下 = 零初速原地掉落
+  applyFitWindow(true) // 收尾再贴：拖拽期间被跳过的窗高调整在这里补上（force，甩抛循环会逐帧重算 bounds 跟上）
+}
+function dragLoop() {
+  const d = drag
+  if (!d) return
+  if (!win || win.isDestroyed()) { stopDrag(); return }
+  let c = null
+  try { c = screen.getCursorScreenPoint() } catch { c = null }
+  if (!c) { stopDrag(); return } // 拿不到光标（罕见）：放弃拖拽，别空转
+  const now = Date.now()
+  const [w, h] = winSizeDip()
+  const dd = virtualDesktopBounds()
+  // 窗口整体留在所有屏并集内（松手后甩抛/落地再把身体精确夹回工作区，与旧 pet:move 同口径）
+  const nx = Math.round(Math.min(Math.max(c.x - d.grabOffset.x, dd.x), dd.x + dd.w - w))
+  const ny = Math.round(Math.min(Math.max(c.y - d.grabOffset.y, dd.y), dd.y + dd.h - h))
+  const key = nx + ',' + ny
+  if (key !== d.lastPos) { d.lastPos = key; if (!setWinPos(nx, ny)) { stopDrag(); return } }
+  d.trail.push({ t: now, x: c.x, y: c.y }) // 主进程直接采 DIP 轨迹（初速估算直接可用，无需换算）
+  if (d.trail.length > DRAG_TRAIL_MAX) d.trail.shift()
+  if (now - d.lastSeen > DRAG_STALE_MS) { endDragSession(false); return } // 心跳断了：按普通松手兜底
+  d.timer = setTimeout(dragLoop, DRAG_FRAME_MS)
+}
+ipcMain.on('pet:drag-start', () => {
+  if (!win || win.isDestroyed()) return
+  stopThrow()
+  stopMover() // 与行为移动互斥（用户拖着走时别让 wander/chase 抢窗口）
+  stopDrag()
+  let c = null
+  try { c = screen.getCursorScreenPoint() } catch { return }
+  const [wx, wy] = win.getPosition()
+  drag = { grabOffset: { x: c.x - wx, y: c.y - wy }, trail: [], lastPos: '', timer: null, lastSeen: Date.now() }
+  dragLoop()
+})
+ipcMain.on('pet:drag-move', () => { if (drag) drag.lastSeen = Date.now() }) // 心跳：无坐标，只证明指针还按着
+ipcMain.on('pet:drag-end', (_e, isClick) => endDragSession(isClick === true))
 ipcMain.on('pet:throw', (_e, { vx, vy }) => {
   // 「松手落地」关掉：松手停在哪就在哪 —— 甩抛与原地掉落（vx=vy=0）一并拦下
   if (!releaseLand) return
@@ -1699,30 +1847,35 @@ ipcMain.on('pet:hit', (_e, hit) => {
 // 现在渲染页按内容上报基础高度（气泡收起=264，气泡弹出=264+12+气泡实高+8，上限 430），
 // 主进程乘当前倍率后改窗高，**底边不动**（窗口向上长/向下缩，桌宠位置视觉不变）。
 // 渲染页报的是缩放前的 CSS px（zoomFactor 只缩内容），这里统一乘 curScale 换算成真实窗口像素。
-ipcMain.on('pet:fit', (_e, baseH) => {
+/** 按当前 fitBaseH/curScale 调整窗高（底边钉住）。force=true 供拖拽/飞行收尾后补贴。 */
+function applyFitWindow(force) {
   if (!win || win.isDestroyed()) return
-  // 记住「内容需要的基础高度」：applyScale 之后 /config 的 scale 变化时也按它算，别回到 430
-  fitBaseH = Math.min(BASE_H, Math.max(REST_H, Math.round(Number(baseH)) || REST_H))
+  if (!force && (drag || thrower)) return // 拖拽/飞行中跳过（原因见 pet:fit 注释）
   const minH = Math.round(REST_H * curScale)  // 气泡收起：16(底距)+240(舞台)+8(顶距)
   const maxH = Math.round(BASE_H * curScale)   // 兜底上限：6 行长文本也放得下
-  const h = Math.min(maxH, Math.max(minH, Math.round(fitBaseH * curScale)))
-  const [w, oldH] = win.getSize()
+  const h = Math.min(maxH, Math.max(minH, Math.round(fitBaseH * curScale))) // DIP 意图，setSizeDip 负责换算
+  const [w, oldH] = winSizeDip()
   if (h === oldH) return
   try {
     const [, y] = win.getPosition()
-    win.setResizable(true) // 创建时是 resizable:false，编程改尺寸前临时放开
-    win.setSize(w, h)
+    setSizeDip(w, h)
     const ny = y + oldH - h // 高度差全补在 y 上 = 底边钉住
     win.setPosition(win.getPosition()[0], ny)
     // 窗口位置变了，移动基线也要跟上：不然拖拽去重拿陈基线会把第一帧当「重复坐标」吞掉
     lastMove = { x: win.getPosition()[0], y: ny }
     win.setResizable(false)
   } catch {}
+}
+ipcMain.on('pet:fit', (_e, baseH) => {
+  if (!win || win.isDestroyed()) return
+  // 记住「内容需要的基础高度」：applyScale 之后 /config 的 scale 变化时也按它算，别回到 430
+  fitBaseH = Math.min(BASE_H, Math.max(REST_H, Math.round(Number(baseH)) || REST_H))
+  applyFitWindow(false)
 })
 ipcMain.handle('pet:screen', () => {
   if (!win) return null
   const [x, y] = win.getPosition()
-  const [w, h] = win.getSize()
+  const [w, h] = winSizeDip()
   const area = screen.getDisplayNearestPoint({ x: x + w / 2, y: y + h / 2 }).workArea
   return { W: area.width, H: area.height, x, y, areaX: area.x, areaY: area.y, size: w }
 })
@@ -1763,7 +1916,7 @@ async function playAnimById(id) {
 function goHome() {
   if (!win || win.isDestroyed()) return
   stopThrow()
-  const [w, h] = win.getSize()
+  const [w, h] = winSizeDip()
   const area = screen.getPrimaryDisplay().workArea
   setWinPos(area.x + area.width - w - 24, area.y + area.height - h - 16)
 }
@@ -1817,6 +1970,21 @@ function openPanel() {
     win?.webContents.executeJavaScript(`window.__whisper && window.__whisper(${JSON.stringify('面板在浏览器标签 ' + (h ? h.baseUrl : '127.0.0.1') + ' 里～')})`).catch(() => {})
   })
 }
+/** 查看余额（2026-11-07 新增菜单项）：走插件 GET /ext/pet/balance（服务端带 60s 内存缓存）。
+ *  契约：{ ok:true, text:'余额 ¥xx.xx（已用 ¥yy）' } 或 { ok:false, reason }。失败/没连上一律兜底文案。
+ *  展示走大字气泡（big=true，少爷反馈：余额太小看不清）：第一行只留余额，「已用」换行放第二行。 */
+async function showBalance() {
+  let text = '余额暂时查不到'
+  let big = false
+  try {
+    const d = await apiGet('/ext/pet/balance')
+    if (d && d.ok === true && d.text) {
+      text = String(d.text).replace(/（(已用[^）]*)）/g, '\n$1') // '余额 ¥x（已用 ¥y）' → '余额 ¥x\n已用 ¥y'
+      big = true
+    }
+  } catch {}
+  showBubble(text, '', 'text', '', '', 'behavior', '余额', null, big)
+}
 ipcMain.on('pet:menu', () => {
   if (!win || win.isDestroyed()) return
   const { manifest, cfg } = loadPackMeta()
@@ -1853,6 +2021,7 @@ ipcMain.on('pet:menu', () => {
       },
     }] : []),
     { label: '收起气泡', click: hideBubble },
+    ...(balanceEnabled ? [{ label: '查看余额', click: showBalance }] : []), // /config 的 balanceEnabled 控制显隐（缺省 true）
     { type: 'separator' },
     { label: '打开面板', click: openPanel },
     { label: focusOn ? '关闭专注模式' : '开启专注模式', click: () => { focusOn = !focusOn; apiPost('/focus', { enabled: focusOn, source: 'pet-menu' }) } },
@@ -1879,7 +2048,7 @@ function reportChatState() {
 function positionChatWin() {
   if (!chatWin || chatWin.isDestroyed() || !win || win.isDestroyed()) return
   try {
-    const [pw, ph] = win.getSize()
+    const [pw, ph] = winSizeDip()
     const [px, py] = win.getPosition()
     const [cw, ch] = chatWin.getSize()
     const area = screen.getDisplayNearestPoint({ x: px + pw / 2, y: py + ph / 2 }).workArea
@@ -1979,6 +2148,178 @@ ipcMain.on('pet:chat:send', async (_e, text) => {
 })
 
 
+// ---------- 免界面语音对讲（voice-talk）：全局热键 toggle + 隐藏录音窗 + 系统外放 ----------
+// 设计权威：docs/VOICE-TALK-DESIGN.md。无窗、无呼叫/挂断 UI、绝不 alwaysOnTop 的可见卡死窗。
+// 流程：热键 #1 → 隐藏窗 getUserMedia + MediaRecorder 开始（气泡"在听"）；
+//       热键 #2 → 停止 → base64 wav → POST /voice/talk { audio } → 播放（气泡"在想/在说"）。
+// 所有环节都有超时与失败恢复，任何一步失败后热键都能再次触发（绝不卡死、绝不 AppHangTransient）。
+let voiceTalkCfg = { enabled: true, hotkey: 'Alt+Space', micDeviceId: '', speakerDeviceId: '' }
+let voiceTalkReg = ''          // 当前已注册的全局对讲热键（'' = 未注册）
+let voiceTalkWarnedAt = 0      // 占用提醒防抖：5 分钟内只气泡提醒一次
+let voiceTalkWin = null        // 隐藏录音窗（show:false，永不显示）
+let voiceTalkReady = false     // 隐藏窗 did-finish-load 就绪
+let voiceTalkBusy = false      // 一轮对讲正在处理中（录音/请求/播放期间不重复 toggle）
+let voiceTalkRecording = false // 是否正在录音（隐藏窗侧权威，这里只记状态供气泡用）
+/** 隐藏录音窗是否存活。 */
+const voiceTalkWinAlive = () => Boolean(voiceTalkWin && !voiceTalkWin.isDestroyed())
+/** 确保隐藏录音窗存在（只在首次触发时惰性创建，不占可见窗口）。 */
+function ensureVoiceTalkWin() {
+  if (voiceTalkWinAlive()) return voiceTalkWin
+  voiceTalkReady = false
+  voiceTalkWin = new BrowserWindow({
+    width: 1, height: 1, show: false, frame: false, resizable: false,
+    skipTaskbar: true, transparent: true,
+    // backgroundThrottling:false —— 隐藏窗也不能被后台节流，否则 MediaRecorder/onstop 可能被饿死。
+    // nodeIntegration 直连 ipcRenderer（与 chat.html/house.html 同款，本地页无远程内容）。
+    webPreferences: { nodeIntegration: true, contextIsolation: false, spellcheck: false, backgroundThrottling: false },
+  })
+  voiceTalkWin.loadFile(path.join(__dirname, 'voice-talk.html')).catch((err) => {
+    console.error('语音对讲隐藏窗加载失败：', err && err.message ? err.message : err)
+    voiceTalkReady = false
+    voiceTalkBusy = false
+  })
+  voiceTalkWin.webContents.on('did-finish-load', () => {
+    voiceTalkReady = true
+    pushVoiceTalkCfg()
+  })
+  voiceTalkWin.webContents.on('render-process-gone', (_e, d) => {
+    voiceTalkReady = false
+    voiceTalkBusy = false
+    voiceTalkRecording = false
+    if (d && d.reason !== 'clean-exit' && d.reason !== 'exited') {
+      debugIconLog({ kind: 'voice-talk-render-gone', reason: d.reason, exitCode: d.exitCode })
+    }
+  })
+  voiceTalkWin.on('closed', () => { voiceTalkWin = null; voiceTalkReady = false; voiceTalkBusy = false; voiceTalkRecording = false })
+  return voiceTalkWin
+}
+/** 把服务端的对讲配置推给隐藏窗（token 不出主进程；请求由主进程代理）。 */
+function pushVoiceTalkCfg() {
+  if (!voiceTalkWinAlive() || !voiceTalkReady) return
+  voiceTalkWin.webContents.executeJavaScript(
+    `window.__voiceCfg && window.__voiceCfg(${JSON.stringify(voiceTalkCfg)})`).catch(() => {})
+}
+/** 全局对讲热键注册/注销：与 applyChatHotkey 同款——先注销旧键再注册新键，占用失败提示一次。 */
+function applyVoiceTalkHotkey() {
+  const want = voiceTalkCfg.enabled && voiceTalkCfg.hotkey ? voiceTalkCfg.hotkey : ''
+  if (want === voiceTalkReg) return
+  if (voiceTalkReg) { try { globalShortcut.unregister(voiceTalkReg) } catch {} ; voiceTalkReg = '' }
+  if (!want) return
+  let ok = false
+  try { ok = globalShortcut.register(want, toggleVoiceTalk) } catch { ok = false }
+  if (ok) {
+    voiceTalkReg = want
+  } else {
+    if (Date.now() - voiceTalkWarnedAt > 5 * 60_000) {
+      voiceTalkWarnedAt = Date.now()
+      showBubble(`语音对讲热键 ${want} 被别的程序占用了（可在面板换一个）`, '', 'text', '', '', 'behavior', '语音对讲')
+    }
+  }
+}
+let voiceTalkLastState = ''    // 最近一次显示过的对讲状态（服务端事件去重）
+/** 桌面极简状态气泡（在听/在想/在说/出错），走现有 showBubble 通道，无窗无挂断 UI。 */
+function voiceTalkBubble(state) {
+  voiceTalkLastState = String(state || '')
+  const map = {
+    listening: '🎤 在听…', thinking: '🤔 在想…', speaking: '🔊 在说…',
+    idle: '', error: '语音对讲出了点问题，再按一下热键试试',
+  }
+  const text = map[state]
+  if (text) showBubble(text, '', 'text', '', '', 'whisper', '语音对讲')
+  else hideBubble()
+}
+let voiceTalkGuard = null       // 活动看门狗：70s 没收到隐藏窗任何状态回报才强制收尾（防渲染层卡死）
+const VOICE_WATCHDOG_MS = 70_000 // > 网络 30s + 播放 15s 的最坏等待，保证合法一轮不被误杀
+let voiceTalkLastPress = 0      // 热键防抖：200ms 内重复事件只认一次（操作系统可能连发）
+/** 看门狗：任何状态回报都续一次（＝渲染层还活着）；50s 完全静默才强制收尾。
+ *  不用"整轮固定 45s"是因为合法一轮最长可达 8s 取麦 + 60s 录音 + 30s 网络 + 15s 播放。 */
+function armVoiceWatchdog() {
+  if (voiceTalkGuard) clearTimeout(voiceTalkGuard)
+  voiceTalkGuard = setTimeout(() => {
+    if (voiceTalkWinAlive()) voiceTalkWin.webContents.executeJavaScript('window.__voiceStop && window.__voiceStop()').catch(() => {})
+    voiceTalkBusy = false
+    voiceTalkRecording = false
+    voiceTalkGuard = null
+  }, VOICE_WATCHDOG_MS)
+}
+/** 热键 toggle：第 1 下开始录音，第 2 下停止并送出。
+ *  注意：不能在 main 侧用"一轮未结束就忽略"的 busy 锁——第 2 下必须能穿透到隐藏窗才能停止录音；
+ *  重入保护放在渲染层的 phase 状态机里（只在 thinking/speaking 时吞掉重复按键）。 */
+function toggleVoiceTalk() {
+  if (!voiceTalkCfg.enabled) return
+  const now = Date.now()
+  if (now - voiceTalkLastPress < 200) return // 防连发（不影响正常的"按一下→再按一下"）
+  voiceTalkLastPress = now
+  const w = ensureVoiceTalkWin()
+  if (!voiceTalkWinAlive()) { voiceTalkBubble('error'); return }
+  // 窗口还没加载完（首次触发极短窗口期）：此时不录音，提示用户再按一下（绝不阻塞等待）
+  if (!voiceTalkReady) { voiceTalkBubble('error'); return }
+  // 权限闸：在渲染层调 getUserMedia 之前先打开（permission handler 检查这个 flag），
+  // 整轮结束（voice:done / 出错 / 兜底超时）再关——只对本隐藏窗、只在录音周期内放行 media。
+  voiceTalkRecording = true
+  armVoiceWatchdog()
+  w.webContents.executeJavaScript('window.__voiceToggle && window.__voiceToggle()').catch(() => {
+    voiceTalkBusy = false
+    voiceTalkRecording = false
+    if (voiceTalkGuard) { clearTimeout(voiceTalkGuard); voiceTalkGuard = null }
+    voiceTalkBubble('error')
+  })
+}
+// 隐藏窗状态回报：listening/thinking/speaking/idle/error（同步桌宠气泡，不改变 busy 锁）
+ipcMain.on('voice:state', (_e, state) => {
+  const s = String(state || '')
+  armVoiceWatchdog() // 活体信号：渲染层还在推进状态，续一次看门狗
+  if (s === 'listening' || s === 'thinking' || s === 'speaking') voiceTalkBusy = true
+  if (s === 'listening') voiceTalkRecording = true
+  if (s === 'idle' || s === 'error') { voiceTalkBusy = false; voiceTalkRecording = false }
+  if (s === 'error') return // 具体原因由 voice:message 带人话文案显示
+  voiceTalkBubble(s)
+})
+// 带具体原因的错误气泡（麦克风被占用/权限/网络/识别没配好等）
+ipcMain.on('voice:message', (_e, text) => {
+  showBubble(String(text || '语音对讲出了点问题，再按一下热键试试'), '', 'text', '', '', 'whisper', '语音对讲')
+})
+// 一轮结束（成功/失败都发）：解锁热键，清掉兜底定时器。error 时 bubble 已由 voice:state 显示。
+ipcMain.on('voice:done', () => {
+  voiceTalkBusy = false
+  voiceTalkRecording = false
+  if (voiceTalkGuard) { clearTimeout(voiceTalkGuard); voiceTalkGuard = null }
+})
+// 服务端请求代理（隐藏窗 invoke）：只放行 /voice/talk 单轮路由，token 不出主进程。
+// 30 秒超时（含在隐藏窗侧的另一层超时保护），4xx/5xx 的 JSON body 原样回传（中文错误码不丢）。
+ipcMain.handle('voice:request', async (_e, opts) => {
+  const o = opts || {}
+  const p = String(o.path || '')
+  if (p !== '/voice/talk' && p !== '/voice/talk/config') return { ok: false, error: 'bad-path' }
+  const host = readHost()
+  if (!host) return { ok: false, error: 'host-not-ready', message: '桌宠还没连上插件，稍等一下再试' }
+  try {
+    const isGet = p.endsWith('/config')
+    const res = await fetch(`${host.baseUrl}${host.api}${p}`, {
+      method: isGet ? 'GET' : 'POST',
+      headers: { 'x-pet-token': host.token, ...(isGet ? {} : { 'content-type': 'application/json' }) },
+      body: isGet ? undefined : JSON.stringify(o.body || {}),
+      signal: AbortSignal.timeout(30_000),
+    })
+    let data = null
+    try { data = await res.json() } catch { data = null }
+    if (data && typeof data === 'object') return data
+    return { ok: false, error: 'http-' + res.status, message: '服务没答应（HTTP ' + res.status + '）' }
+  } catch (err) {
+    const timeout = err && (err.name === 'TimeoutError' || err.name === 'AbortError')
+    return { ok: false, error: timeout ? 'network-timeout' : 'network-error',
+      message: timeout ? '网络超时了，再按一下热键重试' : '没连上插件，检查网络后再试' }
+  }
+})
+// 麦克风列表上报（隐藏窗 enumerateDevices → 服务端存 micDeviceId，沿面板配置通道 /config 的 voiceTalk 段）。
+ipcMain.on('voice:mics', (_e, list) => {
+  const mics = Array.isArray(list) ? list.slice(0, 20).map((d) => ({
+    deviceId: String(d && d.deviceId || '').slice(0, 200),
+    label: String(d && d.label || '').slice(0, 120),
+  })) : []
+  apiPost('/voice/talk/mics', { mics })
+})
+
 // ---------- 小屋（复式场景窗：移植自 zizic04/dsh-pet-home，MIT；素材 CC BY-NC-SA 禁商用，自用） ----------
 // 与对话框同款的第二窗模式（nodeIntegration 直连 ipc，省一套 preload）：
 //   入屋 = 右键「回小屋」→ 隐藏桌面窗、打开 house.html 场景窗（query 带 base/token，素材走 /asset/house/*）；
@@ -2023,7 +2364,44 @@ function openHouse() {
   houseWin.webContents.on('context-menu', (event) => event.preventDefault())
   houseWin.loadFile(path.join(__dirname, 'house.html'), {
     query: { base: host ? host.baseUrl + host.api : '', token: host ? host.token : '' },
+  }).then(() => {
+    // 【白屏兜底 2026-11-08】Windows 实测：隐藏首开的窗口偶发**不触发 ready-to-show**（首帧绘制
+    // 被饿死，页面其实加载好了，console/did-fail-load 全程无异常），show() 永远不执行，窗口就
+    // 一直「白」着藏在屏幕外。加载成功后 2.5s 检查一次，仍不可见就直接亮窗——backgroundColor
+    // 已是深色 #1d1a17，最多闪一下深底，不会再白。只补第一次（isVisible 后此分支不再生效）。
+    setTimeout(() => {
+      try {
+        if (houseAlive() && !houseWin.isVisible()) { houseWin.show(); pushHouseAssets() }
+      } catch {}
+    }, 2500)
   }).catch((err) => console.error('小屋页加载失败：', err && err.message ? err.message : err))
+  // ---------- 小屋窗自愈（2026-11-07）：主窗同款——白屏兜底，防崩循环靠冷却 + 次数上限。
+  // 实测小屋会整页没起来（页面本身加载失败/渲染进程崩溃），那种情况 house.js 里的错误层根本
+  // 不存在，必须由主进程救。重试时 query 原样带 base/token（host.json 端口漂移后可能变化，
+  // 每次重试都重新 readHost 拿最新值）。 ----------
+  const houseQuery = () => {
+    const h = readHost()
+    return { base: h ? h.baseUrl + h.api : '', token: h ? h.token : '' }
+  }
+  let houseReloadAt = 0 // 渲染进程崩溃重载的冷却戳（10s 内只救一次）
+  let houseLoadRetryLeft = 2 // 主框架加载失败的重试余量
+  houseWin.webContents.on('render-process-gone', (_e, d) => {
+    if (!d || d.reason === 'clean-exit' || d.reason === 'exited') return
+    debugIconLog({ kind: 'house-render-gone', reason: d.reason, exitCode: d.exitCode })
+    const now = Date.now()
+    if (now - houseReloadAt < 10_000) return
+    houseReloadAt = now
+    try { houseWin.webContents.reload() } catch {}
+  })
+  houseWin.webContents.on('did-fail-load', (_e, code, desc, _url, isMainFrame) => {
+    if (!isMainFrame || code === -3) return // -3 = ABORTED（换源/重载主动中断），不算失败
+    debugIconLog({ kind: 'house-load-fail', code, desc: String(desc || '') })
+    if (houseLoadRetryLeft <= 0) return
+    houseLoadRetryLeft--
+    try { houseWin.loadFile(path.join(__dirname, 'house.html'), { query: houseQuery() })
+      .catch((err) => console.error('小屋页重试加载失败：', err && err.message ? err.message : err)) } catch {}
+  })
+  houseWin.webContents.on('did-finish-load', () => { houseLoadRetryLeft = 2 }) // 加载成功：余量回满
   houseWin.once('ready-to-show', () => { houseWin.show(); pushHouseAssets() })
   // 关窗 = 出屋：桌面窗回到屏幕里（位置不变），身份菜单原样
   houseWin.on('closed', () => { houseWin = null; showPetFromHouse(null) })
@@ -2035,7 +2413,7 @@ function showPetFromHouse(point) {
   try {
     if (win && !win.isDestroyed()) {
       if (point) {
-        const [w, h] = win.getSize()
+        const [w, h] = winSizeDip()
         const area = screen.getDisplayNearestPoint(point).workArea
         const x = Math.round(Math.min(Math.max(point.x - w / 2, area.x), area.x + area.width - w))
         const y = Math.round(Math.min(Math.max(point.y - h / 2, area.y), area.y + area.height - h))
@@ -2074,26 +2452,66 @@ function createWindow() {
   // 渲染页检测到悬停在宠物/气泡上时发 pet:hit=true 恢复交互，离开再放行。
   try { win.setIgnoreMouseEvents(true, { forward: true }) } catch {}
   win.loadFile(path.join(__dirname, 'index.html'))
-  win.once('ready-to-show', () => { clampWindowToArea(); pushPackToRenderer() })
+  // ---------- 白屏自愈（2026-11-07）：渲染进程崩溃 / 主框架加载失败后窗口会留着一块白板没人救，
+  // 自动重载救回；防崩循环靠「冷却 + 次数上限」，两条路各有一套，互不影响。 ----------
+  let lastReloadAt = 0          // 渲染进程崩溃重载的冷却戳（10s 内只救一次）
+  let loadRetryLeft = 2         // 主框架加载失败的重试余量（成功后清零，见 did-finish-load）
+  const reloadForWhiteScreen = () => {
+    const now = Date.now()
+    if (now - lastReloadAt < 10_000) return // 冷却内不重复 reload：防「崩→重载→又崩」打满 CPU
+    lastReloadAt = now
+    try { win.webContents.reload() } catch {}
+  }
+  win.webContents.on('render-process-gone', (_e, d) => {
+    // clean-exit/exited 是正常退出（窗口关闭路径），不算事故；其余（crashed/oom/killed 等）都救
+    if (!d || d.reason === 'clean-exit' || d.reason === 'exited') return
+    debugIconLog({ kind: 'render-gone', reason: d.reason, exitCode: d.exitCode })
+    reloadForWhiteScreen()
+  })
+  win.webContents.on('did-fail-load', (_e, code, desc, url, isMain) => {
+    // 只管主框架；-3(ABORTED) 是换源/重载时主动中断的常态，不是失败
+    if (!isMain || code === -3) return
+    debugIconLog({ kind: 'load-fail', code, desc: String(desc || '') })
+    if (loadRetryLeft <= 0) return // 次数上限：连续挂就别无限重试（素材/端口问题交给 pollLoop 重推）
+    loadRetryLeft--
+    try { win.loadFile(path.join(__dirname, 'index.html')) } catch {}
+  })
+  win.webContents.on('did-finish-load', () => { loadRetryLeft = 2 }) // 加载成功：重试余量回满
+  win.once('ready-to-show', () => { clampWindowToArea(); pushPackToRenderer(); pushAnimRate() })
   win.on('show', () => { clampWindowToArea(); stopThrow() }) // 重新显示时确保回到屏幕内、且没有残留的飞行循环
-  win.on('hide', () => stopThrow())
-  win.on('closed', () => { stopThrow(); win = null })
+  win.on('hide', () => { stopThrow(); stopDrag() }) // 隐藏/关窗时拖拽循环也要停：stopDrag 不依赖 win，先清再置 null 都安全
+  win.on('closed', () => { stopThrow(); stopDrag(); win = null })
 }
 
-function createTray() {
+function applyTrayMenu() {
+  if (!tray || tray.isDestroyed()) return
   try {
-    const img = nativeImage.createFromBuffer(Buffer.from(
-      'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAEUlEQVR42mNk+M9Qz4AFMGETAG1hCQeukhTbAAAAAElFTkSuQmCC', 'base64'))
-    tray = new Tray(img)
-    tray.setToolTip('Aurabot 桌宠')
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: '显示 / 隐藏', click: () => (win ? (win.isVisible() ? win.hide() : win.show()) : createWindow()) },
+      { label: voiceTalkCfg.enabled ? '关闭语音对讲' : '开启语音对讲', click: () => {
+        voiceTalkCfg.enabled = !voiceTalkCfg.enabled
+        applyVoiceTalkHotkey()
+        if (!voiceTalkCfg.enabled && voiceTalkRecording) {
+          // 关掉时若正在录音：让隐藏窗停掉并释放设备（不残留麦克风占用）
+          if (voiceTalkWinAlive()) voiceTalkWin.webContents.executeJavaScript('window.__voiceStop && window.__voiceStop()').catch(() => {})
+        }
+        applyTrayMenu()
+      } },
       { label: houseAlive() ? '到屋外玩' : '回小屋', click: toggleHouse },
       ...(chatCfg.enabled ? [{ label: chatWinAlive() ? '关闭对话框' : '打开对话框', click: toggleChat }] : []),
       { label: '收起气泡', click: hideBubble },
       { type: 'separator' },
       { label: '退出桌宠', click: () => { running = false; app.quit() } },
     ]))
+  } catch (e) { console.error('托盘菜单刷新失败（不影响气泡）：', e.message) }
+}
+function createTray() {
+  try {
+    const img = nativeImage.createFromBuffer(Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAEUlEQVR42mNk+M9Qz4AFMGETAG1hCQeukhTbAAAAAElFTkSuQmCC', 'base64'))
+    tray = new Tray(img)
+    tray.setToolTip('Aurabot 桌宠')
+    applyTrayMenu()
   } catch (e) { console.error('托盘创建失败（不影响气泡）：', e.message) }
 }
 
@@ -2101,6 +2519,19 @@ app.on('second-instance', () => { if (win) { win.show(); win.focus() } })
 app.whenReady().then(() => {
   // Windows 上没设 AppUserModelID 时系统通知会被静默丢掉（完工提醒依赖它）
   try { app.setAppUserModelId('com.aurabot.pet') } catch {}
+  // ---------- 麦克风权限：只对语音对讲隐藏窗、且仅在录音期间放行 media ----------
+  // 旧版对所有窗口常驻放行 media 是能力放大（也是旧版有窗语音 UI 卡死事故的帮凶），这里收窄：
+  // 仅当 webContents 是 voiceTalkWin 且 voiceTalkRecording===true 时才回调 true，其余一律拒绝。
+  try {
+    session.defaultSession.setPermissionRequestHandler((wc, permission, callback) => {
+      if ((permission === 'media' || permission === 'audioCapture')
+          && voiceTalkRecording && voiceTalkWinAlive() && wc === voiceTalkWin.webContents) return callback(true)
+      callback(false)
+    })
+    session.defaultSession.setPermissionCheckHandler((wc, permission) =>
+      (permission === 'media' || permission === 'audioCapture')
+      && voiceTalkRecording && voiceTalkWinAlive() && wc === voiceTalkWin.webContents)
+  } catch (e) { console.error('媒体权限收窄失败（语音对讲不可用，不影响其他功能）：', e.message) }
   createWindow()
   createTray()
   refreshConfig()

@@ -15,6 +15,7 @@ import { execFile, spawn } from 'node:child_process'
 import { existsSync, lstatSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { createEgoBackend, acquireEgoTarget } from './ego.mjs'
 
 // 常见浏览器安装位置：面板填了就用填的，否则 Edge 优先（Windows 自带），再找 Chrome / Chromium。
 const BROWSER_CANDIDATES = [
@@ -34,9 +35,15 @@ const BROWSER_CANDIDATES = [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 ].filter(Boolean)
 
-/** 找一个可用的浏览器可执行文件：explicit 有值且存在就用它；否则按候选表找第一个存在的。 */
+// 启动等待预算：冷启动 + 杀毒逐个扫 msedge 的子进程时，15 秒经常不够，
+// 短了会把「启动慢」误报成「浏览器没起来，请检查路径」。（同 douyin 2.3.9 的修法）
+const LAUNCH_POLL_MS = 250
+const LAUNCH_POLLS = 120
+const LAUNCH_TIMEOUT_SEC = (LAUNCH_POLL_MS * LAUNCH_POLLS) / 1000
+
+/** 找一个可用的浏览器可执行文件：explicit 有值且存在就用它；填的路径不存在（磁盘清理/搬移后很常见）就回退按候选表找第一个存在的。 */
 export function findBrowser(explicit = '', exists = existsSync) {
-  if (explicit) return exists(explicit) ? explicit : ''
+  if (explicit && exists(explicit)) return explicit
   return BROWSER_CANDIDATES.find((p) => exists(p)) || ''
 }
 
@@ -204,6 +211,7 @@ export function createBrowser({
   killTree = windowsKillTree,
   stopWaitMs = 3000,
   stderrWaitMs = 250,
+  useEgo = () => false, // true = 连 DSH 侧边浏览器（共享 ego 实例），不 spawn 不杀进程
 } = {}) {
   let cdp = null        // 当前 CDP 连接
   let owned = null      // 我们自己 spawn 出来的浏览器进程记录
@@ -213,7 +221,47 @@ export function createBrowser({
   let retryAt = 0       // 下次允许重试的时刻
   let lastError = ''
 
-  const connected = () => Boolean(owned && !owned.exited && !owned.needsStop && cdp && !cdp.closed)
+  const connected = () => (egoTarget ? Boolean(cdp && !cdp.closed) : Boolean(owned && !owned.exited && !owned.needsStop && cdp && !cdp.closed))
+
+    // —— DSH 侧边浏览器（ego）模式：连 DSH 共享实例、认领自己的标签页；
+    // 绝不 spawn、绝不杀进程（共享实例归 DSH 管）。
+    let egoTarget = null, egoPort = 0
+    let egoBackend = null
+    const useEgoNow = () => { try { return useEgo() === true } catch (error) { return false } }
+    async function egoConnect(check, extra) {
+      if (egoTarget && cdp && !cdp.closed) return
+      if (egoTarget) { // 上一条连接断了：把自己那个标签页关掉再认领新的，别在共享实例里堆僵尸页
+        const stale = egoTarget, stalePort = egoPort
+        egoTarget = null; egoPort = 0
+        fetch(`http://127.0.0.1:${stalePort}/json/close/${stale.id}`).catch(() => {})
+      }
+      if (!egoBackend) egoBackend = createEgoBackend({ getJson, log })
+      const { port } = await egoBackend.ensure(check)
+      const target = await acquireEgoTarget(port, getBrowserJson, connect)
+      check()
+      const c = connect(target.webSocketDebuggerUrl)
+      try {
+        await c.ready
+        check()
+        await c.send('Page.enable')
+        await c.send('Runtime.enable')
+        if (extra) await extra(c)
+        cdp = c
+        egoTarget = target
+        egoPort = port
+      } catch (error) {
+        c.close()
+        fetch(`http://127.0.0.1:${port}/json/close/${target.id}`).catch(() => {})
+        throw error
+      }
+    }
+    async function egoDisconnect() {
+      const t = egoTarget, port = egoPort
+      egoTarget = null; egoPort = 0
+      cdp?.close(); cdp = null
+      if (t && port) fetch(`http://127.0.0.1:${port}/json/close/${t.id}`).catch(() => {})
+    }
+
   const lockError = () => new Error('专用浏览器的资料目录被占用（SingletonLock / profile appears to be in use），请先关闭占用它的浏览器窗口')
 
   // Linux 的 SingletonLock 常是指向不存在路径的符号链接，existsSync 会漏掉，得用 lstat。
@@ -320,13 +368,22 @@ export function createBrowser({
     }
   }
 
-  function launchError(error, p) {
+  function launchError(error, p, why = '') {
     const detail = [error?.message, p?.error?.message, p?.stderr?.trim()].filter(Boolean).join('；')
     if (/SingletonLock|profile appears to be in use/i.test(detail)) return lockError()
-    return new Error(detail || '浏览器没起来，请检查浏览器路径和专用资料目录')
+    // 有具体报错就原样报，别再合并成一句怪路径的话——历史上把「进程静默退出」「启动太慢」
+    // 全报成「浏览器没起来，请检查浏览器路径和专用资料目录」，路径明明是对的，用户查路径查不出问题。
+    if (detail) return new Error(detail)
+    if (p?.exited) return new Error('浏览器进程启动后自己退出了，没有任何报错输出。最常见原因：已经有一个用同一资料目录的浏览器在跑（浏览器自动更新重启 / 上次的窗口没关干净；专用窗口平时放在屏幕外看不见）；另外磁盘清理或「把软件搬到别的盘」会弄坏 Edge 安装（路径还在但起不来）。先在任务管理器结束全部 msedge.exe / chrome.exe 再重试；还不行就修复 / 重装 Edge，或在面板换一个浏览器路径')
+    if (why === 'timeout') return new Error(`浏览器进程 ${LAUNCH_TIMEOUT_SEC} 秒内没开出调试端口（进程还活着，路径多半没问题，是启动太慢或被杀毒软件拦了）。稍等再试一次；反复出现就检查杀毒软件对 Edge 的拦截`)
+    return new Error('浏览器没起来，请检查浏览器路径和专用资料目录')
   }
 
   async function launch(source, check) {
+    if (useEgoNow()) {
+      await egoConnect(check, (c) => c.send('Accessibility.enable').catch(() => {}))
+      return
+    }
     let p = owned
     try {
       check()
@@ -347,8 +404,10 @@ export function createBrowser({
         return
       }
       if (hasLock()) throw lockError()
-      const bin = findBrowser(browserPath())
-      if (!bin) throw new Error(browserPath() ? `浏览器路径不对：${browserPath()}` : '找不到 Edge / Chrome，先装一个，或在面板里填浏览器路径')
+      const path = browserPath()
+      const bin = findBrowser(path)
+      if (!bin) throw new Error(path ? `浏览器路径不对：${path}（这个文件不存在，常见安装位置也没找到 Edge / Chrome；先装一个，或把路径改成 msedge.exe / chrome.exe 的完整路径）` : '找不到 Edge / Chrome，先装一个，或在面板里填浏览器路径')
+      if (path && bin !== path) log?.warn?.(`面板填的浏览器路径不存在：${path}，已自动改用 ${bin}`)
       mkdirSync(profileDir, { recursive: true })
       const port = await getPort()
       check()
@@ -373,9 +432,9 @@ export function createBrowser({
       ], { stdio: ['ignore', 'ignore', 'pipe'], detached: true })
       p = owned = observe(child, port)
       child.unref?.()
-      // 最多等 15 秒：调试口有响应才算真起来了
-      for (let i = 0; i < 60; i++) {
-        await wait(250)
+      // 最多等 LAUNCH_TIMEOUT_SEC 秒：调试口有响应才算真起来了
+      for (let i = 0; i < LAUNCH_POLLS; i++) {
+        await wait(LAUNCH_POLL_MS)
         check()
         if (p.exited || p.error) throw launchError(null, p)
         const version = await getBrowserJson(`http://127.0.0.1:${port}/json/version`, 1500).catch(() => null)
@@ -388,7 +447,7 @@ export function createBrowser({
           return
         }
       }
-      throw launchError(null, p)
+      throw launchError(null, p, 'timeout')
     } catch (error) {
       // 起失败了：把自己拉起的进程收干净再报错，不留半死进程
       try { await stopOwned(p) } catch (stopError) {
@@ -563,6 +622,21 @@ export function createBrowser({
 
   /** 窗口挪到屏幕里给人看 / 挪回屏幕外（登录扫码时用 visible=true）。 */
   async function show(visible) {
+    if (egoTarget) {
+      // 同 douyin/xhs/heybox：ego 模式下「显示」= 把共享窗口从屏幕外 (-2400,-2400)
+      // 挪回屏幕内、带到前台、切到本标签页；收起挪回屏幕外。
+      try {
+        const { windowId } = await cdp.send('Browser.getWindowForTarget')
+        if (visible) {
+          await cdp.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } }).catch(() => {})
+          await cdp.send('Browser.setWindowBounds', { windowId, bounds: { left: 80, top: 60, width: 1280, height: 860 } }).catch(() => {})
+        } else {
+          await cdp.send('Browser.setWindowBounds', { windowId, bounds: { left: -2400, top: -2400 } }).catch(() => {})
+        }
+      } catch { /* 挪窗失败不拦着 bringToFront */ }
+      if (visible) await cdp?.send('Page.bringToFront').catch(() => {})
+      return { ok: true, visible: !!visible }
+    }
     const c = need()
     const { windowId } = await c.send('Browser.getWindowForTarget')
     await c.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } }).catch(() => {})
@@ -582,6 +656,7 @@ export function createBrowser({
     const pending = opening
     closing = (async () => {
       if (pending) { try { await pending } catch { /* 启动本来就没成功 */ } }
+      if (egoTarget) { await egoDisconnect(); return } // 共享实例：只断连接，不关浏览器
       if (owned && !owned.exited && cdp && !cdp.closed) owned.terminate ||= cdp
       else cdp?.close()
       cdp = null
@@ -610,7 +685,8 @@ export function createBrowser({
     status: () => ({
       connected: connected(),
       profileDir,
-      port: owned?.port || 0,
+      port: egoPort || owned?.port || 0,
+      backend: egoTarget ? 'dsh-sidebar' : (owned ? 'dedicated' : 'none'),
       pid: owned?.child?.pid || 0,
       lastError,
       retryAt,
