@@ -316,6 +316,38 @@
       "publishedAt": "2026-11-12T06:53:24.988Z"
     },
     {
+      "id": "bilibili",
+      "name": "回b站@",
+      "version": "1.0.0",
+      "description": "别人在 B 站评论区 @ 她、或互关的人给她发私信，她用自己口气回一句；默认只演练不发，每天有上限，同一条只回一次。",
+      "category": "social",
+      "tags": [
+        "b站",
+        "bilibili",
+        "私信",
+        "自动回复"
+      ],
+      "author": "kiriko666",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "bilibili-v1.0.0",
+      "file": "bilibili-v1.0.0.zip",
+      "path": "bilibili-v1.0.0/bilibili-v1.0.0.zip",
+      "size": 10122,
+      "sha256": "dd96f50add2a7654c5c2b5cb9ea7e86432672486952a8e5a7f4d2fd877f4e875",
+      "commit": "53dccd91cd9c723e0d16954ed3ca5e8d9ddad10b",
+      "publishedAt": "2026-11-25T09:29:03.561Z"
+    },
+    {
       "id": "billiards",
       "name": "台球",
       "version": "1.0.1",
@@ -2767,5 +2799,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-25T09:28:03.838Z"
+  "generatedAt": "2026-11-25T09:29:03.561Z"
 }
