@@ -1,0 +1,23 @@
+{
+  "name": "aurabot-receipt-print",
+  "private": true,
+  "type": "module",
+  "description": "Aurabot 热敏打印模块：模板 + 提示词 → ESC/POS → 热敏打印机。",
+  "license": "MIT",
+  "version": "0.10.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "build": "node test/build.mjs"
+  },
+  "dependencies": {
+    "iconv-lite": "0.7.3",
+    "jpeg-js": "0.4.4",
+    "pngjs": "7.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  }
+}
