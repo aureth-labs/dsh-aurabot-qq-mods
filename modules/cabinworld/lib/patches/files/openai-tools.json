@@ -1,0 +1,49 @@
+{
+  "_comment": "OpenAI / function-calling 格式的工具定义。把 tools 原样交给你的模型；模型调用时，把 name 和 arguments 原样 POST 到 /v1/tool。AstrBot、LangChain 等都能直接用这种格式。",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "cabin_toolpose",
+        "description": "给她手上这件事换个姿势（打字、画画、写字…），游戏里她的样子就对得上了。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "tool": {
+              "type": "string",
+              "description": "工具名，如 typing、writing、drawing"
+            },
+            "location": {
+              "type": "string",
+              "description": "可选：在哪个位置做（位置 id）"
+            }
+          },
+          "required": [
+            "tool"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "cabin_sleep",
+        "description": "睡觉、起床、在床上躺一会儿，或按作息问现在该不该睡。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "description": "plan 问作息 / sleep 睡 / wake 起床 / rest 躺一会儿 / sit 坐床沿 / cover 盖好被子 / leave 下床 / state 看现在"
+            }
+          },
+          "required": [
+            "action"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}

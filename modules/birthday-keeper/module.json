@@ -1,0 +1,22 @@
+{
+  "id": "birthday-keeper",
+  "name": "生日管家",
+  "version": "1.0.0",
+  "description": "记录生日并在作息时间窗内随机送祝福，可 @ 本人；生日从资料和聊天里自动学习",
+  "category": "social",
+  "tags": [
+    "生日",
+    "祝福",
+    "纪念日",
+    "群聊"
+  ],
+  "author": "HDB-Studio",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "plugin-config",
+    "filesystem"
+  ]
+}

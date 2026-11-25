@@ -1,0 +1,31 @@
+{
+  "_comment": "按 materials/QQ官方-20261113/charts.md 字段构造的脱敏 fixture，不是真实回包",
+  "ret": 0,
+  "sub_ret": 0,
+  "groupList": [
+    {
+      "groupName": "巅峰榜",
+      "groupTopList": [
+        {
+          "topId": 26,
+          "topName": "热歌榜",
+          "listenNum": 1234567,
+          "totalNum": 200,
+          "songList": [
+            { "rank": 1, "songName": "晴天", "singerName": "周杰伦" },
+            { "rank": 2, "songName": "稻香", "singerName": "周杰伦" },
+            { "rank": 3, "songName": "江南", "singerName": "林俊杰" },
+            { "rank": 4, "songName": "不该出现的前四之外", "singerName": "某人" }
+          ]
+        },
+        { "topId": 27, "topName": "新歌榜", "listenNum": 765432, "totalNum": 100, "songList": [] }
+      ]
+    },
+    {
+      "groupName": "地区榜",
+      "groupTopList": [
+        { "topId": 4, "topName": "内地榜", "listenNum": 345678, "totalNum": 100, "songList": [] }
+      ]
+    }
+  ]
+}

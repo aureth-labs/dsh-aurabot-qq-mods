@@ -45,6 +45,9 @@ before(async () => {
     voice: { engine: 'windows', autoChance: 0 },
     stickers: { autoChance: 0 },
     bridge: { dshTools: false, http: true, token: 'a'.repeat(32) },
+    // 目的引擎 1.3.0 起缺省是开的（ext.purpose.enabled 缺省=开）；这里显式关掉，
+    // 验的还是「关掉时面板不炸」的降级语义，不依赖上游默认值。
+    ext: { purpose: { enabled: false } },
   }))
   fake = createFakeDsh({ brain })
   // DSH 的 webServer 服务带真实端口（真机同理）：host.js 靠它给 pet 模块注入端口、破「host.json 写 :0」的自举死锁
@@ -63,14 +66,14 @@ after(async () => {
 
 const sentToOwner = () => mock.calls.filter((c) => c.action === 'send_private_msg' && String(c.params.user_id) === OWNER)
 
-test('/state 聚合 purpose 字段（独立模块，默认关也不炸）', async () => {
+test('/state 聚合 purpose 字段（显式关掉也不炸）', async () => {
   const st = await call('/state')
   assert.equal(st.ok, true)
   // 概览页要的 speakUp.count 必须还在（speakup 模块保持默认实现，不受影响）
   assert.equal(typeof st.speakUp.count, 'number')
   assert.ok(st.purpose, 'purpose 聚合字段存在')
   assert.equal(st.purpose.available, true, 'purpose 模块已提供 status()')
-  assert.equal(st.purpose.enabled, false, '目的引擎默认关')
+  assert.equal(st.purpose.enabled, false, '显式关掉目的引擎')
   assert.equal(st.purpose.pacing, 'default')
   assert.equal(st.purpose.dailyMax, 20, 'dailyMax 取自 speakUp.maxPerDay 默认值（1.2.0 起是 20，上游 f41ea37）')
   assert.equal(st.purpose.quietStart, '23:00', '安静时段由醒着窗口 8~23 推算')

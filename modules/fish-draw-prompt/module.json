@@ -1,0 +1,24 @@
+{
+  "id": "fish-draw-prompt",
+  "name": "生图提示词（三步走）",
+  "version": "1.0.1",
+  "description": "给「角色自己画图」这类场景用的提示词源代码：一份代码拼出用途 + 三步走 + 元素清单 + 关键特征，多个生图入口共用，改一处四处同步。",
+  "category": "creative",
+  "tags": [
+    "生图",
+    "提示词",
+    "三步走",
+    "参考图"
+  ],
+  "platforms": [
+    "qq"
+  ],
+  "author": "xdr531955724",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [],
+  "replacesBuiltin": false,
+  "homepage": "https://github.com/xdr531955724/dsh-aurabot-fish-draw-prompt"
+}

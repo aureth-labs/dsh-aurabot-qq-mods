@@ -126,6 +126,26 @@ test('撤回清单校验、版本比较、目录过滤', () => {
   assert.deepEqual(listModules(join(FIXTURE, 'nope')), [])
 })
 
+test('platforms 可选，写法受限', async () => {
+  const { validateManifest } = await import('../scripts/lib.mjs')
+  const base = { id: 'demo', name: '演示', version: '1.0.0', description: '说明', author: '作者', license: 'MIT', category: 'tool', api: 1, minPluginVersion: '1.2.0', requires: [], capabilities: [] }
+  const errors = (platforms) => validateManifest({ ...base, platforms }, 'demo', new Set())
+  assert.deepEqual(errors(undefined), [])
+  assert.deepEqual(errors(['*']), [])
+  assert.deepEqual(errors(['qq', 'feishu']), [])
+  assert.ok(errors([]).some((e) => e.includes('platforms')))
+  assert.ok(errors('qq').some((e) => e.includes('platforms')))
+  assert.ok(errors(['*', 'qq']).some((e) => e.includes('*')))
+  assert.ok(errors(['QQ']).some((e) => e.includes('platforms')))
+  assert.ok(errors(['qq', 'qq']).some((e) => e.includes('重复')))
+})
+
+test('打包索引会带上 platforms', (t) => {
+  const mod = copy(t, (m) => ({ ...m, platforms: ['qq', 'feishu'] }))
+  const entry = packModule(mod, tempOut(t))
+  assert.deepEqual(entry.platforms, ['qq', 'feishu'])
+})
+
 test('分类必填且要在清单里；目录按分类排列', async () => {
   const { validateManifest } = await import('../scripts/lib.mjs')
   const { renderCatalog } = await import('../scripts/catalog.mjs')

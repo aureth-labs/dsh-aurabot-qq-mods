@@ -1,0 +1,23 @@
+{
+  "id": "little-notes",
+  "name": "小本本",
+  "version": "1.2.2",
+  "description": "她想到就记一笔的小本本：他说过的话、她答应的事、关于他的事，按人按事翻得出来；每晚还会自己整理当天聊天补漏，记了日子的事到点主动提。",
+  "category": "manage",
+  "tags": [
+    "记忆",
+    "笔记",
+    "记事"
+  ],
+  "author": "Ariz0324",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "network",
+    "filesystem",
+    "plugin-config",
+    "plugin-internals"
+  ]
+}
