@@ -1116,6 +1116,8 @@ function renderStatus(qqOnline) {
   if (st.moodLabel) parts.push(st.moodLabel)
   $('#chat-status').textContent = parts.join(' · ')
   $('#set-qq').textContent = qqOnline ? '在线' : '离线'
+  const dot = $('#chat-dot')
+  if (dot) dot.hidden = !qqOnline
   $('#set-host').textContent = S.host || location.host || '本机'
   // 出门用的地址由电脑自动同步过来（隧道换域名时手机自己就更新了，不用人记）
   const away = (st.endpoints && st.endpoints.tunnel) || localStorage.getItem(LS.tunnel) || ''
@@ -1146,6 +1148,10 @@ function renderMoments(data) {
     for (const it of items) {
       const card = document.createElement('article')
       card.className = 'moment'
+      const mava = document.createElement('span')
+      mava.className = 'm-ava'
+      mava.setAttribute('aria-hidden', 'true')
+      mava.textContent = '🐋'
       const when = document.createElement('div')
       when.className = 'when'
       const t = document.createElement('span')
@@ -1154,7 +1160,7 @@ function renderMoments(data) {
       const body = document.createElement('div')
       body.className = 'body'
       body.textContent = it.text
-      card.append(when, body)
+      card.append(mava, when, body)
       const vl = visibilityLabel(it.visibility)
       if (vl) {
         const tag = document.createElement('span')
@@ -1200,8 +1206,8 @@ function drawMood(points) {
       <stop offset="1" stop-color="var(--primary)" stop-opacity="0"/>
     </linearGradient></defs>
     <path d="${area}" fill="url(#mg)"/>
-    <path d="${line}" fill="none" stroke="var(--primary)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
-    <circle cx="${xy[xy.length - 1][0].toFixed(1)}" cy="${xy[xy.length - 1][1].toFixed(1)}" r="3.4" fill="var(--primary)"/>`
+    <path d="${line}" fill="none" stroke="var(--primary)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    ${xy.map(([x, y]) => `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.2" fill="var(--surface)" stroke="var(--primary)" stroke-width="2"/>`).join('')}`
 }
 
 async function loadMoments() {
@@ -1530,7 +1536,12 @@ async function boot() {
   window.addEventListener('blur', stopRec)
   document.addEventListener('visibilitychange', () => { if (document.hidden) stopRec() })
   buildEmoji()
-  $('#chat-input').addEventListener('input', autoGrow)
+  const syncSendDot = () => {
+    const bar = $('.inputbar')
+    if (bar) bar.classList.toggle('has-text', Boolean($('#chat-input').value.trim()))
+  }
+  $('#chat-input').addEventListener('input', () => { autoGrow(); syncSendDot() })
+  syncSendDot()
   $('#chat-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault()
