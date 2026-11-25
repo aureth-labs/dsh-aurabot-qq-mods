@@ -33,7 +33,7 @@ import { createGuides } from './lib/guides.mjs'
 export default {
   id: 'windows-ops',
   name: '逛电脑（Windows 自动化）',
-  version: '1.2.0',
+  version: '1.2.1',
   api: 1,
   description: '经 PowerShell 操作这台电脑：读无障碍树（UIA）按元素点击/写值/读文本/触发表单，窗口枚举/激活/关闭、截屏、剪贴板读写、键鼠模拟。默认仅主人可用，带操作白名单、危险操作确认门槛与指引体系。',
   panel: 'panel.js', // 自定义面板：settings 数组留空，全部字段由 panel.js 接管（仿 phone）
@@ -155,8 +155,8 @@ export default {
           key: { type: 'string', description: 'key.press 的键名：enter/tab/esc/space/backspace/delete/up/down/left/right/home/end/pageup/pagedown/f1..f12' },
         },
         required: ['op'],
-        execute: async (args, exec) => {
-          if (!ownerToolCall(exec)) return notOwnerMsg()
+        execute: async (args, ctx) => {
+          if (!ownerToolCall(ctx)) return notOwnerMsg()
           return exec(String(args.op || ''), args)
         },
       }),
@@ -164,8 +164,8 @@ export default {
         name: 'windows_ops_status',
         description: '看逛电脑现在能用什么：总开关/键鼠开关/待确认的危险操作/可用操作清单。主人问「你能不能操作我的电脑」时先看这个。',
         properties: {},
-        execute: async (_args, exec) => {
-          if (!ownerToolCall(exec)) return notOwnerMsg()
+        execute: async (_args, ctx) => {
+          if (!ownerToolCall(ctx)) return notOwnerMsg()
           const st = status()
           const confirms = st.confirms.length
             ? '\n待确认：' + st.confirms.map((c) => `${c.op}（${c.summary}）尾号 ${c.id.slice(-6)}`).join('、')
@@ -178,8 +178,8 @@ export default {
         description: '取逛电脑的操作手册（怎么稳妥地用某类操作）。UIA 元素操作/键鼠/窗口/剪贴板/截屏/通用各一份；第一次执行某类操作、或动作失败重试前取一份看。',
         properties: { op: { type: 'string', description: '按要做的操作取手册：如 uia.tree / uia.click / uia.setValue / mouse.click / window.close / clipboard.read / screenshot；不认识回通用手册' } },
         required: ['op'],
-        execute: async ({ op }, exec) => {
-          if (!ownerToolCall(exec)) return notOwnerMsg()
+        execute: async ({ op }, ctx) => {
+          if (!ownerToolCall(ctx)) return notOwnerMsg()
           const key = guides.resolve({ op: String(op || '') })
           return { ok: true, message: guides.get(key) }
         },

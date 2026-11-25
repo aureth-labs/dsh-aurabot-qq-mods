@@ -201,7 +201,9 @@ check('未知 chatId 类型不录', shouldRecord({ chatId: 'system:x' }, {}) ===
   check('prompt 注入了备忘', Array.isArray(out) && out.at(-1)?.text?.includes('group:42'), JSON.stringify(out?.at(-1)?.text || '').slice(0, 120))
   check('备忘含日摘要内容', out.at(-1)?.text?.includes('假摘要'))
   const out2 = onPrompt([], { chat: { chatId: 'group:42', kind: 'group' }, queryText: '别的' })
-  check('备忘未变化时返回同一段字符串（缓存友好）', out.at(-1).text === out2.at(-1).text)
+  check('同一会话备忘未变化时不再重复注入', out2.length === 0, JSON.stringify(out2).slice(0, 120))
+  const out2b = onPrompt([], { sessionId: 'session-b', chat: { chatId: 'group:42', kind: 'group' }, queryText: '换会话' })
+  check('新会话仍会注入一次', out2b.length === 1 && out2b.at(-1).text.includes('group:42'))
   const out3 = onPrompt([], { chat: { chatId: 'system:x', kind: 'system' }, queryText: 'x' })
   check('system 回合不注入', out3.length === 0)
 

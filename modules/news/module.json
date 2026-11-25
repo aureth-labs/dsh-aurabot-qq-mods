@@ -1,0 +1,14 @@
+{
+  "id": "news",
+  "name": "每日新闻一图流",
+  "version": "1.0.0",
+  "description": "每天从公开 RSS 源挑国内近期新闻，调用生图绘制中文一图流，附带来源链接发到指定聊天。",
+  "category": "creative",
+  "tags": ["新闻", "一图流", "生图", "每日简报"],
+  "author": "HTwoOhwater",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": ["imagegen"],
+  "capabilities": ["network", "filesystem", "plugin-config"]
+}

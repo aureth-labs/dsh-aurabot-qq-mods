@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { defer, ok } from './helpers.mjs'
@@ -23,7 +23,12 @@ test('模块注册面板接口，dispose 中断未完成的请求', async (t) =>
   }
   const hb = mod.setup(api)
   t.after(() => hb.dispose())
-  assert.equal(mod.version, '1.4.2')
+  // 版本不再写死在测试里：按 CONTRIBUTING 的要求断言「入口文件与 module.json 的
+  // id/version/api 一致」，这样升版本时不会再莫名挂掉一条测试。
+  const manifest = JSON.parse(readFileSync(new URL('../module.json', import.meta.url), 'utf8'))
+  assert.equal(mod.version, manifest.version, 'index.mjs 与 module.json 的 version 要一致')
+  assert.equal(mod.id, manifest.id)
+  assert.equal(mod.api, manifest.api)
   for (const path of ['/heybox/state', '/heybox/risk', '/heybox/risk/clear', '/heybox/qr/start', '/heybox/qr/poll', '/heybox/verify/start', '/heybox/verify/finish', '/heybox/verify/show']) assert.equal(typeof routes.get(path), 'function')
   assert.equal((await routes.get('/heybox/verify/finish')()).ok, false)
   const gate = defer()

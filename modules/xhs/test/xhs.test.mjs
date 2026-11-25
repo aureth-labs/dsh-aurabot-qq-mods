@@ -3,7 +3,7 @@
 // 装配层（index.mjs）的 defaults / settings / 工具面。全部用假浏览器 + 假 site 注入，不打真网络。
 import { test, before } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -395,7 +395,9 @@ test('装配：defaults 齐全；settings 留空由 panel.js 接管表单（平�
   assert.equal(xhsIndex.defaults.shotChance, 0.3, '截图库存图概率默认 0.3')
   assert.deepEqual(xhsIndex.settings, [], 'settings 数组必须留空（原生表单由 panel.js 接管，平台页只渲染自定义面板）')
   assert.equal(xhsIndex.id, 'xhs')
-  assert.equal(xhsIndex.version, '0.2.0')
+  // 版本不再写死在测试里（和 heybox 同口径）：升版时这条不该跟着挂。
+  const xhsManifest = JSON.parse(readFileSync(new URL('../module.json', import.meta.url), 'utf8'))
+  assert.equal(xhsIndex.version, xhsManifest.version, 'index.mjs 与 module.json 的 version 要一致')
 })
 
 test('装配：setup 注册全部面板路由；工具按权限档出现，模块没开时不挂', () => {

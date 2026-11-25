@@ -1,0 +1,15 @@
+{
+  "id": "group-mention-etiquette",
+  "name": "群友互相 @ 时不插话",
+  "version": "1.0.0",
+  "api": 1,
+  "description": "群友 @ 别人时只旁听；也叫到机器人时，仍按原设置回复。",
+  "category": "social",
+  "tags": ["群聊", "插话", "旁听"],
+  "platforms": ["qq"],
+  "author": "b1ghawk119",
+  "license": "MIT",
+  "minPluginVersion": "1.2.1",
+  "requires": [],
+  "capabilities": []
+}

@@ -1,0 +1,5 @@
+node_modules/
+data/
+*.tsbuildinfo
+lib/
+yarn.lock
