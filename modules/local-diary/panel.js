@@ -176,6 +176,25 @@ return function Panel({ toast, settings, draftSettings, setSettings, save }) {
   const entryRef = useRef(null)
   entryRef.current = entry
 
+  // 刷新：先让后端重扫日记目录（手写进去的、外面改动的也能看见），再对齐现在打开的那一篇。
+  const refresh = useCallback(async () => {
+    try { await call('/rescan') } catch (error) {}
+    const r = await load()
+    const list = (r && r.items) || []
+    if (!list.length) { setEntry(null); return }
+    const before = entryRef.current
+    const cur = before && before.file ? list.find((x) => x.file === before.file) : null
+    if (!cur) { await open(list[0].file); return }   // 现在这篇没了，翻到最新的一篇
+    // 同一篇被改写过（字数或改动时间变了）就重读正文：只换目录的话，点刷新后正文还是旧的
+    if (before.chars !== cur.chars || before.at !== cur.at) await open(cur.file)
+  }, [load, open])
+
+  // 面板开着的时候每分钟自己刷一次，不用手动点
+  useEffect(() => {
+    const timer = setInterval(() => { refresh() }, 60_000)
+    return () => clearInterval(timer)
+  }, [refresh])
+
   const items = (data && data.items) || []
   const dayMap = useMemo(() => {
     const m = new Map()
@@ -401,7 +420,7 @@ return function Panel({ toast, settings, draftSettings, setSettings, save }) {
         : null,
       h(ui.Row, null,
         h(ui.Btn, { onClick: write, disabled: busy || (data && data.running) }, busy ? '写着…' : '现在写一篇'),
-        h(ui.Btn, { onClick: load }, '刷新'),
+        h(ui.Btn, { onClick: refresh }, '刷新'),
         h(ui.Btn, { onClick: openFolder }, '打开文件夹'),
         draftDirty ? h(ui.Btn, { onClick: saveNow }, '保存设置') : null,
       ),
