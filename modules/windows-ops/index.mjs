@@ -1,7 +1,7 @@
 // index.mjs —— windows-ops 模块入口（装配层）
 // 来源：aurabot 模块库 modules/windows-ops（本仓库原创，MIT）
-// 作用：把 lib/ps.mjs（PowerShell 执行底座）、lib/ops.mjs（操作目录）、lib/safety.mjs
-//       （白名单/确认/限速闸门）、lib/guides.mjs（指引库）装配成完整模块：
+// 作用：把 lib/ps.mjs（PowerShell 执行底座）、lib/ops.mjs（操作目录）、lib/uia.mjs（UIA 无障碍树元素定位）、
+//       lib/safety.mjs（白名单/确认/限速闸门）、lib/guides.mjs（指引库）装配成完整模块：
 //       自定义面板 panel.js、AI 工具（windows_ops / windows_ops_status / windows_ops_guide）、
 //       /wops 命令、/screenshot /status /ops /confirm /guides 面板路由。
 // 契约：export default { id, name, version, api, settings: [], setup(api) → 导出对象 }
@@ -33,9 +33,9 @@ import { createGuides } from './lib/guides.mjs'
 export default {
   id: 'windows-ops',
   name: '逛电脑（Windows 自动化）',
-  version: '1.1.1',
+  version: '1.2.1',
   api: 1,
-  description: '经 PowerShell 操作这台电脑：窗口枚举/激活/关闭、截屏、剪贴板读写、键鼠模拟。默认仅主人可用，带操作白名单、危险操作确认门槛与指引体系。',
+  description: '经 PowerShell 操作这台电脑：读无障碍树（UIA）按元素点击/写值/读文本/触发表单，窗口枚举/激活/关闭、截屏、剪贴板读写、键鼠模拟。默认仅主人可用，带操作白名单、危险操作确认门槛与指引体系。',
   panel: 'panel.js', // 自定义面板：settings 数组留空，全部字段由 panel.js 接管（仿 phone）
   // settings 留空：面板字段全部由 panel.js 接管（总开关挂在模块名同一行，仿 phone/B 站页）。
   // 默认值兜底两处：panel.js 的 DEFAULTS（显示用）+ 下面 getSettings()（运行时兜底）。
@@ -48,6 +48,7 @@ export default {
     dryRun: false,
     rateLimit: 60,
     powershellPath: '',
+    preferUia: true, // 优先用元素定位（v1.2.0）：默认开，关掉则按坐标操作（兜底路径仍存在）
   },
 
   setup(api) {
@@ -63,6 +64,8 @@ export default {
         dryRun: s.dryRun === true,
         rateLimit: Number(s.rateLimit) > 0 ? Number(s.rateLimit) : 0,
         powershellPath: String(s.powershellPath || ''),
+        // 元素定位优先（面板「优先用元素定位」开关）：只有明确关成 false 才按坐标走，缺省 true
+        preferUia: s.preferUia !== false,
       }
     }
     const offMsg = () => ({ ok: false, message: '逛电脑总开关没开：请先到面板打开「总开关」' })
@@ -109,9 +112,13 @@ export default {
 
     // ================= 指引注入（总纲常驻 + 手册按需）=================
     // 总纲经 rule 常驻进她的规则：每轮重新调用（设置/自定义指引改完即生效），只挂主人私聊。
+    // preferUia 关掉时在总纲末尾补一句，明确本轮按坐标操作（面板开关 → 这一行即时生效）。
     api.rule('private', () => {
-      if (!getSettings().enabled) return ''
-      return ['【逛电脑总纲（操作这台电脑时必读，与按需取的手册一起看）】', guides.get('main')].join('\n')
+      const s = getSettings()
+      if (!s.enabled) return ''
+      const lines = ['【逛电脑总纲（操作这台电脑时必读，与按需取的手册一起看）】', guides.get('main')]
+      if (!s.preferUia) lines.push('【本次设置】元素定位优先已关闭：按坐标操作（mouse.move / mouse.click），读无障碍树只用来确认界面状态。')
+      return lines.join('\n')
     })
 
     // ================= 工具面（只认主人会话，群友同轮也不借权）=================
@@ -124,22 +131,32 @@ export default {
     }
     const notOwnerMsg = () => ({ ok: false, message: '逛电脑的工具只在主人会话里可用（群友/别人的会话不能操作这台电脑）。' })
 
+    /** windows_ops 工具描述里「怎么找元素」那半句：按 preferUia 开关动态生成（面板改完下一轮就生效）。 */
+    function locateHint() {
+      return getSettings().preferUia
+        ? '优先用 uia.tree 读无障碍树再按元素操作（uia.click / uia.setValue / uia.invoke 按选择器精确定位），坐标点击（mouse.*）仅作兜底。'
+        : '本次设置已关闭元素定位优先：按坐标操作（先 screenshot 看清位置，再 mouse.move / mouse.click）。'
+    }
+
     api.tool(() => [
       api.defineTool({
         name: 'windows_ops',
-        description: '操作主人这台 Windows 电脑：读/写剪贴板、全屏截图、枚举/激活/关闭窗口、移动/点击鼠标、键入文字、按键。只在主人要求时用；第一次用某类操作前先用 windows_ops_guide 取对应手册。',
+        description: '操作主人这台 Windows 电脑：读无障碍树（UIA）并按元素点击/写值/读文本/触发表单、读/写剪贴板、全屏截图、枚举/激活/关闭窗口、移动/点击鼠标、键入文字、按键。'
+          + locateHint()
+          + '只在主人要求时用；第一次用某类操作前先用 windows_ops_guide 取对应手册。',
         properties: {
           op: { type: 'string', description: `操作 id，可选：${Object.keys(OPS).join(' / ')}` },
-          text: { type: 'string', description: '文本（clipboard.write / key.text 用）' },
-          pid: { type: 'number', description: '进程号（window.activate / window.close 用）' },
+          text: { type: 'string', description: '文本（clipboard.write / key.text 写内容；uia.setValue 要写进控件的值）' },
+          pid: { type: 'number', description: '目标窗口进程号（window.activate / window.close / 全部 uia.* 用），从 window.list 取' },
+          sel: { type: 'string', description: 'UIA 选择器（uia.* 用）：「键=值&&键=值」，键只能是 AutomationId / Name / ControlType / ClassName，值按前缀匹配、不支持通配。例：AutomationId=submitBtn、Name=提交&&ControlType=Button。不知道元素叫什么先用 uia.tree 看' },
           x: { type: 'number', description: '屏幕横坐标（mouse.move / mouse.click 用）' },
           y: { type: 'number', description: '屏幕纵坐标（mouse.move / mouse.click 用）' },
           button: { type: 'string', description: 'mouse.click 的键：left（默认）/ right' },
           key: { type: 'string', description: 'key.press 的键名：enter/tab/esc/space/backspace/delete/up/down/left/right/home/end/pageup/pagedown/f1..f12' },
         },
         required: ['op'],
-        execute: async (args, exec) => {
-          if (!ownerToolCall(exec)) return notOwnerMsg()
+        execute: async (args, ctx) => {
+          if (!ownerToolCall(ctx)) return notOwnerMsg()
           return exec(String(args.op || ''), args)
         },
       }),
@@ -147,8 +164,8 @@ export default {
         name: 'windows_ops_status',
         description: '看逛电脑现在能用什么：总开关/键鼠开关/待确认的危险操作/可用操作清单。主人问「你能不能操作我的电脑」时先看这个。',
         properties: {},
-        execute: async (_args, exec) => {
-          if (!ownerToolCall(exec)) return notOwnerMsg()
+        execute: async (_args, ctx) => {
+          if (!ownerToolCall(ctx)) return notOwnerMsg()
           const st = status()
           const confirms = st.confirms.length
             ? '\n待确认：' + st.confirms.map((c) => `${c.op}（${c.summary}）尾号 ${c.id.slice(-6)}`).join('、')
@@ -158,11 +175,11 @@ export default {
       }),
       api.defineTool({
         name: 'windows_ops_guide',
-        description: '取逛电脑的操作手册（怎么稳妥地用某类操作）。键鼠/窗口/剪贴板/截屏/通用各一份；第一次执行某类操作、或动作失败重试前取一份看。',
-        properties: { op: { type: 'string', description: '按要做的操作取手册：如 mouse.click / window.close / clipboard.read / screenshot；不认识回通用手册' } },
+        description: '取逛电脑的操作手册（怎么稳妥地用某类操作）。UIA 元素操作/键鼠/窗口/剪贴板/截屏/通用各一份；第一次执行某类操作、或动作失败重试前取一份看。',
+        properties: { op: { type: 'string', description: '按要做的操作取手册：如 uia.tree / uia.click / uia.setValue / mouse.click / window.close / clipboard.read / screenshot；不认识回通用手册' } },
         required: ['op'],
-        execute: async ({ op }, exec) => {
-          if (!ownerToolCall(exec)) return notOwnerMsg()
+        execute: async ({ op }, ctx) => {
+          if (!ownerToolCall(ctx)) return notOwnerMsg()
           const key = guides.resolve({ op: String(op || '') })
           return { ok: true, message: guides.get(key) }
         },
@@ -281,6 +298,7 @@ export default {
         dryRun: s.dryRun,
         rateLimit: s.rateLimit,
         whitelist: s.opsWhitelist,
+        preferUia: s.preferUia,
         confirms: safety.listConfirms(),
         ops: Object.keys(OPS),
         guides: guides.list().map((g) => ({ key: g.key, name: g.name, source: g.source })),

@@ -177,6 +177,7 @@ export function createMiCloud(opts) {
   const lastCmdAt = new Map() // did -> 上次控制指令时间戳（节流）
   const specCache = new Map() // model -> { siid, piid } 开关属性
   const listCache = { at: 0, items: null }
+  const homeCache = { at: 0, items: null }
 
   // ---- 令牌存取 ----
   async function loadToken() {
@@ -452,9 +453,40 @@ export function createMiCloud(opts) {
     throw new Error(`米家请求失败 ${uri} code=${resp.code}：${resp.message || r.status}`)
   }
 
+  // ---- 家庭列表（面板让用户挑「只看哪个家」用；单独带缓存，和设备列表分开）----
+  async function homesList(force = false, ttlMs = 60000) {
+    if (!force && homeCache.items && Date.now() - homeCache.at < ttlMs) return homeCache.items
+    const homesResp = await request('/v2/homeroom/gethome_merged', {
+      fg: true, fetch_share: true, fetch_share_dev: true, fetch_cariot: true, limit: 300, app_ver: 7, plat_form: 0,
+    })
+    const homes = (homesResp.result?.homelist || []).map((h) => ({
+      id: String(h.id),
+      name: h.name || String(h.id),
+      uid: Number(h.uid) || 0,
+      // shareflag≠0 或房主不是自己 = 别人分享过来的家
+      shared: !!h.shareflag || (Number(h.uid) && Number(h.uid) !== Number(token.userId)),
+      roomCount: (h.roomlist || []).length,
+    }))
+    homeCache.at = Date.now()
+    homeCache.items = homes
+    return homes
+  }
+
+  /** 按家庭 id / 名称（精确或子串）过滤设备；空值=不筛，即全部家庭 */
+  function filterByHome(items, home) {
+    const want = String(home || '').trim()
+    if (!want) return items
+    const hit = (d) => d.homeId === want || d.homeName === want ||
+      (d.homeName ? d.homeName.includes(want) : false)
+    return items.filter(hit)
+  }
+
   // ---- 设备列表（新网关：先家庭后设备，分页拉全；带房间归属；带缓存防风控）----
-  async function deviceList(force = false, ttlMs = 60000) {
-    if (!force && listCache.items && Date.now() - listCache.at < ttlMs) return listCache.items
+  // opts.home：只看某个家（家庭 id 或名称子串）；不传=全部家庭
+  async function deviceList(force = false, ttlMs = 60000, opts = {}) {
+    if (!force && listCache.items && Date.now() - listCache.at < ttlMs) {
+      return filterByHome(listCache.items, opts.home)
+    }
     const homesResp = await request('/v2/homeroom/gethome_merged', {
       fg: true, fetch_share: true, fetch_share_dev: true, fetch_cariot: true, limit: 300, app_ver: 7, plat_form: 0,
     })
@@ -468,36 +500,48 @@ export function createMiCloud(opts) {
     }
     const items = []
     for (const home of homes) {
+      const homeId = String(home.id)
+      const homeName = home.name || homeId
+      // home_owner 必须是「这个家的房主 uid」：共享家庭里房主不是你，
+      // 写死自己的 userId 会得到 code=-1 no permit。
+      const owner = Number(home.uid) || Number(token.userId)
       let startDid = ''
       let hasMore = true
-      while (hasMore) {
-        const resp = await request('/home/home_device_list', {
-          home_owner: Number(token.userId),
-          home_id: Number(home.id),
-          limit: 200,
-          start_did: startDid,
-          get_split_device: true,
-          support_smart_home: true,
-          get_third_device: true,
-        })
-        const info = resp.result?.device_info || []
-        for (const d of info) {
-          items.push({
-            did: String(d.did),
-            name: d.name || '',
-            model: d.model || '',
-            isOnline: !!d.isOnline,
-            roomId: d.roomid ?? d.room_id ?? null,
-            roomName: roomOfDid.get(String(d.did)) || (home.name ? `${home.name}·未分配` : '未分配'),
+      try {
+        while (hasMore) {
+          const resp = await request('/home/home_device_list', {
+            home_owner: owner,
+            home_id: Number(home.id),
+            limit: 200,
+            start_did: startDid,
+            get_split_device: true,
+            support_smart_home: true,
+            get_third_device: true,
           })
+          const info = resp.result?.device_info || []
+          for (const d of info) {
+            items.push({
+              did: String(d.did),
+              name: d.name || '',
+              model: d.model || '',
+              isOnline: !!d.isOnline,
+              roomId: d.roomid ?? d.room_id ?? null,
+              roomName: roomOfDid.get(String(d.did)) || (home.name ? `${home.name}·未分配` : '未分配'),
+              homeId,
+              homeName,
+            })
+          }
+          startDid = String(resp.result?.max_did || '')
+          hasMore = !!resp.result?.has_more && startDid !== ''
         }
-        startDid = String(resp.result?.max_did || '')
-        hasMore = !!resp.result?.has_more && startDid !== ''
+      } catch (e) {
+        // 单个家庭取不到（无权/已退出分享）不该拖垮整张列表
+        log(`家庭「${home.name || home.id}」设备列表跳过：${e.message}`)
       }
     }
     listCache.at = Date.now()
     listCache.items = items
-    return items
+    return filterByHome(items, opts.home)
   }
 
   // ---- 按型号查规格（siid/piid）：miot-spec.org 官方规格库，落盘缓存 ----
@@ -643,11 +687,13 @@ export function createMiCloud(opts) {
   function clearListCache() {
     listCache.at = 0
     listCache.items = null
+    homeCache.at = 0
+    homeCache.items = null
   }
 
   return {
     qrStart, qrPoll, ensureLogin, refreshToken, logout,
-    request, deviceList, setOnOff, setProp, specProps, getStates, clearListCache, onOffProp,
+    request, deviceList, homesList, setOnOff, setProp, specProps, getStates, clearListCache, onOffProp,
     /** 测试/面板用：当前是否有可用登录态 */
     async hasLogin() {
       if (!token) await loadToken()

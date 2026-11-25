@@ -1,6 +1,10 @@
 {
   "name": "aurabot-tieba-reader",
+<<<<<<< HEAD
   "version": "1.6.0",
+=======
+  "version": "1.5.5",
+>>>>>>> origin/main
   "private": true,
   "type": "module",
   "description": "Aurabot 的只读贴吧扩展",

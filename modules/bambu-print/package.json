@@ -1,0 +1,14 @@
+{
+  "name": "aurabot-bambu-print",
+  "version": "1.1.1",
+  "private": true,
+  "type": "module",
+  "description": "Aurabot 的拓竹 3D 打印机扩展：看状态、暂停继续、拍照；多人各管各的，账号密码走一次性网页、不经过聊天，凭据加密存在本机，群聊默认脱敏。",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  }
+}

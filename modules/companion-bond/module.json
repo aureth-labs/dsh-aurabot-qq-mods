@@ -1,0 +1,28 @@
+{
+  "id": "companion-bond",
+  "name": "相伴养成",
+  "version": "1.0.1",
+  "description": "聊天、投喂和玩耍积累亲密度，三档桌面立绘带待机、眨眼与视线跟随（Apple Silicon Mac）。",
+  "category": "social",
+  "tags": [
+    "养成",
+    "陪伴",
+    "亲密度",
+    "互动"
+  ],
+  "platforms": [
+    "qq"
+  ],
+  "author": "J2hbk5tczj",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.1",
+  "requires": [],
+  "capabilities": [
+    "filesystem",
+    "process"
+  ],
+  "build": {
+    "out": ".build"
+  }
+}

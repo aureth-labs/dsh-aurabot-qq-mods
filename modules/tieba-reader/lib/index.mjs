@@ -4,7 +4,11 @@ import { createTieba, barNames, clean, cleanTitle } from './tieba.mjs';
 import { createBrowserReader } from './browser-client.mjs';
 
 export default {
+<<<<<<< HEAD
   id: 'tieba-reader', name: '逛贴吧（只读）', version: '1.6.0', api: 1,
+=======
+  id: 'tieba-reader', name: '逛贴吧（只读）', version: '1.5.5', api: 1,
+>>>>>>> origin/main
   description: '支持登录 Cookie、搜帖看帖、配置贴吧定时浏览，有兴趣时给主人分享；不发帖、不回帖。',
   panel: 'panel.js',
   defaults: { enabled: true, cookie: '', browserPath: '', bars: '', interests: '', autoBrowse: false, intervalMinutes: 30, maxSharesPerDay: 3, startHour: 9, endHour: 23 },
@@ -53,11 +57,15 @@ export default {
         api.defineTool({ name: 'tieba_reader_status', description: '检查贴吧读取模块的当前版本和读取方式。历史消息说读不到时，可先检查状态后重新读帖，不沿用旧失败结论。',
           execute: async () => {
             const current = api.use('tieba-reader');
+<<<<<<< HEAD
             const status = current.browserStatus?.() || {};
             const how = status.available === false ? '，未检测到可用的浏览器组件，将尝试使用手动 Cookie 直接读取；系统浏览器登录不能自动同步。'
               : status.engine === 'headless' ? '，使用系统里的无头 Chromium 读取（页面能渲染；登录要靠手动 Cookie）。'
                 : '，使用内置浏览器会话读取。';
             return { ok: true, message: '贴吧模块 ' + current.version + how + '请调用 tieba_read 获取当前结果，不沿用历史失败结论。' };
+=======
+            return { ok: true, message: '贴吧模块 ' + current.version + (current.browserStatus?.().available === false ? '，未检测到内置组件，将使用手机版服务端页面直接读取（登录可用手动 Cookie）；系统浏览器登录不能自动同步。' : '，使用内置浏览器会话读取。') + '请调用 tieba_read 获取当前结果，不沿用历史失败结论。' };
+>>>>>>> origin/main
           } }),
       ];
     });
@@ -176,6 +184,10 @@ export default {
       const result = await tieba[method](...args);
       return api.settings().enabled === false || disposed ? blocked('贴吧功能已关闭') : result;
     };
+<<<<<<< HEAD
     return { version: '1.6.0', tick, run, search: enabledRead('search'), browse: bar => String(bar || '').trim() ? enabledRead('browse')(bar) : enabledRead('home')(), read: enabledRead('read'), browserStatus: () => browser.status?.() || {}, state: () => ({ ...state }) };
+=======
+    return { version: '1.5.5', tick, run, search: enabledRead('search'), browse: bar => String(bar || '').trim() ? enabledRead('browse')(bar) : enabledRead('home')(), read: enabledRead('read'), browserStatus: () => browser.status?.() || {}, state: () => ({ ...state }) };
+>>>>>>> origin/main
   },
 };

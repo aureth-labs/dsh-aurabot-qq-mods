@@ -4,12 +4,15 @@
 //       脚本 + 参数白名单。用户给的值（文本、进程号、坐标）一律经 ps.b64arg 转成 UTF-8
 //       base64 塞进脚本的 $a 数组，脚本本体不拼接任何用户输入——注入只是普通字符。
 //       SendKeys 的按键 token 由本文件白名单映射（KEY_TOKENS），不接受任意字符串。
+//       v1.2.0 起再加一层 UIA（无障碍树）元素定位：uia.tree / uia.click / uia.setValue /
+//       uia.getText / uia.invoke，脚本模板与选择器解析都在 lib/uia.mjs（这里只做接线）。
 // 契约：OPS（操作元数据，danger: 'safe'|'input'|'close'）与
 //   export function createOps({ ps, dataDir }) → { run(op, args) → Promise<{ok, message, data?}> }
 //   ps：lib/ps.mjs 的 createPs 产物；dataDir：api.dataDir()（截图等数据落这里）。
 
 import { join } from 'node:path'
 import { mkdirSync } from 'node:fs'
+import { UIA_OPS, uiaScripts, prepareUia, interpretUia } from './uia.mjs'
 
 /** SendKeys 白名单：常用键名 → token。不接受任意字符串（SendKeys 的 +^%~(){}[] 是语法字符）。 */
 const KEY_TOKENS = {
@@ -27,7 +30,8 @@ function escapeSendKeys(text) {
 }
 
 /** 操作元数据：label 给主人看；danger 决定安全闸门怎么拦。
- *  safe = 只读/无副作用；input = 键鼠动作（须开「允许键鼠模拟」）；close = 关窗口（最危险，必确认）。 */
+ *  safe = 只读/无副作用；input = 键鼠动作（须开「允许键鼠模拟」）；close = 关窗口（最危险，必确认）。
+ *  uia.* 的 5 条来自 lib/uia.mjs 的 UIA_OPS（UIA 层自己维护元数据，这里合并成一张表）。 */
 export const OPS = {
   'clipboard.read': { label: '读剪贴板', danger: 'safe' },
   'clipboard.write': { label: '写剪贴板', danger: 'safe' },
@@ -40,6 +44,7 @@ export const OPS = {
   'key.text': { label: '键入文字', danger: 'input' },
   'key.press': { label: '按一个键', danger: 'input' },
   'paste': { label: '粘贴剪贴板内容（Ctrl+V）', danger: 'input' },
+  ...UIA_OPS,
 }
 
 // ---- PowerShell 片段（静态，只在编译期写死）----
@@ -141,6 +146,9 @@ Write-Output ok`,
 Add-Type -AssemblyName System.Windows.Forms
 [System.Windows.Forms.SendKeys]::SendWait('^v')
 Write-Output ok`,
+  // UIA 的 5 段脚本在 lib/uia.mjs（与选择器解析、输出解释放在一起，方便对照契约看）；
+  // PREFIX/ARGS 从本文件注入，保证「压进度流 + base64 参数」两处只有一份实现。
+  ...uiaScripts({ PREFIX, ARGS }),
 }
 
 /**
@@ -167,6 +175,14 @@ export function createOps({ ps, dataDir }) {
       case 'clipboard.read':
       case 'window.list':
         return { argv: [], summary: '' }
+      // UIA 五件的参数整理全在 lib/uia.mjs（选择器解析 + pid 校验），这里只转发；
+      // 参数不合法（选择器写错、pid 不是正整数）在这里抛错，index.mjs 的 exec 会转成 { ok:false, message }。
+      case 'uia.tree':
+      case 'uia.click':
+      case 'uia.setValue':
+      case 'uia.getText':
+      case 'uia.invoke':
+        return prepareUia(op, args)
       case 'clipboard.write': {
         const text = String(args.text ?? '')
         return { argv: [text], summary: `${text.length} 个字符` }
@@ -214,15 +230,23 @@ export function createOps({ ps, dataDir }) {
       mkdirSync(join(dataDir, 'shots'), { recursive: true })
       argv.push(join(dataDir, 'shots', `shot-${Date.now()}.png`))
     }
+    // UIA 五件：脚本内部已经把「找不到窗口/元素/不支持该模式」都翻成结构化失败输出，正常退出；
+    // 只有真出错（PowerShell 起不来、脚本崩）才会抛。抛的时候错误上若挂着已产出的 stdout
+    // （注入的 fake ps 可以挂），照样按结构化结果解释——真实 ps.run 不挂，就把错往上交。
+    const isUia = op.startsWith('uia.')
     // 只读类操作偶发失败（PS 5.1 首次加载模块的退出码毛刺）安全重试一次；动作类绝不重试（防重复点击）
-    const retryable = ['screenshot', 'window.list', 'clipboard.read']
+    const retryable = ['screenshot', 'window.list', 'clipboard.read', 'uia.tree', 'uia.getText']
     let out = ''
     try {
       out = (await ps.run(buildScript(target, argv))).trim()
     } catch (e) {
-      if (!retryable.includes(op)) throw e
-      out = (await ps.run(buildScript(target, argv))).trim()
+      const partial = typeof e?.stdout === 'string' ? e.stdout.trim() : ''
+      if (isUia && partial) out = partial
+      else if (!retryable.includes(op)) throw e
+      else out = (await ps.run(buildScript(target, argv))).trim()
     }
+    // UIA 五件的后续处理统一交给 lib/uia.mjs 的 interpretUia（按操作挑字段、拼给主人看的话）
+    if (isUia) return interpretUia(op, out)
     switch (op) {
       case 'clipboard.read':
         return { ok: true, message: out ? `剪贴板内容（${out.length} 字符）` : '剪贴板是空的', data: out }

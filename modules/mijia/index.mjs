@@ -12,8 +12,8 @@ import { parseIntent, matchDevice, canControl, formatDevices, classifyDevice } f
 
 export default {
   id: 'mijia',
-  name: '米家智控',
-  version: '1.1.0',
+  name: '逛米家（米家智控）',
+  version: '1.1.4',
   api: 1,
   description: '米家设备列表与开/关控制：扫码登录免账号密码，私聊说「开客厅灯」或用 /米家 命令，也能让她自己调工具',
   panel: 'panel.js',
@@ -22,6 +22,7 @@ export default {
     whitelist: '',
     privateOnly: true,
     cacheSeconds: 300,
+    homeName: '', // 只看哪个家（家庭名称或 id）；空=全部家庭
   },
   // settings 留空：面板字段全部由 panel.js 接管（账号/密码/总开关与验证登录放同一张卡上），
   // 运行时兜底见下面 getSettings()。
@@ -37,6 +38,7 @@ export default {
         whitelist: String(s.whitelist || '').split(/\r?\n/).map((x) => x.trim()).filter(Boolean),
         privateOnly: s.privateOnly !== false, // 默认开
         cacheSeconds: Math.max(30, Number(s.cacheSeconds) || 300),
+        homeName: String(s.homeName || '').trim(), // 空=全部家庭
       }
     }
 
@@ -135,9 +137,12 @@ export default {
      * 返回 [{ did,name,model,roomName,roomId,isOnline,type,label,controllable }]
      */
     async function listDevices(opts = {}) {
-      const { refresh = false, room, type, online, controllable, name, model } = opts
+      const { refresh = false, room, type, online, controllable, name, model, home } = opts
       const c = getCloud()
-      let items = await c.deviceList(refresh, getSettings().cacheSeconds * 1000)
+      // home 优先用调用方给的，其次用设置里的「只看哪个家」
+      let items = await c.deviceList(refresh, getSettings().cacheSeconds * 1000, {
+        home: home === undefined ? getSettings().homeName : home,
+      })
       items = items.map((d) => ({ ...d, ...classifyDevice(d.model, d.name) }))
       if (room) items = items.filter((d) => String(d.roomName || '').includes(String(room)))
       if (type) {
@@ -252,15 +257,32 @@ export default {
       try {
         const url = new URL(req.url, 'http://localhost')
         const refresh = url.searchParams.get('refresh') === '1'
+        // home 为空=全部家庭；给了就只看那一家（家庭 id 或名称子串）
+        const home = String(url.searchParams.get('home') || '').trim()
         const c = getCloud()
-        const items = await c.deviceList(refresh, getSettings().cacheSeconds * 1000)
+        const all = await c.deviceList(refresh, getSettings().cacheSeconds * 1000)
+        const items = home ? all.filter((d) => d.homeId === home || (d.homeName || '').includes(home)) : all
         return {
           ok: true,
+          home,
+          homes: await c.homesList(refresh, getSettings().cacheSeconds * 1000),
           devices: items.map((d) => ({ ...d, ...classifyDevice(d.model, d.name) })),
+          total: all.length,
         }
       } catch (e) {
         api.log.error(`[mijia] 面板取设备列表失败：${e.message}`)
         return { ok: false, message: e.message, notificationUrl: e.notificationUrl || '' }
+      }
+    })
+    // GET /homes：面板「家庭」下拉用（id/名称/是否共享/房间数）
+    api.route('/homes', async (req) => {
+      try {
+        const url = new URL(req.url, 'http://localhost')
+        const refresh = url.searchParams.get('refresh') === '1'
+        return { ok: true, homes: await getCloud().homesList(refresh, getSettings().cacheSeconds * 1000) }
+      } catch (e) {
+        api.log.error(`[mijia] 面板取家庭列表失败：${e.message}`)
+        return { ok: false, message: e.message }
       }
     })
     // POST /qr/start：领扫码登录二维码（不阻塞），返回 { qr, loginUrl } 或 { refreshed: true }
@@ -408,6 +430,7 @@ export default {
               description: 'list=列设备（可按 room/type/online 筛），on/off=开/关设备，state=查设备当前状态，set=调属性（需 key 和 value）',
             },
             device: { type: 'string', description: '设备名或 did，如「客厅灯」；action 为 list 时可省略' },
+            home: { type: 'string', description: 'action=list 时按家庭筛（家庭名或 id，子串），如「我的家」' },
             room: { type: 'string', description: 'action=list 时按房间筛（子串），如「客厅」' },
             type: { type: 'string', description: 'action=list 时按类型筛：light/switch/ac/curtain/fan/sensor/hub' },
             online: { type: 'string', enum: ['true', 'false'], description: 'action=list 时按在线状态筛' },
@@ -415,13 +438,13 @@ export default {
             value: { type: 'string', description: 'action=set 时的目标值：亮度/音量 1~100，色温 2700~6500' },
           },
           required: ['action'],
-          execute: async ({ action, device, room, type, online, key, value }) => {
+          execute: async ({ action, device, home, room, type, online, key, value }) => {
             if (!['list', 'on', 'off', 'state', 'set'].includes(action)) {
               return { ok: false, message: 'action 只能是 list/on/off/state/set' }
             }
             if (action === 'list') {
               const items = await listDevices({
-                room, type,
+                home, room, type,
                 online: online === undefined ? undefined : online === 'true',
               })
               return {
@@ -467,8 +490,10 @@ export default {
       runIntent,
       /**
        * 第三方模块 API（api.use('mijia') 后可用）：
-       *   listDevices({refresh,room,type,online,controllable,name,model})
-       *       -> [{did,name,model,roomName,isOnline,type,label,controllable}] 多维筛选设备列表
+       *   listDevices({refresh,home,room,type,online,controllable,name,model})
+       *       -> [{did,name,model,roomName,homeId,homeName,isOnline,type,label,controllable}] 多维筛选设备列表
+       *      home：家庭 id 或名称子串（不传=用设置里的「只看哪个家」，仍为空=全部家庭）
+       *   homesList({refresh}) -> [{id,name,uid,shared,roomCount}] 账号下的家庭（共享家庭 shared=true）
        *   listRooms({refresh}) -> [{room,total,online,types:{标签:数}}] 按房间汇总
        *   control(nameOrDid, on)            -> { ok, message } 开/关设备
        *   setState(nameOrDid, key, value)   -> { ok, message } 调属性；key 可用规格 key（p2_2）或语义名（brightness/colorTemp/volume）
@@ -476,6 +501,7 @@ export default {
        * 注意：这些方法不走 QQ 权限门（跨模块调用方自担权限），只有消息入口有权限门。
        */
       listDevices,
+      homesList: () => getCloud().homesList(),
       listRooms,
       control,
       setState,

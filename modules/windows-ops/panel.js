@@ -3,7 +3,8 @@
 // 模块 settings 数组留空：所有设置由本面板接管（总开关挂在模块名同一行，仿 B 站页），
 // 默认值在下面 DEFAULTS 里兜底（原生表单不再渲染，避免两套表单重复）。
 // 布局：①逛电脑主卡（标题行=总开关；状态总览+运行安全设置+保存）→ ①¼ 红色「⚠️ 高权限风险提示」卡
-//       → ② 操作白名单 → ③ 危险确认队列 → ④ 主流程总纲（独立卡，不可删）→ ⑤ Windows 自动化指引
+//       → ①⅜ 元素定位（UIA）说明/开关卡（坐标点击 vs 读树定位）→ ② 操作白名单 → ③ 危险确认队列
+//       → ④ 主流程总纲（独立卡，不可删）→ ⑤ Windows 自动化指引
 //       （人格页式分节编辑：左列表右编辑，分节/整段来回切）。
 const { useState, useEffect } = React
 
@@ -16,6 +17,7 @@ const DEFAULTS = {
   dryRun: false, // 试运行
   rateLimit: 60, // 每分钟操作上限
   powershellPath: '', // 留空 = System32 自动
+  preferUia: true, // 优先用元素定位（读无障碍树按选择器操作），关了她会更爱点坐标
 }
 
 return function Panel({ settings, save, toast }) {
@@ -258,7 +260,7 @@ return function Panel({ settings, save, toast }) {
         h('span', { className: 'ab-small ab-muted' }, '总开关'),
         h(ui.Switch, { on: masterOn, disabled: !!busy, title: '总开关', onChange: toggleMaster }),
         h('span', { className: 'ab-badge mine' }, 'windows-ops')),
-      desc: '经 PowerShell 操作这台电脑：窗口枚举/激活/关闭、截屏、剪贴板读写、键鼠模拟。默认仅主人可用。'
+      desc: '经 PowerShell 操作这台电脑：窗口枚举/激活/关闭、截屏、剪贴板读写、键鼠模拟，以及 UIA 元素定位（读无障碍树按选择器精确操作控件）。默认仅主人可用。'
         + (masterOn ? ' 总开关开着：AI 工具、/wops 命令都能操作这台电脑。' : ' 总开关关着：她碰不了这台电脑，工具/命令全部停用。'),
     },
     // 状态总览（只读，一键刷新）
@@ -292,6 +294,35 @@ return function Panel({ settings, save, toast }) {
         '本模块可模拟键鼠、关闭窗口、读写剪贴板、截取全屏——等同于把这台电脑交给 AI 远程控制：她能代你点击任何界面（包括聊天窗口和支付页面）、能读到剪贴板里的密码与验证码、能截走屏幕上的隐私内容。'
         + '缓解措施：总开关默认关、键鼠模拟单独开关、操作白名单、危险操作确认队列、试运行模式、每分钟限速，且工具只在主人会话放行。'
         + '请只在本人可信设备上开启；不用时把总开关关上，并留意下面的「待确认」列表，防止误批准。')),
+
+    // ===== ①⅜ 元素定位（UIA）：坐标点击 vs 读无障碍树按选择器操作，默认优先后者 =====
+    // 放在高权限风险提示之后、白名单之前：先让主人知道「动」有风险，再告诉他「动」有两种动法。
+    h(ui.Card, { title: '元素定位（UIA）', desc: '同样是点按钮/填输入框，有两种动法：点坐标（告诉她屏幕第几个像素）与元素定位（读无障碍树，告诉她「那个叫提交的按钮」）。读树那套更稳，所以默认优先用它，坐标只在读不到树时兜底。' },
+      swRow('优先用元素定位', 'preferUia', '默认开：把「能读无障碍树就别猜坐标」这条偏好记进设置（preferUia），她按总纲第一原则先读树再操作；关掉表示你更愿意让她直接点坐标（读不到树的界面本来就走坐标兜底）'),
+      h('div', { className: 'ab-small', style: { marginTop: 10, lineHeight: 1.85 } },
+        h('b', null, '· 坐标点击（mouse.move / mouse.click）'),
+        h('div', { className: 'ab-muted' },
+          '指定屏幕像素坐标再点：简单、什么界面都能点，但窗口一挪、一改大小、换个主题或屏幕缩放变了就全点偏；'
+          + '而且她并不知道自己点到了什么，只能靠截图猜。'),
+        h('b', { style: { display: 'block', marginTop: 8 } }, '· 元素定位（uia.tree / uia.click / uia.setValue / uia.getText / uia.invoke）'),
+        h('div', { className: 'ab-muted' },
+          '先读目标窗口的无障碍树（每个控件的类型、名字、AutomationId、位置都在清单里），再用选择器点名操作某个元素：'
+          + '窗口挪动、改大小、换主题/DPI 都不影响；填输入框走 setValue 直接写控件值，不受中文输入法影响。'
+          + '读不到树的界面（Canvas、游戏、自绘框架）才退回坐标兜底。')),
+      // 选择器写法示例（等宽字体，照抄改关键字即可）
+      h('div', { className: 'ab-small', style: { marginTop: 12 } },
+        h('b', null, '选择器怎么写'),
+        h('div', { className: 'ab-muted', style: { marginTop: 2 } },
+          '参数 sel，格式「键=值」，多个条件用 && 连起来（全部满足才算命中）。可用的键四个：'
+          + 'AutomationId / Name / ControlType / ClassName；值按前缀匹配，不支持通配符。'),
+        h('pre', { style: { fontFamily: 'monospace', fontSize: 12, background: 'var(--ab-bg, rgba(127,127,127,.08))', padding: '8px 10px', borderRadius: 6, margin: '8px 0 0', whiteSpace: 'pre', overflowX: 'auto' } },
+          'AutomationId=submitBtn                    // 最稳：程序员给的唯一标识\n'
+          + 'Name=提交                                  // 用户看得见的文字\n'
+          + 'Name=提交&&ControlType=Button              // 多个条件一起钉死\n'
+          + 'ControlType=Edit&&AutomationId=username    // 输入框常见写法'),
+        h('div', { className: 'ab-muted', style: { marginTop: 8, lineHeight: 1.8 } },
+          '挑条件的顺序：AutomationId 优先；没有就 Name（目标程序界面上的原文）；再不行 ControlType + ClassName 组合。'
+          + '每次操作都要带上 pid（目标窗口进程号，先 window.list 认准），元素不跨调用有效，别指望上一步找到的元素这一步还在。'))),
 
     // ===== ② 操作白名单：设置框 + 从操作目录里挑的助手同卡 =====
     h(ui.Card, { title: '操作白名单', desc: '管住她只能用哪些操作，一行一个操作 id，空 = 按内置规则放行（安全操作直接放行，键鼠类还要开上面的开关，危险类还要过确认门）。点「获取操作目录」挑着加，点「加入」直接追加落盘；也可以手填，改完点上面的「保存设置」。' },
@@ -354,7 +385,7 @@ return function Panel({ settings, save, toast }) {
             btn('还原内置版', resetMain, 'resetmain')))),
 
     // ===== ⑤ Windows 自动化指引（单类手册：左列表右编辑，人格页式分节） =====
-    h(ui.Card, { title: 'Windows 自动化指引', desc: '教她怎么稳妥地用某类操作（键鼠/窗口/剪贴板/截屏）。她按当前操作用 windows_ops_guide 工具按需取对应手册，总纲在上面单独一张卡。左边选手册，右边像人格页那样一节一个框地改（也能切「整段」）；自定义条目可删除（要过两道确认），内置条目只能还原。' },
+    h(ui.Card, { title: 'Windows 自动化指引', desc: '教她怎么稳妥地用某类操作（元素定位/键鼠/窗口/剪贴板/截屏）。她按当前操作用 windows_ops_guide 工具按需取对应手册（uia.* 取「元素定位」那份），总纲在上面单独一张卡。左边选手册，右边像人格页那样一节一个框地改（也能切「整段」）；自定义条目可删除（要过两道确认），内置条目只能还原。' },
       h('div', { className: 'ab-persona' },
         // 左列：所有手册（内置 + 自定义，不含总纲）＋ 新增入口，仿人格页的列表
         h('div', { className: 'ab-plist' },

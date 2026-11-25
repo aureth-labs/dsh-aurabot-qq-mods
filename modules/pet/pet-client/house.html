@@ -14,6 +14,9 @@
     <title>大肥鱼的家</title>
     <style>
       * { box-sizing: border-box; }
+      /* body/根容器底色与 main.js openHouse 的 backgroundColor 统一为 #1d1a17：
+         「页面起来了但场景没数据」时露深色底 + 错误提示，而不是刺眼白屏；
+         黑（没起来，露窗口底色）白（body 白底）两态也就统一成深色系了。 */
       html, body {
         margin: 0;
         width: 100%;
@@ -154,9 +157,18 @@
         box-shadow: 0 8px 22px rgba(60, 70, 120, 0.28);
         max-height: 70vh; overflow: auto;
       }
-      /* 素材未就绪 / 加载失败的居中提示（不白屏、不抛错）。 */
+      /* 素材未就绪 / 加载失败的居中提示（不白屏、不抛错）。
+         house.js 启动拉 manifest 失败会亮这一层并每 3s 重试（最多 20 次，文案带失败次数），
+         任何一次成功就隐藏本层正常渲染；重试耗尽改口提示重开。 */
       #fatal {
         position: fixed; inset: 0; z-index: 9500; display: none;
+        align-items: center; justify-content: center;
+      }
+      /* 加载幕（2026-11-07）：**默认可见**——从窗口第一帧起就是深色底 + 「小屋加载中…」，
+         永远不白（此前页面本身没起来时什么提示都没有，只能露一块死板）。
+         house.js boot 出结果（成功正常渲染 / 失败转 #fatal 错误层）时收掉它。 */
+      #boot {
+        position: fixed; inset: 0; z-index: 9400; display: flex;
         align-items: center; justify-content: center;
       }
       #fatal .card {
@@ -195,6 +207,7 @@
     <div id="menu"></div>
     <div id="menu-sub" class="sub"></div>
     <div id="fatal"><div class="card" id="fatal-text"></div></div>
+    <div id="boot"><div class="card">小屋加载中…</div></div>
     <script src="house.js"></script>
   </body>
 </html>

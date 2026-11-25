@@ -1,0 +1,14 @@
+{
+  "id": "moodboard",
+  "name": "心情看板",
+  "version": "1.0.0",
+  "description": "桌面固定小窗：她的心情与起伏历史、目的引擎的驱力和心情向量、记忆里的相处经验与说话方式",
+  "category": "desktop",
+  "tags": ["心情", "看板", "目的引擎", "记忆"],
+  "author": "RookieApe-tao",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["network", "plugin-internals", "process"]
+}
