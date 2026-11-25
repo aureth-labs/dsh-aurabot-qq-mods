@@ -29,7 +29,7 @@ const quiet = (fn) => { try { return fn() } catch { return undefined } }
 export default {
   id: 'local-diary',
   name: '私人日记',
-  version: '1.1.0',
+  version: '1.2.0',
   api: 1,
   description: '给大肥鱼一本只属于她的日记本：每天晚上自己写一篇 md，不限长短、不套模板，只存本地、不发给任何人。会带入当天的聊天、心情和看过的东西，写完回流进记忆，聊天时她还能自己翻旧日记；末尾想许几个愿就许几个。面板里是一本能翻页的日记本，随插件备份一起搬家',
   defaults: {
@@ -49,6 +49,7 @@ export default {
     { key: 'mirror', label: '外部文件夹也镜像进备份区', type: 'switch', hint: '日记放在插件数据目录外面时，镜像一份进 modules-data，换电脑能带走' },
     { key: 'inject', label: '聊天时带上最近几篇的线索', type: 'switch', hint: '每轮多一段「你写过这些日记」，不塞整篇正文' },
     { key: 'maxRows', label: '最多读多少条当天聊天', type: 'number', min: 20, max: 2000, step: 10, hint: '太多会拖慢也容易跑偏，默认 200 条' },
+    { key: 'mainGroup', label: '主群群号（它和主人私聊优先）', type: 'text', placeholder: '123456789', hint: '主群和主人私聊先占七成额度，其他群只分剩下的；留空则全部按时间截断' },
   ],
   panel: 'panel.js',
 
@@ -119,12 +120,143 @@ export default {
 
     const hasDiary = (day) => index.some((x) => x.day === day)
 
+    /**
+     * 一天分成几个时段，每段给一个权重。日记要在意的是「什么时候发生的事」，
+     * 不是「一天里最后说了什么」——纯取尾部的话，早上和中午全丢了。
+     * 权重按作息调：早中晚睡前是清醒时段，多采；下午上班、深夜睡觉，少采。
+     */
+    const DAY_BUCKETS = [
+      { key: '清晨', from: 5, to: 9, weight: 1.4 },
+      { key: '上午', from: 9, to: 12, weight: 1.0 },
+      { key: '中午', from: 12, to: 14, weight: 1.4 },
+      { key: '下午', from: 14, to: 18, weight: 0.7 },
+      { key: '傍晚', from: 18, to: 20, weight: 1.0 },
+      { key: '晚上', from: 20, to: 23, weight: 1.4 },
+      { key: '睡前', from: 23, to: 24, weight: 1.6 },
+      { key: '深夜', from: 0, to: 5, weight: 0.6 },
+    ]
+
+    function bucketOf(hour) {
+      for (const b of DAY_BUCKETS) if (hour >= b.from && hour < b.to) return b
+      return null
+    }
+
+    /**
+     * 每个时段分到几条：按权重比例分，但要**迭代回流**。
+     * 某个时段本身就没几条消息（比如清晨只有 7 条，按权重该分 26 条），
+     * 多出来的额度不回流就会白白浪费，最后总数凑不满、料还不全。
+     */
+    function allocate(limit, buckets) {
+      const alive = buckets.filter((b) => b.rows.length)
+      if (!alive.length) return new Map()
+      const out = new Map(alive.map((b) => [b.key, 0]))
+      const capacity = new Map(alive.map((b) => [b.key, b.rows.length]))
+      let left = Math.min(limit, alive.reduce((a, b) => a + b.rows.length, 0))
+
+      // 一轮一轮分：每轮只看还有余量的桶，按权重重新算比例
+      for (let guard = 0; guard < 12 && left > 0; guard += 1) {
+        const open = alive.filter((b) => (capacity.get(b.key) || 0) > (out.get(b.key) || 0))
+        if (!open.length) break
+        const sum = open.reduce((a, b) => a + b.weight, 0)
+        let given = 0
+        for (const b of open) {
+          const room = capacity.get(b.key) - out.get(b.key)
+          const want = Math.max(1, Math.floor((left * b.weight) / sum))
+          const take = Math.min(room, want)
+          out.set(b.key, out.get(b.key) + take)
+          given += take
+        }
+        if (!given) break
+        left -= given
+      }
+      // 还有零头就按权重从高到低补，补满为止
+      const order = [...alive].sort((a, b) => b.weight - a.weight)
+      for (let i = 0; left > 0 && i < order.length * 4; i += 1) {
+        const b = order[i % order.length]
+        if ((out.get(b.key) || 0) >= capacity.get(b.key)) continue
+        out.set(b.key, out.get(b.key) + 1)
+        left -= 1
+      }
+      return out
+    }
+
+    /**
+     * 从一段里均匀抽 n 条：等距取样，保留首尾。
+     * 不随机——同一天重跑两次应该拿到同样的素材，日记才稳定。
+     */
+    function spread(list, n) {
+      if (n <= 0) return []
+      if (list.length <= n) return list
+      if (n === 1) return [list[list.length - 1]]
+      const out = []
+      const step = (list.length - 1) / (n - 1)
+      for (let i = 0; i < n; i += 1) out.push(list[Math.round(i * step)])
+      return out
+    }
+
+    /**
+     * 挑素材：先按时段分桶均匀采样，再保证主人私聊和主群有足够占比。
+     * 以前是纯按时间取最后 200 条，结果主人的私聊一条都进不去，日记里全是夜里的群聊刷屏。
+     */
+    function pickRows(rows, s, cfg) {
+      const limit = Math.max(20, Number(s.maxRows) || 200)
+      const owner = String(cfg.ownerQQ || '')
+      const ownerChat = owner ? `private:${owner}` : ''
+      const mainChat = String(api.settings().mainGroup || '').trim()
+      const isPrimary = (id) => Boolean((ownerChat && id === ownerChat) || (mainChat && id === `group:${mainChat}`))
+
+      const usable = []
+      for (const r of rows) {
+        const id = String(r.chatId || '')
+        if (!id || id.startsWith('system:')) continue
+        usable.push(r)
+      }
+      if (!usable.length) return []
+
+      // ① 先给主人私聊 / 主群留七成额度（跟谁都抢不走）
+      const primary = usable.filter((r) => isPrimary(String(r.chatId)))
+      const others = usable.filter((r) => !isPrimary(String(r.chatId)))
+      const primaryQuota = Math.ceil(limit * 0.7)
+
+      // ② 两个池子各自按时段分桶采样
+      function sample(pool, quota) {
+        if (!pool.length || quota <= 0) return []
+        const map = new Map()
+        for (const r of pool) {
+          const t = Number(r.t) || 0
+          const hour = t ? new Date(t).getHours() : 0
+          const b = bucketOf(hour)
+          if (!b) continue
+          if (!map.has(b.key)) map.set(b.key, { key: b.key, weight: b.weight, rows: [] })
+          map.get(b.key).rows.push(r)
+        }
+        const buckets = [...map.values()].sort((a, b) => DAY_BUCKETS.findIndex((x) => x.key === a.key) - DAY_BUCKETS.findIndex((x) => x.key === b.key))
+        for (const b of buckets) b.rows.sort((x, y) => (Number(x.t) || 0) - (Number(y.t) || 0))
+        const alloc = allocate(quota, buckets)
+        const out = []
+        for (const b of buckets) out.push(...spread(b.rows, alloc.get(b.key) || 0))
+        return out
+      }
+
+      // 主力池装不满（主人今天话少）就把额度让给别的群，别白白空着
+      const keptPrimary = sample(primary, primaryQuota)
+      const keptOthers = sample(others, limit - keptPrimary.length)
+      const merged = keptPrimary.concat(keptOthers).sort((a, b) => (Number(a.t) || 0) - (Number(b.t) || 0))
+
+      if (usable.length > merged.length) {
+        api.log.info?.(
+          `私人日记：全天 ${usable.length} 条按时段采样成 ${merged.length} 条` +
+            `（私聊+主群 ${primary.length}→${keptPrimary.length}，其他群 ${others.length}→${keptOthers.length}）`,
+        )
+      }
+      return merged
+    }
+
     /** 拼素材：当天聊天流水 + 心情 + 今天看过的东西。 */
     function collect(day) {
       const s = api.settings()
       const rows = api.core.hub.chatLogOf(day) || []
-      const limit = Math.max(20, Number(s.maxRows) || 200)
-      const picked = rows.slice(-limit)
+      const picked = pickRows(rows, s, api.config() || {})
       const lines = []
       let last = ''
       for (const r of picked) {
@@ -356,9 +488,18 @@ export default {
     }) : []))
 
     // 聊天时带上最近几篇的线索（只要开头，不塞整篇）
-    api.context(() => {
+    // 本地改动（dsh-go 手机端）：只给主人私聊。
+    // 原来这个钩子不接参数，群聊和别人的私聊也会注入最近 3 篇日记摘要 ——
+    // 那里面是「哥哥今天装空调…」这类私事，她在群里照着说就等于把私聊内容带到群里。
+    api.context((args) => {
       const s = api.settings()
       if (!s.inject || !index.length) return ''
+      const chat = args && args.chat
+      const owner = String(api.config()?.ownerQQ || '')
+      const ownerPrivate = chat !== undefined && chat !== null && chat.kind === 'private' &&
+        String(chat.userId || '') === owner
+      // 群聊 / 别人私聊一律不带日记
+      if (!ownerPrivate) return ''
       const recent = index.slice(-3).reverse()
       const list = recent.map((x) => `- ${x.day}${x.mood ? `（${x.mood}）` : ''}：${x.summary}`).join('\n')
       return `你写过这些私人日记（原文用 diary_read 能翻到）：\n${list}`

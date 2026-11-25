@@ -1,0 +1,26 @@
+{
+  "id": "self-learn",
+  "name": "自主学习",
+  "version": "1.0.0",
+  "description": "定时自己去 B 站（跟着它逛过的视频）和聊天流水里找真人怎么说话，自动筛出人机反例和真人金句收进库，每天写一份学了什么的小结。",
+  "category": "social",
+  "tags": [
+    "自学",
+    "语感",
+    "B站",
+    "定时"
+  ],
+  "author": "旭光Ⅺ",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [
+    "anti-bot"
+  ],
+  "capabilities": [
+    "network",
+    "filesystem",
+    "plugin-internals"
+  ],
+  "homepage": ""
+}
