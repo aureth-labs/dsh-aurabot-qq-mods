@@ -604,6 +604,37 @@
       "publishedAt": "2026-11-16T15:45:11.363Z"
     },
     {
+      "id": "ctx-guard",
+      "name": "上下文守门",
+      "version": "1.0.0",
+      "description": "盯着每轮对话的 token 用量，到线用私聊提醒你该压缩上下文了。只提醒不动手，因为压缩服务在模块侧取不到。阈值、文案语气、冷却都在面板里调。",
+      "category": "tool",
+      "tags": [
+        "上下文",
+        "token",
+        "压缩",
+        "省钱"
+      ],
+      "author": "KuroPeach",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "ctx-guard-v1.0.0",
+      "file": "ctx-guard-v1.0.0.zip",
+      "path": "ctx-guard-v1.0.0/ctx-guard-v1.0.0.zip",
+      "size": 16545,
+      "sha256": "378fcae2c7fe1ea40d410249b388f9b6577cab2d7e87c7cc253c2b140645ef64",
+      "commit": "191316ee69e375cdf2d3a7a1e8492c5d1119d5a1",
+      "publishedAt": "2026-11-25T13:08:33.270Z"
+    },
+    {
       "id": "daily-art",
       "name": "每日推图 · 逛图站",
       "version": "3.2.0",
@@ -1035,6 +1066,33 @@
       "publishedAt": "2026-11-22T12:27:41.222Z"
     },
     {
+      "id": "group-guard",
+      "name": "群聊特别处理",
+      "version": "1.0.0",
+      "description": "给指定的群加背景说明，并给「她会不会开口」加硬上限——必回和「正聊得起劲」都算，防止在机器人扎堆的群里一句接一句刷屏。",
+      "category": "manage",
+      "tags": [
+        "群聊",
+        "提示词",
+        "上下文",
+        "防刷屏"
+      ],
+      "author": "KuroPeach",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [],
+      "replacesBuiltin": false,
+      "tag": "group-guard-v1.0.0",
+      "file": "group-guard-v1.0.0.zip",
+      "path": "group-guard-v1.0.0/group-guard-v1.0.0.zip",
+      "size": 6584,
+      "sha256": "7e4e03c9ae90d82ebc550c6476ea3d4328f7d1e8703a9910f852e9d238629136",
+      "commit": "191316ee69e375cdf2d3a7a1e8492c5d1119d5a1",
+      "publishedAt": "2026-11-25T13:08:33.270Z"
+    },
+    {
       "id": "group-mention-etiquette",
       "name": "群友互相 @ 时不插话",
       "version": "1.0.0",
@@ -1318,7 +1376,7 @@
     {
       "id": "local-diary",
       "name": "私人日记",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "description": "给大肥鱼一本只属于她的日记本：每天晚上自己写一篇 md，不限长短、不套模板，只存本地、不发给任何人。会带入当天的聊天、心情和看过的东西，写完回流进记忆，聊天时她还能自己翻旧日记；末尾想许几个愿就许几个。面板里是一本能翻页的日记本，随插件备份一起搬家",
       "category": "tool",
       "tags": [
@@ -1334,16 +1392,17 @@
       "capabilities": [
         "filesystem",
         "process",
+        "plugin-config",
         "plugin-internals"
       ],
       "replacesBuiltin": false,
-      "tag": "local-diary-v1.1.0",
-      "file": "local-diary-v1.1.0.zip",
-      "path": "local-diary-v1.1.0/local-diary-v1.1.0.zip",
-      "size": 21703,
-      "sha256": "4581f35be8bf41f31a49b0d9422544b22187086c4590cc5228e3e297d141a03a",
-      "commit": "0b4640cd239b20cf3f992759eda7090fdce00dcf",
-      "publishedAt": "2026-11-22T12:00:44.475Z"
+      "tag": "local-diary-v1.2.0",
+      "file": "local-diary-v1.2.0.zip",
+      "path": "local-diary-v1.2.0/local-diary-v1.2.0.zip",
+      "size": 24243,
+      "sha256": "1b153cf7740f91f8feb98c6737f12ecde3bf914122ae499f59e3255c0456c3b4",
+      "commit": "191316ee69e375cdf2d3a7a1e8492c5d1119d5a1",
+      "publishedAt": "2026-11-25T13:08:33.270Z"
     },
     {
       "id": "love-mode",
@@ -2688,6 +2747,42 @@
       "publishedAt": "2026-11-18T06:27:15.537Z"
     },
     {
+      "id": "timeline",
+      "name": "时间线",
+      "version": "1.0.0",
+      "description": "给 AI 伙伴建一份自己的日程表：回复涉及「你在做什么/几点/今天安排/考试放假」时，把当前时间块注入她的上下文，避免她即兴编时间；周表按当前人格正文自动拟，换人格会重排。",
+      "category": "tool",
+      "tags": [
+        "日程",
+        "时间线",
+        "时间管理",
+        "注入",
+        "安排"
+      ],
+      "author": "Neltharion4G",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [
+        "mood",
+        "memory"
+      ],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "timeline-v1.0.0",
+      "file": "timeline-v1.0.0.zip",
+      "path": "timeline-v1.0.0/timeline-v1.0.0.zip",
+      "size": 22974,
+      "sha256": "e8aa2828c843fefc135184ade1a916dca39fe81f560f6c37a080cb08c0024b7b",
+      "commit": "191316ee69e375cdf2d3a7a1e8492c5d1119d5a1",
+      "publishedAt": "2026-11-25T13:08:33.270Z"
+    },
+    {
       "id": "token-budget",
       "name": "预算管家",
       "version": "1.2.0",
@@ -2890,14 +2985,15 @@
     {
       "id": "windows-ops",
       "name": "逛电脑（Windows 自动化）",
-      "version": "1.2.1",
-      "description": "经 PowerShell 操作这台电脑：读无障碍树（UIA）按元素点击/写值/读文本/触发表单，窗口枚举/激活/关闭、截屏、剪贴板读写、键鼠模拟。默认仅主人可用，带操作白名单与危险操作确认门槛。",
+      "version": "1.3.2",
+      "description": "经 PowerShell 操作这台电脑：读无障碍树（UIA）按元素点击/写值/读文本/触发表单，窗口枚举/激活/关闭、截屏、剪贴板读写、键鼠模拟；并通过机器人自己的 QQ 客户端（按机器人 QQ 号识别窗口）原生「屏幕共享」向主人或主人指定的好友共享屏幕、用「邀请对方远程协助」让对方直接接管；发起前先把当前屏幕截图发主人私聊确认。默认仅主人可用，带操作白名单与危险操作确认门槛。",
       "category": "platform",
       "tags": [
         "windows",
         "自动化",
         "键鼠",
-        "截屏"
+        "屏幕共享",
+        "远程协助"
       ],
       "author": "RookieApe-tao",
       "license": "MIT",
@@ -2907,16 +3003,17 @@
       "capabilities": [
         "filesystem",
         "process",
-        "plugin-internals"
+        "plugin-internals",
+        "plugin-config"
       ],
       "replacesBuiltin": false,
-      "tag": "windows-ops-v1.2.1",
-      "file": "windows-ops-v1.2.1.zip",
-      "path": "windows-ops-v1.2.1/windows-ops-v1.2.1.zip",
-      "size": 51184,
-      "sha256": "5f7a51fbfb5781a1bd343901e710ae4db937e628e88969a9853956fbea867c94",
-      "commit": "7e9ed5dd9212e6b6e2027622a3567cf155ce6abf",
-      "publishedAt": "2026-11-07T14:49:23.782Z"
+      "tag": "windows-ops-v1.3.2",
+      "file": "windows-ops-v1.3.2.zip",
+      "path": "windows-ops-v1.3.2/windows-ops-v1.3.2.zip",
+      "size": 77360,
+      "sha256": "c5541cfc260aa7fc9b6ef29abfd2a489d52f220306e35a317c93c3d7966b585f",
+      "commit": "191316ee69e375cdf2d3a7a1e8492c5d1119d5a1",
+      "publishedAt": "2026-11-25T13:08:33.270Z"
     },
     {
       "id": "wool-runner",
@@ -3053,5 +3150,5 @@
       "reason": "作者主动撤回。"
     }
   ],
-  "generatedAt": "2026-11-25T13:06:13.130Z"
+  "generatedAt": "2026-11-25T13:08:33.270Z"
 }
