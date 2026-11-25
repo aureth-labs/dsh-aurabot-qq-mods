@@ -2594,6 +2594,36 @@
       "publishedAt": "2026-11-09T10:26:34.480Z"
     },
     {
+      "id": "sticker-kit",
+      "name": "表情进阶",
+      "version": "1.0.0",
+      "description": "按画面/梗/场合/情绪检索表情（知识库来自 stickers 模块的表情库）",
+      "category": "social",
+      "tags": [
+        "表情包",
+        "检索",
+        "知识库"
+      ],
+      "author": "风止",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [
+        "stickers"
+      ],
+      "capabilities": [
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "sticker-kit-v1.0.0",
+      "file": "sticker-kit-v1.0.0.zip",
+      "path": "sticker-kit-v1.0.0/sticker-kit-v1.0.0.zip",
+      "size": 8288,
+      "sha256": "c5f341623d7ed721becac8e1e5861e2e044297d5eafd075ee4f8f45c891150ae",
+      "commit": "5f92a5f59b735afd593f5e6b6dbaf871b6315c2a",
+      "publishedAt": "2026-11-25T12:39:35.209Z"
+    },
+    {
       "id": "tieba-reader",
       "name": "逛贴吧（只读）",
       "version": "1.5.5",
@@ -2991,5 +3021,5 @@
       "reason": "作者主动撤回。"
     }
   ],
-  "generatedAt": "2026-11-25T12:38:47.699Z"
+  "generatedAt": "2026-11-25T12:39:35.209Z"
 }
