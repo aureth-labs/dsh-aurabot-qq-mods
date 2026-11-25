@@ -1356,7 +1356,7 @@
     {
       "id": "memory-grade",
       "name": "记忆总库",
-      "version": "2.1.0",
+      "version": "2.1.1",
       "description": "存记忆、判密级、贴标签、算时效。写库前自动盖章，过期的只标「当时」不删除。带「实时大脑」：把各会话刚发生的事实时记下来，每条盖密级，跨会话用时按密级兜底。带「过目不忘」：知识类永不淡。遗忘只做整理——该休眠的转休眠、该归档的转归档，真正的删除交给 aurabot 插件自己完成。还带记忆库面板，能翻页、搜、改。东西全在自己机器上，不联网、不外传。",
       "category": "manage",
       "tags": [
@@ -1379,13 +1379,13 @@
         "plugin-internals"
       ],
       "replacesBuiltin": false,
-      "tag": "memory-grade-v2.1.0",
-      "file": "memory-grade-v2.1.0.zip",
-      "path": "memory-grade-v2.1.0/memory-grade-v2.1.0.zip",
-      "size": 83362,
-      "sha256": "fd99dad84f0eb689dd1b77e6a6c75ea4ded2490bec1b1e71d91adfb27d302ecb",
-      "commit": "0e145fe777bc1ff2dd0106df59e808eb8c240578",
-      "publishedAt": "2026-11-25T09:23:29.418Z"
+      "tag": "memory-grade-v2.1.1",
+      "file": "memory-grade-v2.1.1.zip",
+      "path": "memory-grade-v2.1.1/memory-grade-v2.1.1.zip",
+      "size": 84405,
+      "sha256": "ae675b95ff72eb621a7e5815109c722ca333445f039d7647b3b0301dc98bc985",
+      "commit": "7b48e254bdf6745ea5427ca50524bc7364eee98b",
+      "publishedAt": "2026-11-25T11:40:19.978Z"
     },
     {
       "id": "mijia",
@@ -2835,5 +2835,5 @@
       "reason": "作者主动撤回。"
     }
   ],
-  "generatedAt": "2026-11-25T10:28:45.354Z"
+  "generatedAt": "2026-11-25T11:40:19.978Z"
 }
