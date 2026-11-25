@@ -540,6 +540,37 @@
       "publishedAt": "2026-11-15T17:35:37.510Z"
     },
     {
+      "id": "companion",
+      "name": "陪伴记忆",
+      "version": "1.0.0",
+      "description": "每轮对话注入一份可热更新的相处记忆快照：连续性状态、固定事实、活跃记忆，并在超预算时分层裁剪。",
+      "category": "creative",
+      "tags": [
+        "记忆",
+        "陪伴",
+        "快照"
+      ],
+      "author": "fengzhi-97",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "homepage": "https://github.com/aureth-labs/dsh-aurabot-qq",
+      "tag": "companion-v1.0.0",
+      "file": "companion-v1.0.0.zip",
+      "path": "companion-v1.0.0/companion-v1.0.0.zip",
+      "size": 39746,
+      "sha256": "b1fce5018706328aa6f850a79da532517480233d9373d3c3d4c0c7185ab9db87",
+      "commit": "3cd4ccbeb265f1828c2ad55c2abe551679ffd9d3",
+      "publishedAt": "2026-11-25T12:38:47.699Z"
+    },
+    {
       "id": "companion-bond",
       "name": "相伴养成",
       "version": "1.0.1",
@@ -815,6 +846,35 @@
       "sha256": "d75a122204482e2c9c00336fc1bd684ad820a63af588381c48a57b172379d2c1",
       "commit": "eee79382b0d51e0861246e54064d73644b700f05",
       "publishedAt": "2026-11-22T12:25:15.772Z"
+    },
+    {
+      "id": "evidence",
+      "name": "记忆证据",
+      "version": "1.0.0",
+      "description": "给记忆事实配证据链：按提及时间与来源打分、衰减、晋级或降级，避免凭空捏造和过期事实长期盘踞。",
+      "category": "manage",
+      "tags": [
+        "记忆",
+        "证据",
+        "衰减"
+      ],
+      "author": "fengzhi-97",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem"
+      ],
+      "replacesBuiltin": false,
+      "homepage": "https://github.com/aureth-labs/dsh-aurabot-qq",
+      "tag": "evidence-v1.0.0",
+      "file": "evidence-v1.0.0.zip",
+      "path": "evidence-v1.0.0/evidence-v1.0.0.zip",
+      "size": 12394,
+      "sha256": "c14962659ce5cb41c61c266851c8dd7ccf51a1415855af33163af061fe5f4136",
+      "commit": "3cd4ccbeb265f1828c2ad55c2abe551679ffd9d3",
+      "publishedAt": "2026-11-25T12:38:47.699Z"
     },
     {
       "id": "feed",
@@ -2931,5 +2991,5 @@
       "reason": "作者主动撤回。"
     }
   ],
-  "generatedAt": "2026-11-25T12:24:42.990Z"
+  "generatedAt": "2026-11-25T12:38:47.699Z"
 }
