@@ -2,7 +2,7 @@
 // 覆盖：初始状态、买/卖/摆放、每日上限、心情降级、面板路由、目录清理。
 import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -57,7 +57,11 @@ const read = () => {
 
 beforeEach(() => {
   if (dir) rmSync(dir, { recursive: true, force: true })
-  dir = mkdtempSync(join(tmpdir(), 'room-test-'))
+  // dataDir 模拟 <root>/plugins-data/aurabot：模块要往上两级找 mood.json，
+  // 目录得真的嵌两层，否则 join(dir, '..', '..') 会落到根目录写不进去。
+  const base = mkdtempSync(join(tmpdir(), 'room-test-'))
+  dir = join(base, 'plugins-data', 'aurabot')
+  mkdirSync(dir, { recursive: true })
 })
 
 test('初始状态：余额是初始值，屋里只有小鱼', () => {
