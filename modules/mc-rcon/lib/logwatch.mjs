@@ -151,7 +151,19 @@ export function parseChatLine (line) {
 }
 
 // 死亡消息（中英 + 常见模组）的关键词。日志里死亡消息不带 <玩家名>，靠「在线玩家名开头的系统消息」认。
-const DEATH_RE = /(死了|被.{0,12}(?:烧死|炸死|射杀|刺死|砸死|砍死|咬死|杀死|打死|击毙|冻死|劈死)|烧死|摔死|淹死|窒息|饿死|冻死|凋零|岩浆|熔岩|从高处摔下|摔了下来|掉出了这个世界|感受到了动能|雷劈|闪电|爆炸|burned to death|fell from a high place|drowned|suffocated in a wall|starved to death|froze to death|withered away|was slain by|was shot by|was blown up by|was killed by|was impaled|was fireballed|was pummeled|was struck by lightning|hit the ground too hard|tried to swim in lava|went up in flames|died from|blew up)/i
+const DEATH_RE = new RegExp([
+  // 中文：被 xxx 弄死 / 死于 xxx / 各种死法
+  '死了',
+  '被.{0,16}(?:烧死|炸死|射杀|射死|刺死|戳死|砸死|砍死|劈死|斩死|斩首|处决|咬死|杀死|打死|击毙|击倒|击杀|冻死|冷死|毒死|电死|酸死|腐蚀|吞噬|吞掉|撕碎|撕烂|碾碎|压死|压扁|撞死|撞飞|踩死|踩扁|蛰死|蜇死|绞死|绞杀|勒死|活埋|掩埋|淹死|溺死|饿死|渴死|窒息|闷死|烫死|烤死|烧成灰|化为灰烬|灰飞烟灭|尸骨无存|蒸发|湮灭|肢解|刺穿|穿刺|钉死|吸干|榨干|溶解|雷劈|雷击|闪电|魔法|诅咒|凋零|爆炸|炸飞|吹飞|弹飞|踢死|踹死|吃掉|吞食|吞了|吸收|融化|融掉|烤熟|炸成|烧成|压成|碾成|撕成|切成|剁成|绞成|搅碎|吸成|榨成)',
+  '死于.{0,24}',
+  '(?:烧死|摔死|淹死|溺死|窒息|饿死|渴死|冻死|冷死|凋零|诅咒|岩浆|熔岩|从高处摔下|摔了下来|摔下来|掉出了这个世界|掉出世界|坠入虚空|落地过猛|感受到了动能|雷劈|雷击|闪电|爆炸|炸死|炸飞|烫死|烤死|中毒|毒死|酸死|被雷|被毒|被酸|被电|被冻|被烧|被炸|被压|被撞|被踩|被咬|被刺|被射|被砍|被劈|被斩|被吞|被撕|被碾|被绞|被勒|被处决|被斩首|被活埋|被掩埋)',
+  '阵亡|身亡|遇难|牺牲',
+  // 英文
+  '(?:was|is|got|has been) (?:slain|shot|killed|blown up|struck|pummeled|impaled|skewered|spit on|stung|squashed|crushed|poked|pricked|obliterated|disintegrated|vaporized|incinerated|electrocuted|poisoned|dissolved|devoured|consumed|swallowed|digested|absorbed|drained|sucked|smashed|pulverized|erased|deleted|terminated|eliminated|liquefied|melted|boiled|roasted|fried|charred|immolated|combusted|shredded|torn apart|ripped apart|decapitated|executed|eradicated|annihilated|smitten|doomed|eaten|sliced|diced|stabbed|bitten|clawed|burned|frozen|drowned|murdered|assassinated) (?:to death )?by',
+  '(?:was|is|got|has been) (?:fatally|mortally)',
+  '(?:died|died from|drowned|burned to death|suffocated|starved|froze|withered away|perished|succumbed)',
+  'hit the ground|fell from|fell out of the world|experienced kinetic energy|went up in flames|tried to swim in lava|discovered the floor was lava|burned to death|froze to death|starved to death|suffocated in a wall|blew up|met (?:their|his|her) (?:end|death|demise)',
+].join('|'), 'i')
 
 /**
  * 从日志里认服务器事件（目前主要认死亡消息）。
