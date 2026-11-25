@@ -1,0 +1,24 @@
+{
+  "id": "dual-persona",
+  "name": "双重人格",
+  "version": "1.4.1",
+  "description": "老实聊天，很枯燥吧。支持定时切换人格、随机切换人格——还能按月排班、按心情换，随机模式可以只影响当前会话。设置里一个「启用双重人格」开关，打开后默认按「人格分裂」：填一串 QQ 号（群号、私聊号都行）就能给不同的聊天配不同的人格卡；也可以切成「全局人格切换」。我有一个善人格，一个恶人格。",
+  "category": "social",
+  "tags": [
+    "人格",
+    "人设",
+    "定时",
+    "随机",
+    "心情"
+  ],
+  "author": "Cinderlia",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.3.0",
+  "requires": [],
+  "capabilities": [
+    "filesystem",
+    "plugin-config",
+    "plugin-internals"
+  ]
+}

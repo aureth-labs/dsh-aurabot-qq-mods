@@ -1,0 +1,9 @@
+{
+  "_comment": "按 discover.md 的 /discover/ai-playlists 与 /playlists/detail 字段构造的脱敏 fixture，不是真实账号数据",
+  "ret": 0,
+  "sub_ret": 0,
+  "playlists": [
+    { "dissId": 9012001, "dissName": "AI 夜跑歌单", "dissDesc": "为你生成的夜跑节奏", "creatorName": "" },
+    { "dissId": 9012002, "dissName": "AI 专注歌单", "dissDesc": "适合写代码时听", "creatorName": "" }
+  ]
+}

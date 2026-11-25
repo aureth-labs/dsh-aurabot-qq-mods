@@ -1,0 +1,731 @@
+/**
+ * 框架自身更新
+ * =============
+ *
+ * 从 GitHub 检查新版本、下载、替换代码。
+ *
+ * **保守是这里的第一原则**。更新会覆盖代码，出问题用户就再也起不来了。
+ * 所以：
+ *   1. 只替换代码目录，**绝不碰** config/ data/ logs/ plugins/
+ *   2. 替换前把整个代码目录备份到 data/backups/，失败自动还原
+ *   3. 逐项校验新版本里确实有 src/main.js，否则拒绝更新
+ *   4. 不自动重启——让用户自己重启，他能看到更新后的日志
+ *
+ * 下载用 GitHub 的 tarball 接口，不依赖 git（用户可能是下载 zip 用的，没装 git）。
+ */
+import fs from 'node:fs/promises';
+import { compareVersion } from './semver.js';
+import path from 'node:path';
+import { createLogger } from './logger.js';
+import { fetchAndExtract } from './tarball.js';
+import { netFetch } from './proxy.js';
+import { fetchViaMirror, currentMirror } from './mirror.js';
+import { fetchGiteeTree, detectGiteeRef, giteeRawUrl } from './gitee.js';
+import { hashDir } from './hashdir.js';
+import { CODE_ENTRIES, PROTECTED_ENTRIES as PROTECTED } from './update-scope.js';
+import { ROOT } from './config.js';
+import { loadGlobalConfig } from './config.js';
+import { checkTrust, resolveTrust, normalizeText, blockReason } from './trust.js';
+
+const log = createLogger('update');
+
+/** 仓库信息。换成自己的 fork 就改这里 */
+const REPO = 'tdcq9594/qq-bot-roost';
+
+/**
+ * 允许被更新覆盖的顶层条目、以及绝对不能碰的目录，都在 ./update-scope.js。
+ * 内容指纹用的是**同一份清单**——GitHub tarball 是全量、Gitee 只拉这几个条目，
+ * 范围不一致的话两条下载路径算出来的指纹永远对不上。
+ */
+
+/**
+ * Gitee 源下拉取的文件范围：只拉会被更新覆盖的代码条目。
+ * 目录带 `/` 结尾，文件写全名——src/gitee.js 的前缀过滤按这个规则匹配。
+ */
+const GITEE_ONLY = ['src/', 'web/', 'test/', 'docs/', 'package.json', 'README.md', 'LICENSE', 'start.bat'];
+
+/**
+ * 比较语义化版本。
+ *
+ * 实现放在 `src/semver.js` —— 插件市场、框架更新、插件版本兼容校验
+ * 三处共用一份，避免出现「市场说能升、更新器说不能」这种自相矛盾。
+ * 这里再导出一次，是为了不破坏既有的导入路径。
+ */
+export { compareVersion } from './semver.js';
+
+/** 读当前版本 */
+export async function currentVersion() {
+  try {
+    const raw = await fs.readFile(path.join(ROOT, 'package.json'), 'utf8');
+    return JSON.parse(raw).version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
+/**
+ * 代码已经换成新版、但进程还在跑旧代码？
+ *
+ * 更新只替换磁盘上的文件，正在运行的进程还是旧代码。判断依据：
+ * **package.json 的修改时间晚于本进程的启动时间**，说明更新发生在启动之后。
+ *
+ * 为什么需要这个：不重启的话「检查更新」会说「已是最新 v0.6.9」，
+ * 而用户实际用的还是 0.6.7 的行为——看起来像更新没成功，于是反复点。
+ * 把这个状态说出来，用户才知道该做的是重启，不是再点一次。
+ *
+ * 留 2 秒容差：解压/拷贝和 stat 之间总有毫秒级误差。
+ */
+async function updatedButNotRestarted(pkgPath = path.join(ROOT, 'package.json')) {
+  try {
+    const st = await fs.stat(pkgPath);
+    const startedAt = Date.now() - process.uptime() * 1000;
+    return st.mtimeMs > startedAt + 2000;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 查最新版本。
+ *
+ * **不用 GitHub API**：未认证的 API 每小时只有 60 次，而且是按 IP 算的，
+ * 家用宽带 / 共享出口很容易被限成 403。用户点一下「检查更新」就失败，体验很差。
+ *
+ * 改用 `releases/latest` 的 302 重定向——它会把 Location 指到
+ * `.../releases/tag/v0.5.1`，从中取版本号。这个路径**不消耗 API 配额**，
+ * 只要仓库是公开的就能用。
+ *
+ * 代价是拿不到 release notes 和 tarball_url，两个都自己拼：
+ *   - tarball: `.../archive/refs/tags/v<版本>.tar.gz`（公开直链）
+ *   - notes：让用户点 htmlUrl 自己看
+ */
+/**
+ * 查最新版本，并顺带说明「是不是已经更新了但还没重启」。
+ *
+ * 包一层而不是往 checkUpdate 里塞：里面有好几个返回分支（Gitee /
+ * 主站 302 / API 兜底 / 404 / 失败），每个都手写一遍 needsRestart 迟早漏一个。
+ */
+/**
+ * 拉 SHA256SUMS，得到「版本 → 内容指纹」的映射。
+ *
+ * **清单和它的签名必须来自同一个发布快照**，所以这里按「成对」的候选走，
+ * 而不是「清单一个源、签名另一个源」：
+ *
+ *   SHA256SUMS 是**追加式**的——每发一版就多一行。Release 里的 `.sig`
+ *   签的是那一版发布时的全文，而 master 上的全文通常已经多出几行。
+ *   混着取必然验签失败，而且报出来是「内容与签名不一致」，
+ *   看着像被篡改，实际只是取错了快照——这种假警报最消耗信任。
+ *
+ * 顺序：
+ *   1. 目标版本的 Release 附件（`releases/download/v<ver>/`）——自洽、可复现
+ *   2. GitHub master 全量——Release 还没建、或附件缺失时的退路
+ *   3. Gitee master 全量——国内直连 GitHub 不通时的退路（Release 附件 Gitee 镜像不到）
+ *
+ * 指纹是「代码内容」的，与从哪个源下载无关，所以任一组拿到都能用。
+ *
+ * @param {string} [version] 目标版本；传了就优先试它的 Release 附件
+ * @returns {Promise<{map: Map<string,string>, trust: object}>} 版本号 → 64 位十六进制，以及验签结论
+ */
+async function fetchSums(version) {
+  const v = String(version ?? '').replace(/^v/i, '');
+  const groups = [];
+
+  if (v) {
+    groups.push({
+      sums: `https://github.com/${REPO}/releases/download/v${v}/SHA256SUMS`,
+      sig: `https://github.com/${REPO}/releases/download/v${v}/SHA256SUMS.sig`,
+      label: `Release v${v}`,
+    });
+  }
+  groups.push({
+    sums: `https://raw.githubusercontent.com/${REPO}/master/SHA256SUMS`,
+    sig: `https://raw.githubusercontent.com/${REPO}/master/SHA256SUMS.sig`,
+    label: 'GitHub master',
+  });
+  groups.push({
+    sums: `https://gitee.com/${REPO}/raw/master/SHA256SUMS`,
+    sig: `https://gitee.com/${REPO}/raw/master/SHA256SUMS.sig`,
+    label: 'Gitee master',
+  });
+
+  for (const g of groups) {
+    try {
+      const res = await fetchViaMirror(g.sums, {
+        headers: { 'User-Agent': 'qq-bot-roost-updater' },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) continue;
+      const text = await res.text();
+      const map = new Map();
+      for (const line of text.split(/\r?\n/)) {
+        const m = /^([a-f0-9]{64})\s+v?([0-9][\w.+-]*)$/i.exec(line.trim());
+        if (m) map.set(m[2].replace(/^v/i, ''), m[1].toLowerCase());
+      }
+      if (!map.size) continue;
+
+      // 目标版本不在这份清单里：说明拿到的是旧快照（比如 Release 附件比目标旧），
+      // 换下一组。继续用它会得到「没有指纹 → 拒绝更新」的错误结论。
+      if (v && !map.has(v)) {
+        log.debug(`${g.label} 的 SHA256SUMS 里没有 v${v}，换下一个源`);
+        continue;
+      }
+
+      /**
+       * 验签。指纹和代码同仓，只验指纹等于「让被篡改的清单自己证明自己」——
+       * 必须由独立密钥签过的 `SHA256SUMS.sig` 背书。
+       *
+       * 签名**只从同一组取**：见上面的说明，跨组混用必然对不上。
+       *
+       * 本版只记录结论、不阻断（`enforce` 还没接进来）；`bad` 要打 error，
+       * 因为它意味着「清单内容和签名对不上」，比「没签名」严重得多。
+       */
+      let sigText = '';
+      try {
+        const sres = await fetchViaMirror(g.sig, {
+          headers: { 'User-Agent': 'qq-bot-roost-updater' },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (sres.ok) sigText = await sres.text();
+      } catch {
+        // 拿不到签名文件不是网络错误，继续按「未签名」处理
+      }
+      const trust = checkTrust({
+        data: normalizeText(text),
+        sigText,
+        trust: resolveTrust({}),
+        kind: 'SHA256SUMS',
+      });
+      if (trust.status === 'bad' || trust.status === 'invalid') log.error(`${g.label}：${trust.why}`);
+      else if (trust.status === 'ok') log.info(`SHA256SUMS 签名校验通过（${g.label}）`);
+
+      return { map, trust };
+    } catch {
+      // 换下一个源
+    }
+  }
+  return { map: new Map(), trust: { status: 'unavailable', why: '没有拿到 SHA256SUMS' } };
+}
+
+/**
+ * 查某个版本的内容指纹。拿不到返回 null —— 真正的拒绝发生在 applyUpdate，
+ * 因为「只检查不安装」时面板仍应正常显示有新版本，只是点更新会失败。
+ */
+async function fetchTreeSha256(version) {
+  try {
+    // 把目标版本传下去：能拿到它的 Release 附件时，清单与签名天然同源，
+    // 不受「master 上又多了几行」影响。
+    const { map, trust } = await fetchSums(version);
+    return { sha: map.get(String(version).replace(/^v/, '')) ?? null, trust };
+  } catch {
+    return { sha: null, trust: { status: 'unavailable', why: '查询指纹失败' } };
+  }
+}
+
+/**
+ * @param {{pkgPath?: string}} [o] pkgPath 只给测试用：
+ *   自测原来直接改仓库里 package.json 的 mtime，两个 `npm test` 并行就会互相毒化
+ *   （一个把 mtime 拨到未来、另一个正好读到，于是「正常时不提示重启」假失败）。
+ */
+export async function checkUpdate({ pkgPath } = {}) {
+  const needsRestart = await updatedButNotRestarted(pkgPath);
+  const r = await checkUpdateCore();
+  // 有新版本才值得多跑一次网络请求
+  if (r?.ok && r.hasUpdate) {
+    const info = await fetchTreeSha256(r.latest);
+    r.treeSha256 = info.sha;
+    r.sumsTrust = info.trust;
+  }
+  return { ...r, needsRestart };
+}
+
+async function checkUpdateCore() {
+  const cur = await currentVersion();
+
+  // 明确选了 Gitee 就别浪费时间去问 GitHub
+  if (currentMirror().id === 'gitee') return checkViaGitee(cur);
+
+  let res = null;
+  let lastErr = null;
+  // 国内访问 github.com 经常抖（代理、DNS），重试一次再报错
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
+    try {
+      res = await fetchViaMirror(`https://github.com/${REPO}/releases/latest`, {
+        method: 'GET',
+        redirect: 'manual', // 要自己看 Location
+        headers: { 'User-Agent': 'qq-bot-roost-updater' },
+        signal: AbortSignal.timeout(8000),
+      });
+      break;
+    } catch (e) {
+      lastErr = e;
+      res = null;
+    }
+  }
+
+  if (!res) {
+    /**
+     * 连不上主站：auto 模式下还有一次机会——问 Gitee 镜像。
+     * 用户选 auto 时的承诺就是「直连优先，失败切 Gitee」，检查也一样。
+     */
+    if (currentMirror().id === 'auto') {
+      try {
+        return await checkViaGitee(cur);
+      } catch (e) {
+        log.warn(`Gitee 检查也失败：${e.message}`);
+      }
+    }
+    // 连不上主站：还有一次机会——问 API（走的是另一套域名和 CDN）
+    try {
+      return buildResult(cur, await fetchLatestTagViaApi(), { source: 'github-api' });
+    } catch (e) {
+      return {
+        ok: false,
+        current: cur,
+        error: `连不上 GitHub：${lastErr?.message ?? e.message}（换个下载源试试）`,
+      };
+    }
+  }
+
+  // 302 → Location: https://github.com/OWNER/REPO/releases/tag/v0.5.1
+  const loc = res.headers.get('location') || '';
+  const m = loc.match(/\/releases\/tag\/(v?[\d.]+)/);
+
+  if (!m) {
+    // 真的没有 release 时 GitHub 返回 404
+    if (res.status === 404) {
+      return { ok: true, current: cur, latest: cur, hasUpdate: false, note: '仓库还没有发布版本' };
+    }
+    /**
+     * 3xx 但取不到 tag：可能被重定向到别处（登录页、限流页），
+     * 也可能是镜像把 302 变成了 200 直出 HTML。再问一次 API，
+     * 它返回的是 JSON，不受重定向影响。
+     */
+    try {
+      return buildResult(cur, await fetchLatestTagViaApi(), { source: 'github-api' });
+    } catch (e) {
+      return {
+        ok: false,
+        current: cur,
+        error: `无法解析最新版本（HTTP ${res.status}）：${e.message}`,
+      };
+    }
+  }
+
+  return buildResult(cur, m[1], { source: 'github' });
+}
+
+/**
+ * 问 GitHub API 要最新 tag。
+ * 会消耗匿名配额（60 次/小时/IP），只在主站走不通时兜底用。
+ */
+async function fetchLatestTagViaApi() {
+  const res = await fetchViaMirror(`https://api.github.com/repos/${REPO}/releases/latest`, {
+    headers: {
+      'User-Agent': 'qq-bot-roost-updater',
+      Accept: 'application/vnd.github+json',
+    },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`GitHub API 返回 HTTP ${res.status}`);
+  const data = await res.json().catch(() => null);
+  const tag = String(data?.tag_name ?? '');
+  if (!tag) throw new Error('GitHub API 没返回 tag_name');
+  return tag;
+}
+
+/**
+ * 问 Gitee 镜像要最新版本。
+ *
+ * Gitee 没有 GitHub 那个「releases/latest 302 跳转」的技巧，也不假设作者
+ * 在 Gitee 侧发过 Release。最稳的做法是**直接读默认分支上的 package.json**：
+ * 本项目的发版流程是「提交即打 tag、master 永远是最新发布版」，两者一致。
+ * 读取走 raw 端点，不消耗 Gitee API 配额。
+ *
+ * 返回里带 `giteeRef`（实际读到的分支），下载时按同一个分支拉整树。
+ */
+async function checkViaGitee(cur) {
+  const ref = await detectGiteeRef(REPO);
+  const res = await netFetch(giteeRawUrl(REPO, ref, 'package.json'), {
+    headers: { 'User-Agent': 'qq-bot-roost-updater' },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) throw new Error(`Gitee 返回 HTTP ${res.status}`);
+  const pkg = await res.json().catch(() => null);
+  const latest = String(pkg?.version ?? '').trim();
+  if (!/^\d+\.\d+\.\d+/.test(latest)) throw new Error('Gitee 上的 package.json 读不到版本号');
+  return buildResult(cur, `v${latest}`, {
+    source: 'gitee',
+    htmlUrl: `https://gitee.com/${REPO}`,
+    giteeRef: ref,
+  });
+}
+
+/** 把 tag 组装成面板要的结构 */
+function buildResult(cur, tag, extra = {}) {
+  const latest = String(tag).replace(/^v/, '');
+  return {
+    ok: true,
+    current: cur,
+    latest,
+    hasUpdate: compareVersion(cur, latest) < 0,
+    tag,
+    htmlUrl: `https://github.com/${REPO}/releases/tag/${tag}`,
+    // 公开直链，不需要 API；实际下载时会按「下载源」设置改写
+    tarball: `https://github.com/${REPO}/archive/refs/tags/${tag}.tar.gz`,
+    ...extra,
+  };
+}
+
+/* ---------------- 下载与解包 ---------------- */
+
+/**
+ * 从 Gitee 拉一份**指定版本**的代码。
+ *
+ * 为什么必须锁 tag：GitHub 那条路下的是 `archive/refs/tags/v<版本>.tar.gz`，
+ * 内容被版本号钉死；Gitee 这条路以前固定拉默认分支，两条路一个锁版本、
+ * 一个跟着分支漂移。结果就是「发版后又往 master 推了个提交」时，
+ * 先更新的用户算出的指纹对得上、后更新的用户全部失败。
+ *
+ * v1.0.1 就是这么挂的（2026-11-04）：tag d76e646 的指纹是 ed2ebca6，
+ * 而 22:24 又推了一个只改 docs 的 7c35106 到 master，指纹变成 822f67f6，
+ * 版本号却没动 —— 从那一刻起所有 Gitee 源的用户都无法更新。
+ *
+ * 回退只在「这个 ref 根本不存在」时发生（列清单 404 / 树是空的）：
+ * 作者漏推 tag 时仍然得能装上，能不能过指纹那一关由 `applyUpdate` 判。
+ * 文件级失败（451 内容审查之类）换 ref 也一样，直接抛。
+ *
+ * @param {object} rel checkUpdate 的返回值（要 `tag`）
+ * @param {string} destDir 目标目录，失败重试前会被清空
+ */
+async function fetchTagFromGitee(rel, destDir) {
+  const token = currentMirror().giteeToken;
+  const tag = String(rel?.tag ?? '').trim();
+
+  const candidates = [];
+  if (tag) candidates.push(tag);
+  const branch = rel?.giteeRef || (await detectGiteeRef(REPO));
+  if (!candidates.includes(branch)) candidates.push(branch);
+
+  let lastErr = null;
+  for (const ref of candidates) {
+    try {
+      await fetchGiteeTree({ repo: REPO, ref, destDir, only: GITEE_ONLY, token });
+      if (tag && ref !== tag) {
+        log.warn(`Gitee 上找不到 ${tag}，已退回分支 ${ref}（内容可能与指纹不一致）`);
+      }
+      return;
+    } catch (e) {
+      lastErr = e;
+      if (!/文件清单失败|没有文件/.test(e.message)) throw e;
+      log.warn(`Gitee ${ref} 拉不到：${e.message}`);
+      // 半截文件不能留着，下一个 ref 要在一片空地上拉
+      await fs.rm(destDir, { recursive: true, force: true }).catch(() => {});
+      await fs.mkdir(destDir, { recursive: true });
+    }
+  }
+  throw lastErr;
+}
+
+/**
+ * 下载并解包到临时目录。
+ *
+ * 两条路：
+ *   · GitHub（默认）：tarball 直链，解析逻辑在 src/tarball.js，
+ *     插件市场和框架更新共用一份，免得两处 tar 解析以后跑偏
+ *   · Gitee：没有可用的 archive 直链（Gitee 的 /repository/archive/
+ *     返回的是网页），改走 git trees 列清单 + raw 逐个拉（src/gitee.js）
+ *
+ * auto 模式下 GitHub 失败会自动切 Gitee——用户选 auto 时这就是承诺。
+ *
+ * @param {string} tmpDir
+ * @param {object} rel checkUpdate 的返回值（带 tarball / tag / giteeRef）
+ */
+async function downloadTo(tmpDir, rel) {
+  const id = currentMirror().id;
+
+  if (id === 'gitee') {
+    await fetchTagFromGitee(rel, tmpDir);
+    return tmpDir;
+  }
+
+  try {
+    await fetchAndExtract(rel.tarball, tmpDir, {
+      // 版本信息里带了 sha256 就校验（发布说明里没写就是 null，只 warn）
+      expectSha256: rel.sha256 ?? null,
+      timeoutMs: 120000,
+      retries: 1,
+      onRetry: (m) => log.warn(m),
+      // 走下载源：面板里选了镜像或 auto，这里就自动用上
+      fetcher: (u, init) => fetchViaMirror(u, init),
+    });
+  } catch (e) {
+    if (id !== 'auto') throw e;
+    log.warn(`GitHub 下载失败（${e.message}），改用 Gitee 镜像`);
+    // 清掉可能写了一半的残留，再整树重拉
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    await fetchTagFromGitee(rel, tmpDir);
+  }
+  return tmpDir;
+}
+
+
+/**
+ * 只保留最近 N 份更新备份，老的删掉。
+ * 每份约 1MB（整个代码目录），不清理会一直涨。
+ */
+async function pruneBackups(keep = 3) {
+  const dir = path.join(ROOT, 'data', 'backups');
+  let names;
+  try {
+    names = await fs.readdir(dir);
+  } catch {
+    return;
+  }
+
+  const items = [];
+  for (const name of names) {
+    const p = path.join(dir, name);
+    const st = await fs.stat(p).catch(() => null);
+    if (!st?.isDirectory()) continue;
+    items.push({ name, p, at: st.mtimeMs });
+  }
+  if (items.length <= keep) return;
+
+  // 按修改时间倒序，保留前 keep 个
+  items.sort((a, b) => b.at - a.at);
+  for (const it of items.slice(keep)) {
+    await fs.rm(it.p, { recursive: true, force: true }).catch(() => {});
+    log.info(`清理旧备份 ${it.name}`);
+  }
+}
+
+/**
+ * 启动时检查「上次更新有没有半路被打断」，有就回滚。
+ *
+ * 只有一种情况会留下标记：替换过程中进程被强杀（断电、任务管理器结束）。
+ * 那时 src/ 可能是半新半旧，直接启动会在各种莫名其妙的地方报错。
+ *
+ * 回滚来源是标记里记的备份目录，幂等——回滚完删标记，下次不会再跑。
+ *
+ * @returns {Promise<{recovered:boolean, from?:string, to?:string, error?:string}>}
+ */
+export async function recoverInterruptedUpdate() {
+  /**
+   * 这里用 `ROOT/data` 而不是 `DIRS.data`，是有意的。
+   *
+   * 更新相关的临时文件和备份必须**跟代码在同一棵目录树下**：
+   * 备份是用来还原 `src/` 的，放到 ROOST_HOME 指的临时目录里，
+   * 一次重启就没了，还原就成了一句空话。
+   */
+  const marker = path.join(ROOT, 'data', '.update-pending.json');
+  let info;
+  try {
+    info = JSON.parse(await fs.readFile(marker, 'utf8'));
+  } catch {
+    return { recovered: false }; // 没有标记，正常启动
+  }
+
+  const backupDir = info.backup;
+  const hasBackup = backupDir
+    ? await fs.access(backupDir).then(() => true, () => false)
+    : false;
+
+  if (!hasBackup) {
+    // 备份都没了，回滚不了。留着标记只会每次启动都报一遍，删掉并说清楚。
+    await fs.rm(marker, { force: true }).catch(() => {});
+    const msg = `上次更新（${info.from} → ${info.to}）被打断，且备份目录已不存在，无法自动回滚`;
+    log.error(msg);
+    return { recovered: false, error: msg };
+  }
+
+  log.warn(
+    `检测到上次更新（${info.from} → ${info.to}）没有完成，正在回滚到 ${info.from}…`,
+  );
+  let failed = 0;
+  for (const name of CODE_ENTRIES) {
+    const from = path.join(backupDir, name);
+    const exists = await fs.access(from).then(() => true, () => false);
+    if (!exists) continue;
+    const to = path.join(ROOT, name);
+    await fs.rm(to, { recursive: true, force: true }).catch(() => {});
+    await fs.cp(from, to, { recursive: true }).catch(() => {
+      failed += 1;
+    });
+  }
+
+  if (failed) {
+    const msg = `回滚时有 ${failed} 个目录没拷回去，备份仍在 ${path.relative(ROOT, backupDir)}`;
+    log.error(msg);
+    return { recovered: false, error: msg };
+  }
+
+  await fs.rm(marker, { force: true }).catch(() => {});
+  log.info(`已回滚到 ${info.from}，可以正常启动`);
+  return { recovered: true, from: info.from, to: info.to };
+}
+
+/**
+ * 执行更新。
+ *
+ * @param {object} [info] checkUpdate() 的返回值；不传就现查
+ * @returns {Promise<{ok:boolean, from:string, to:string, backup?:string, error?:string}>}
+ */
+/** 进程内互斥：面板点更新和自动更新同时来，会互相踩文件 */
+let applying = false;
+
+export async function applyUpdate(info) {
+  if (applying) {
+    throw new Error('已经有一个更新在进行中，等它完成再试');
+  }
+  applying = true;
+  try {
+    return await applyUpdateOnce(info);
+  } finally {
+    applying = false;
+  }
+}
+
+async function applyUpdateOnce(info) {
+  const cur = await currentVersion();
+  const rel = info ?? (await checkUpdate());
+  if (!rel.ok) throw new Error(rel.error || '检查更新失败');
+  if (!rel.hasUpdate) throw new Error(`已经是最新版本 ${cur}`);
+  if (!rel.tarball) throw new Error('没有可下载的包');
+
+  /**
+   * 签名闸门：和插件市场共用面板上那个开关。
+   *
+   * 为什么放在下载之前：被拒的时候用户什么都没损失，不用先下一份再删。
+   * `rel.sumsTrust` 是 `checkUpdate()` 拉 `SHA256SUMS` 时顺手算出来的，
+   * 没拿到就当 `unavailable`（没配公钥 / 网络问题），按「不拦」处理。
+   */
+  const trustCfg = resolveTrust(await loadGlobalConfig().catch(() => ({})));
+  const trustWhy = blockReason(trustCfg, rel.sumsTrust?.status || 'unavailable', '', { official: true });
+  if (trustWhy) {
+    throw new Error(
+      `自更新被拒绝：${trustWhy}\n` +
+        '你的代码没有任何改动。可以到 GitHub Releases 手动下载安装，或先在设置里关掉「自更新签名校验」。',
+    );
+  }
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const workDir = path.join(ROOT, 'data', `.update-${stamp}`);
+  const backupDir = path.join(ROOT, 'data', 'backups', `${cur}-${stamp}`);
+
+  log.info(`开始更新 ${cur} → ${rel.latest}`);
+  await fs.mkdir(workDir, { recursive: true });
+
+  try {
+    await downloadTo(workDir, rel);
+
+    // 校验：新版本里必须有 src/main.js，否则不是我们要的包
+    const mainJs = path.join(workDir, 'src', 'main.js');
+    await fs.access(mainJs).catch(() => {
+      throw new Error('下载的包里没有 src/main.js，不是合法的框架包，已中止');
+    });
+
+    /**
+     * 内容指纹校验 —— **必须放在备份和替换之前**。
+     *
+     * 这一步失败就等于什么都没发生过：文件没动、备份也没建。
+     *
+     * 为什么必须严格：更新会直接覆盖 `src/`、`web/` 这些要执行的代码。
+     * 只要能改掉下载地址（自定义镜像、上游仓库被入侵、链路劫持），
+     * 就能决定用户下一版跑什么。指纹对不上就说明「下载到的东西不是作者发的」。
+     *
+     * 为什么没有指纹也要拒绝：留一个「没指纹就放行」的口子，攻击者只要把
+     * SHA256SUMS 里那条删掉或让仓库回到没有该文件的形态就能绕过。
+     * 代价是发布流程必须每版都带指纹 —— 这由 CI 的 `npm run sums:check` 守着。
+     */
+    if (!rel.treeSha256) {
+      throw new Error(
+        `v${rel.latest} 没有发布内容指纹（SHA256SUMS 里查不到），已拒绝自动更新。\n` +
+          '这不是你的网络问题：作者这一版可能漏了生成指纹。\n' +
+          '可以手动到 GitHub Releases 下载安装，或等下一版。你的代码没有任何改动。',
+      );
+    }
+    const gotHash = await hashDir(workDir, { only: CODE_ENTRIES });
+    if (gotHash !== rel.treeSha256) {
+      throw new Error(
+        `更新内容校验失败，已中止（你的代码没有任何改动）。\n` +
+          `  期望 ${rel.treeSha256}\n` +
+          `  实际 ${gotHash}\n` +
+          '可能是下载源被篡改，或者发布时改了代码却忘了重跑 npm run sums。',
+      );
+    }
+    log.info(`内容指纹校验通过（${gotHash.slice(0, 12)}…）`);
+
+    // 备份现有代码
+    await fs.mkdir(backupDir, { recursive: true });
+    for (const name of CODE_ENTRIES) {
+      const src = path.join(ROOT, name);
+      const has = await fs.access(src).then(() => true, () => false);
+      if (has) await fs.cp(src, path.join(backupDir, name), { recursive: true });
+    }
+    log.info(`已备份到 ${path.relative(ROOT, backupDir)}`);
+
+    // 只留最近 3 份备份。每份约 1MB，不清理的话更新十几次就几十 MB
+    await pruneBackups(3).catch(() => {});
+
+    // 替换
+    /**
+     * 写「正在更新」标记，成功后才删掉。
+     *
+     * 这一步是给「进程被强杀」准备的：rm + cp 是逐个目录覆盖的，
+     * 中途断电 / 任务管理器结束进程，catch 根本不会执行，
+     * 下次启动看到的就是一半新版一半旧版的 src/，报错都看不出原因。
+     *
+     * 为什么不直接「目录交换」（rename 旧的走、rename 新的进来）：
+     * Windows 上重命名一个还有打开句柄的目录会 EBUSY，而 src/ 正是
+     * 当前进程正在执行的那份代码。交换失败反而更危险。
+     * 所以保留 rm+cp，用标记 + 启动时自愈来兜底。
+     */
+    const marker = path.join(ROOT, 'data', '.update-pending.json');
+    await fs.mkdir(path.dirname(marker), { recursive: true });
+    await fs.writeFile(
+      marker,
+      JSON.stringify({ from: cur, to: rel.latest, backup: backupDir, at: Date.now() }, null, 2),
+      'utf8',
+    );
+
+    for (const name of CODE_ENTRIES) {
+      if (PROTECTED.has(name)) continue; // 理论上不会进来，双保险
+      const from = path.join(workDir, name);
+      const exists = await fs.access(from).then(() => true, () => false);
+      if (!exists) continue;
+      const to = path.join(ROOT, name);
+      await fs.rm(to, { recursive: true, force: true });
+      await fs.cp(from, to, { recursive: true });
+    }
+
+    // 全部换完了，标记才算失效
+    await fs.rm(marker, { force: true }).catch(() => {});
+
+    log.info(`更新完成：${cur} → ${rel.latest}，重启后生效`);
+    return { ok: true, from: cur, to: rel.latest, backup: path.relative(ROOT, backupDir) };
+  } catch (e) {
+    log.error(`更新失败，正在还原：${e.message}`);
+    // 还原：把备份原样拷回去
+    let failed = 0;
+    for (const name of CODE_ENTRIES) {
+      const from = path.join(backupDir, name);
+      const exists = await fs.access(from).then(() => true, () => false);
+      if (!exists) continue;
+      const to = path.join(ROOT, name);
+      await fs.rm(to, { recursive: true, force: true }).catch(() => {});
+      await fs.cp(from, to, { recursive: true }).catch(() => {
+        failed += 1;
+      });
+    }
+    // 还原干净了才撤标记；还有目录没拷回去就留着，下次启动再试一遍
+    if (!failed) {
+      await fs.rm(path.join(ROOT, 'data', '.update-pending.json'), { force: true }).catch(() => {});
+    } else {
+      log.warn(`有 ${failed} 个目录没能还原，标记保留，下次启动会自动再试`);
+    }
+    return { ok: false, from: cur, to: rel.latest, error: e.message };
+  } finally {
+    await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
