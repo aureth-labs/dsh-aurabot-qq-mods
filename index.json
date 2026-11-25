@@ -3,6 +3,34 @@
   "assetsBase": "https://github.com/aureth-labs/dsh-aurabot-qq-mods/releases/download/",
   "modules": [
     {
+      "id": "act-format",
+      "name": "动作互动",
+      "version": "0.2.0",
+      "description": "把 *动作* 这类包裹文本解析成结构化动作（观察者，不拦消息）；睡眠期间只保留模糊体感残留，不记录具体发生了什么",
+      "category": "platform",
+      "tags": [
+        "动作",
+        "角色扮演",
+        "解析"
+      ],
+      "author": "YLin55",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem"
+      ],
+      "replacesBuiltin": false,
+      "tag": "act-format-v0.2.0",
+      "file": "act-format-v0.2.0.zip",
+      "path": "act-format-v0.2.0/act-format-v0.2.0.zip",
+      "size": 11757,
+      "sha256": "93bc27b38ad31f363238134ef846c346b44e59cd52b385c49a775e2a98cf8d3d",
+      "commit": "a033d4990db3fd279d38334eb9956fc969c9ce60",
+      "publishedAt": "2026-11-25T04:53:00.294Z"
+    },
+    {
       "id": "ai-brief",
       "name": "AI 新闻推送",
       "version": "2.2.1",
@@ -2606,5 +2634,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-25T04:46:47.570Z"
+  "generatedAt": "2026-11-25T04:53:00.294Z"
 }
