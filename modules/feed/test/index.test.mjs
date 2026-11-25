@@ -8,7 +8,7 @@ import { makeApi, pinHunger } from './helpers.mjs'
 test('模块元信息：id、版本、面板、设置项', () => {
   assert.equal(plugin.id, 'feed')
   assert.equal(plugin.name, '喂食')
-  assert.equal(plugin.version, '3.2.0')
+  assert.equal(plugin.version, '3.2.1')
   assert.equal(plugin.api, 1)
   assert.equal(plugin.tab, 'persona')
   assert.equal(plugin.panel, 'panel.js')
@@ -41,7 +41,7 @@ test('/status 返回面板需要的字段', async (t) => {
   t.after(env.cleanup)
   const st = await env.call('/status')
   assert.equal(st.ok, true)
-  assert.equal(st.version, '3.2.0')
+  assert.equal(st.version, '3.2.1')
   assert.equal(typeof st.hunger, 'number')
   assert.equal(st.satiety, 100 - st.hunger)
   assert.ok(st.label)
@@ -94,9 +94,13 @@ test('投喂：记录里的 before / after / gain 三者对得上', async (t) =>
   const env = makeApi()
   t.after(env.cleanup)
   await pinHunger(env, 52)
+  // 饱食度会向当天的曲线目标收敛（差值 ≤1.5 时一次 tick 直接贴上去，不看 lastTick），
+  // 所以「钉在 52」不等于「一直是 52」——先读一次让它贴完，拿贴完后的值当基准，
+  // 否则这个测试会在曲线目标靠近 52 的时段整点必挂（例如目标 51.x 时 before 变 51）。
+  const pinned = (await env.call('/status')).hunger
   const r = await env.call('/feed', { food: '白米饭', portion: '一份', react: false })
   assert.equal(r.ok, true)
-  assert.equal(r.record.before, 52)
+  assert.equal(r.record.before, pinned)
   assert.equal(r.record.after, r.hunger)
   assert.equal(r.record.gain, r.record.before - r.record.after)
   assert.ok(r.record.gain >= 0)

@@ -1,6 +1,6 @@
 {
   "name": "aurabot-price-watch",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Aurabot 的价格监控扩展：监控商品价格，超级好价 / 早期好价 / 降价提醒 / 本地历史最低",

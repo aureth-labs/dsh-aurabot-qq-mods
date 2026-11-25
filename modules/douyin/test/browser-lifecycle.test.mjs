@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events'
 import { mkdtempSync, writeFileSync, symlinkSync, lstatSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createBrowser, connectCdp } from '../lib/browser.mjs'
+import { createBrowser, connectCdp, findBrowser } from '../lib/browser.mjs'
 import { createSite } from '../lib/site.mjs'
 
 let createDouyin
@@ -53,6 +53,9 @@ function harness({ platform = 'linux', mode = 'timeout', wait, getPort, refuseSt
         child.pid = undefined
         queueMicrotask(() => child.emit('error', new Error('spawn ENOENT')))
       }
+      // Windows 真实场景：同资料目录已有实例在跑 / Edge 安装被磁盘清理弄坏，
+      // 进程起来马上退出，stderr 一个字都不写——旧代码会把这种报成「请检查浏览器路径」。
+      if (behavior === 'silent-exit') queueMicrotask(() => child.emit('exit', 0, null))
       if (behavior === 'stderr-lock') queueMicrotask(() => {
         child.emit('exit', 1, null)
         setTimeout(() => {
@@ -63,7 +66,7 @@ function harness({ platform = 'linux', mode = 'timeout', wait, getPort, refuseSt
       return child
     },
     getBrowserJson: async (url) => {
-      if (behavior === 'timeout' || behavior === 'spawn-error' || behavior === 'stderr-lock') throw new Error('连接被拒绝')
+      if (behavior === 'timeout' || behavior === 'spawn-error' || behavior === 'stderr-lock' || behavior === 'silent-exit') throw new Error('连接被拒绝')
       if (url.endsWith('/json/list')) return [{ id: '1', type: 'page', url: 'about:blank', webSocketDebuggerUrl: 'ws://127.0.0.1/test' }]
       return { Browser: '假浏览器' }
     },
@@ -219,6 +222,50 @@ test('浏览器报 profile appears to be in use 时明确提示并退避', async
   assert.equal(h.kills.length, 0, '进程已自行退出，不对其他进程发信号')
   await h.browser.open('登录')
   assert.equal(h.children.length, 1)
+})
+
+test('静默退出与启动超时要说清真实原因，不再一律怪「路径和资料目录」', async () => {
+  // 场景一：进程起来马上退出、无任何输出（同目录残留实例 / 清理搬盘弄坏 Edge 安装）
+  const h = harness({ mode: 'silent-exit' })
+  const r = await h.browser.open('定时')
+  assert.match(r.message, /自己退出/)
+  assert.match(r.message, /任务管理器|重装 Edge/)
+  assert.doesNotMatch(r.message, /检查浏览器路径和专用资料目录/, '路径明明没问题，不该再怪路径')
+
+  // 场景二：进程活着但调试端口一直不开（启动慢 / 杀毒拦截）
+  const t = harness({ mode: 'timeout' })
+  const tr = await t.browser.open('定时')
+  assert.match(tr.message, /调试端口/)
+  assert.match(tr.message, /30 秒内/)
+  assert.doesNotMatch(tr.message, /检查浏览器路径和专用资料目录/)
+})
+
+test('findBrowser：填的路径不存在就回退常见安装位置探测；哪儿都没有才报空', () => {
+  const exists = (p) => p === 'C:\\fake\\msedge.exe' || p === 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe'
+  assert.equal(findBrowser('C:\\fake\\msedge.exe', exists), 'C:\\fake\\msedge.exe', '填的路径真实存在就用填的')
+  assert.equal(findBrowser('C:\\missing\\msedge.exe', exists), 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe', '填的不存在时回退自动探测（清理搬盘后 x86 路径失效的兜底）')
+  assert.equal(findBrowser('C:\\missing\\msedge.exe', () => false), '', '哪儿都没有返回空，由调用方报「路径不对」并列出填过的路径')
+  assert.equal(findBrowser('', exists), 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe', '没填就走自动探测')
+})
+
+test('失败的登录检查也落盘并刷新时间戳：报错文案和「查的」时间配套', async () => {
+  process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'dy-account-fail-'))
+  const cfg = normalize({ enabled: true, douyin: { enabled: true } })
+  let clock = 5_000_000
+  const site = { ensure: async () => ({ ok: false, message: '浏览器没起来（测试注入的失败）' }), connected: () => false, close: async () => {} }
+  const dy = createDouyin({ getConfig: () => cfg, site, hub: {}, now: () => clock, log: { warn() {}, info() {}, debug() {} } })
+  const r = await dy.account(true)
+  assert.equal(r.loggedIn, false)
+  assert.match(r.message, /浏览器没起来/)
+  assert.equal(r.at, clock, '失败时间写进 account.at，面板不再拿上次成功的时间配这次的报错')
+  const st = dy.state()
+  assert.match(st.account.message, /浏览器没起来/)
+  assert.equal(st.account.at, clock, '失败原因已持久化，刷新页面也能看到带时间的原因')
+  clock += 60_000
+  const r2 = await dy.account(true)
+  assert.equal(r2.at, clock, '再查一次时间跟着走，不再停留在一个旧时间')
+  dy.dispose()
+  await new Promise((resolve) => setImmediate(resolve))
 })
 
 test('已连上的自有浏览器优先正常关闭，失败时回退到进程树清理', async () => {
@@ -485,4 +532,65 @@ test('定时私信启动也标记为定时；忙碌时关闭开关仍先关闭�
   assert.equal(busySite.closed, true)
   gate.resolve({ ok: false, message: '关闭了' })
   assert.equal((await running).ok, false)
+})
+
+test('ego 模式：open 走共享实例，show(true) 把窗口带到前台而不是空操作', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'dy-ego-show-'))
+  writeFileSync(join(dir, 'browser.json'), JSON.stringify({ port: 19999 }))
+  const oldEnv = process.env.EGO_LINUX_STATE_DIR
+  process.env.EGO_LINUX_STATE_DIR = dir
+  const oldFetch = globalThis.fetch
+  const json = (x) => new Response(JSON.stringify(x), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  const closed = []
+  globalThis.fetch = async (url) => {
+    const u = String(url)
+    if (u.includes('/json/version')) return json({ Browser: '假 ego' })
+    if (u.includes('/json/new')) return json({ id: 'ego-tab', type: 'page', url: 'about:blank', webSocketDebuggerUrl: 'ws://127.0.0.1:19999/devtools/page/ego-tab' })
+    if (u.includes('/json/close/')) { closed.push(u.split('/').pop()); return json({ OK: true }) }
+    return json([])
+  }
+  t.after(() => {
+    globalThis.fetch = oldFetch
+    if (oldEnv === undefined) delete process.env.EGO_LINUX_STATE_DIR
+    else process.env.EGO_LINUX_STATE_DIR = oldEnv
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const sent = []
+  const browser = createBrowser({
+    profileDir: join(dir, 'unused-profile'),
+    useEgo: () => true,
+    getPort: async () => { throw new Error('ego 模式不该分配端口') },
+    spawnProcess: () => { throw new Error('ego 模式不该 spawn 专用浏览器') },
+    connect: () => ({
+      closed: false,
+      ready: Promise.resolve(),
+      async send(method, params) { sent.push([method, params]); return {} },
+      close() { this.closed = true },
+    }),
+  })
+  assert.equal((await browser.open('登录')).ok, true)
+  assert.ok(sent.some(([m]) => m === 'Network.enable'), 'ego 模式要开 Network（等接口回执用）')
+
+  // 回归点：这里曾是 `if (egoTarget) return` 的空操作。面板「显示浏览器窗口」点了
+  // 没任何反应，主人没法在共享窗口里扫码 / 过安全验证，登录永远完不成，
+  // 模块就一直报「抖音还没登录」，看起来像「开了侧边浏览器却不使用侧边浏览器」。
+  sent.length = 0
+  await browser.show(true)
+  // 「显示」= 把共享窗口从屏幕外 (-2400,-2400) 挪回屏幕内 + 带到前台 + 切到本模块标签页
+  assert.deepEqual(sent.map(([m]) => m),
+    ['Browser.getWindowForTarget', 'Browser.setWindowBounds', 'Browser.setWindowBounds', 'Page.bringToFront'],
+    '「显示」= 挪回屏幕内（normal + 80,60）+ bringToFront')
+  assert.deepEqual(sent[1][1], { windowId: undefined, bounds: { windowState: 'normal' } })
+
+  sent.length = 0
+  await browser.show(false)
+  // 「收起」= 把窗口挪回屏幕外（不杀进程、不关别人标签页）
+  assert.deepEqual(sent.map(([m]) => m),
+    ['Browser.getWindowForTarget', 'Browser.setWindowBounds'],
+    '「收起」= 挪回屏幕外 (-2400,-2400)')
+  assert.deepEqual(sent[1][1], { windowId: undefined, bounds: { left: -2400, top: -2400 } })
+
+  await browser.close()
+  assert.deepEqual(closed, ['ego-tab'], 'close 只关自己认领的标签页，不碰别人的')
 })

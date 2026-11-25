@@ -14,7 +14,7 @@ import { isClosing, closeMinutes, isAskingMe } from './close.mjs'
 import { configureClock, wall } from './clock.mjs'
 import { createLullaby, isFarewell } from './lullaby.mjs'
 import { Dreamer } from './dream.mjs'
-import { AWAKE, ASLEEP, NightService } from './state.mjs'
+import { AWAKE, ASLEEP, WAKING, NightService } from './state.mjs'
 import * as energy from './energy.mjs'
 import * as stages from './stages.mjs'
 
@@ -32,6 +32,7 @@ const DEFAULTS = {
   energyRecoverPerMinute: 1.5,
   energyAfterWake: 35,
   minTurnsBeforeSleep: 8,
+  energyOwnerOnly: true,
   noonNapMinutes: 60,
   noonNapJitterMinutes: 15,
   wakingTimeoutMinutes: 5,
@@ -63,13 +64,25 @@ const DEFAULTS = {
 
   farewellEnabled: true,
   farewellUseLlm: false,
+  deferWhileAsleep: true,
 
   closeEnabled: true,
+  closeScope: 'owner',
   closeSleepStrength: 'strong',
+  closeConfirmByLlm: true,      // 关键字判定命中后，再让模型复核一次（防误睡）
   byeMuteMinutes: 30,
   noonMuteMinutes: 75,
 
   morningGreeting: false,
+
+  // 主动说困 / 晚安（2026-11-24 加）
+  sleepTalkEnabled: true,       // 困到一定程度主动跟主人说一声
+  sleepTalkEnergy: 25,          // 精力低于这个值就算「困到想睡」
+  sleepTalkNoonEnabled: true,   // 午间也提醒（她说中午收到过，这个要留）
+  sleepTalkCooldownMin: 240,    // 同一个时段最多提一次，隔多久才允许再提
+  sleepTalkUseLlm: true,        // 用模型生成，更自然
+  snoozeKeepMinutes: 180,       // 「待会睡」的约定保留多久（超时当没约过）
+  dayMuteMinutes: 30,           // 白天收到收线但不睡时，安静多久（分钟）
 
   timeZone: 'Asia/Shanghai',
 }
@@ -92,6 +105,7 @@ const SETTINGS = [
   { key: 'energyRecoverPerMinute', label: '非疲劳期每分钟恢复', type: 'number' },
   { key: 'energyAfterWake', label: '爬起来后的精力', type: 'number' },
   { key: 'minTurnsBeforeSleep', label: '疲劳期至少聊几轮才睡', type: 'number' },
+  { key: 'energyOwnerOnly', label: '只有主人说话才扣精力', type: 'switch' },
 
   { key: 'stageEnabled', label: '启用睡眠阶段', type: 'switch' },
   { key: 'stageCycleMinutes', label: '睡眠周期（分钟）', type: 'number' },
@@ -118,17 +132,34 @@ const SETTINGS = [
   { key: 'wakeStepCount', label: '再几条必醒', type: 'number' },
 
   { key: 'farewellEnabled', label: '睡前道别', type: 'switch' },
+  { key: 'deferWhileAsleep', label: '睡着时压住媒体消息，醒来补发', type: 'switch' },
   { key: 'farewellUseLlm', label: '道别用模型生成（更自然，费 token）', type: 'switch' },
 
   { key: 'closeEnabled', label: '识别对方收线', type: 'switch' },
+  { key: 'closeScope', label: '谁说的收线才算数', type: 'select', options: [
+    { label: '只认主人（群里别人说晚安不睡也不闭嘴）', value: 'owner' },
+    { label: '谁都认（群里有人道别就睡 / 闭嘴）', value: 'all' },
+  ] },
   { key: 'closeSleepStrength', label: '什么强度才真睡', type: 'select', options: [
     { label: '只有「晚安 / 我睡了」这种强收线', value: 'strong' },
     { label: '强收线和中收线（拜拜 / 先这样）都睡', value: 'medium' },
   ] },
+  { key: 'closeConfirmByLlm', label: '收线判定再让模型复核一次', type: 'switch',
+    hint: '命中收线词之后才问模型，能区分「现在去睡」和「看完这集再睡」，避免误睡。'
+      + '正常的聊天不会触发，只在偶尔有人道晚安时多一次很小的模型调用（约 10 token 输出，4 秒超时）。'
+      + '介意 token 消耗可以关掉，关了就用纯规则判断。' },
   { key: 'byeMuteMinutes', label: '中/弱收线后闭嘴多久（分钟）', type: 'number' },
   { key: 'noonMuteMinutes', label: '午睡收线后闭嘴多久（分钟）', type: 'number' },
 
   { key: 'morningGreeting', label: '自然醒后给主人发早安', type: 'switch' },
+
+  { key: 'sleepTalkEnabled', label: '困到想睡时主动说一声', type: 'switch' },
+  { key: 'sleepTalkEnergy', label: '精力低于多少算困（0~100）', type: 'number' },
+  { key: 'sleepTalkNoonEnabled', label: '午间也提醒（关掉只提醒夜里）', type: 'switch' },
+  { key: 'sleepTalkCooldownMin', label: '同一个时段隔多久才再提（分钟）', type: 'number' },
+  { key: 'sleepTalkUseLlm', label: '用模型生成这句话（更自然，费 token）', type: 'switch' },
+  { key: 'snoozeKeepMinutes', label: '「待会再睡」记多久（分钟）', type: 'number' },
+  { key: 'dayMuteMinutes', label: '白天收到晚安时安静多久（分钟）', type: 'number' },
   { key: 'timeZone', label: '作息按哪个时区（容器跑 UTC 时要填）', type: 'text' },
 ]
 
@@ -160,6 +191,7 @@ function cfgOf(api) {
     energyRecoverPerMinute: n('energyRecoverPerMinute', DEFAULTS.energyRecoverPerMinute),
     energyAfterWake: n('energyAfterWake', DEFAULTS.energyAfterWake),
     minTurnsBeforeSleep: n('minTurnsBeforeSleep', DEFAULTS.minTurnsBeforeSleep),
+    energyOwnerOnly: b('energyOwnerOnly', DEFAULTS.energyOwnerOnly),
 
     stageEnabled: b('stageEnabled', DEFAULTS.stageEnabled),
     stageCycleMinutes: n('stageCycleMinutes', DEFAULTS.stageCycleMinutes),
@@ -187,13 +219,24 @@ function cfgOf(api) {
 
     farewellEnabled: b('farewellEnabled', DEFAULTS.farewellEnabled),
     farewellUseLlm: b('farewellUseLlm', DEFAULTS.farewellUseLlm),
+    deferWhileAsleep: b('deferWhileAsleep', DEFAULTS.deferWhileAsleep),
 
     closeEnabled: b('closeEnabled', DEFAULTS.closeEnabled),
+    closeScope: str('closeScope', DEFAULTS.closeScope) || 'owner',
     closeSleepStrength: str('closeSleepStrength', DEFAULTS.closeSleepStrength),
+    closeConfirmByLlm: b('closeConfirmByLlm', DEFAULTS.closeConfirmByLlm),
     byeMuteMinutes: n('byeMuteMinutes', DEFAULTS.byeMuteMinutes),
     noonMuteMinutes: n('noonMuteMinutes', DEFAULTS.noonMuteMinutes),
 
     morningGreeting: b('morningGreeting', DEFAULTS.morningGreeting),
+
+    sleepTalkEnabled: b('sleepTalkEnabled', DEFAULTS.sleepTalkEnabled),
+    sleepTalkEnergy: n('sleepTalkEnergy', DEFAULTS.sleepTalkEnergy),
+    sleepTalkNoonEnabled: b('sleepTalkNoonEnabled', DEFAULTS.sleepTalkNoonEnabled),
+    sleepTalkCooldownMin: n('sleepTalkCooldownMin', DEFAULTS.sleepTalkCooldownMin),
+    sleepTalkUseLlm: b('sleepTalkUseLlm', DEFAULTS.sleepTalkUseLlm),
+    snoozeKeepMinutes: n('snoozeKeepMinutes', DEFAULTS.snoozeKeepMinutes),
+    dayMuteMinutes: n('dayMuteMinutes', DEFAULTS.dayMuteMinutes),
 
     timeZone: str('timeZone', DEFAULTS.timeZone),
   }
@@ -210,7 +253,7 @@ const levelStars = (level) => '★'.repeat(Math.max(1, Math.min(5, Number(level)
 export default {
   id: 'night',
   name: '长夜如梦',
-  version: '1.0.0',
+  version: '1.1.0',
   api: 1,
   description: '她会在夜里犯困、睡着、做梦，睡着时叫不一定醒；醒来记得多少，看梦有多重。',
   defaults: DEFAULTS,
@@ -273,6 +316,7 @@ export default {
 
     let lastDreamAttempt = 0
     let farewellBusy = false
+    let lastOwnerAt = 0   // 主人最后一次说话的时间（说困之前要避开他正在说话）
 
     const morningGreeting = async () => {
       const cfg = cfgOfFn()
@@ -298,6 +342,101 @@ export default {
       }
     }
 
+    /**
+     * 困到想睡时主动跟主人说一声（2026-11-24 加）
+     *
+     * 和「早安」不同：早安是醒来的动作，这个是**精力掉到一定程度**的自然反应。
+     * 所以它不需要等睡着，只要精力低 + 处在疲劳时段就说。
+     *
+     * 时段区分（这是关键）：
+     *   夜里（默认 23:30-07:00）→ 「要睡了」这种话
+     *   中午（默认 13:00-14:30）→ 「去眯一会」，不能一口咬定睡到明早
+     *   其他时段             → 只说困，不提睡觉（下午三点说「我要睡了」很怪）
+     *
+     * 用户实测中午收到过这类消息，所以午间默认开着。
+     */
+    const sleepTalkSent = new Map()   // kind → 上次发送时间，按会话内存记，重启会重置
+
+    const sleepTalk = async () => {
+      const cfg = cfgOfFn()
+      if (!cfg.enabled || !cfg.sleepTalkEnabled) return
+      const owner = api.config()?.ownerQQ
+      if (!owner) return
+      const s = service.state
+      if (s.mode !== AWAKE) return                    // 已经睡了就不用说
+      if (service.pendingSleep) return                 // 正挂着待睡，收线流程会自己说
+      const threshold = Math.max(0, Math.min(100, Number(cfg.sleepTalkEnergy) || 25))
+      if (Number(s.energy) > threshold) return         // 还没困到那个份上
+      // 现在是不是疲劳时段，以及是哪个
+      const kind = energy.fatigueKind(cfg) || ''
+      if (kind === 'noon' && !cfg.sleepTalkNoonEnabled) return
+      // 同一个时段（night / noon / 其他）有冷却，避免精力一直低就反复说
+      const slot = kind || 'day'
+      const gap = Math.max(30, Number(cfg.sleepTalkCooldownMin) || 240) * 60_000
+      const last = sleepTalkSent.get(slot) || 0
+      if (Date.now() - last < gap) return
+      // 主人刚说过话就别插嘴，等他说完那轮再说
+      const now = Date.now()
+      if (lastOwnerAt && now - lastOwnerAt < 3 * 60_000) return
+
+      let text = ''
+      if (cfg.sleepTalkUseLlm) {
+        const when = kind === 'noon' ? '中午，你困了想眯一会' : kind === 'night' ? '夜里，你困了该睡了' : '你有点困'
+        try {
+          text = await api.ask({
+            system: '你很自然地跟对方说一句你困了。一句话，很短，像随手打的。'
+              + '不要解释设定、不要问问题、不要括号动作、不要提「精力」「数值」这些词。',
+            text: `现在是${energy.clockText(now)}，${when}。对方是你亲近的人。`,
+            maxTokens: 60,
+          })
+        } catch {
+          text = ''
+        }
+      }
+      // 模型失败或关掉时的兜底：按时段给三种说法
+      if (!String(text || '').trim()) {
+        text = kind === 'noon' ? '有点困了 我去眯一会儿' : kind === 'night' ? '困了 我先去躺了' : '有点困 脑子不太转了'
+      }
+      text = String(text || '').trim().slice(0, 120)
+      if (!text) return
+      sleepTalkSent.set(slot, now)
+      try {
+        await api.send(`private:${owner}`, text)
+        api.log.info(`长夜：困了，主动说了（${slot}，精力 ${Math.round(s.energy)}）`)
+      } catch (error) {
+        api.log.warn('长夜：说困的消息发送失败 ' + (error?.message || error))
+      }
+    }
+
+    /**
+     * 兑现「待会睡」的约定（2026-11-24 加）
+     *
+     * 她答应过「看完这集就睡」。程序判断不了「看完」没有，所以用一个朴素的近似：
+     * 约定挂了一段时间（默认超过一半有效期）+ 精力已经很低 → 就当她该去睡了。
+     * 这时候走正常入睡流程，不带道别（她刚聊完，不用再郑重其事）。
+     */
+    async function honorSnooze() {
+      const cfg = cfgOfFn()
+      if (!cfg.enabled || !cfg.allowSleep) return
+      const s = service.state
+      if (s.mode !== AWAKE) return
+      if (service.pendingSleep) return
+      const snooze = service.activeSnooze()
+      if (!snooze) return
+      const keep = Math.max(10, Number(cfg.snoozeKeepMinutes) || 180) * 60_000
+      const elapsed = Date.now() - snooze.at
+      // 没到一半就先不提；精力还够也不逼她睡
+      if (elapsed < keep / 2) return
+      if (Number(s.energy) > Math.max(15, Number(cfg.sleepTalkEnergy) || 25)) return
+      service.clearSnooze()
+      await service.save()
+      const ok = await service.sleepNow({ reason: 'talk', kind: snooze.kind || 'night', byUser: false })
+      if (ok) {
+        lastDreamAttempt = 0
+        api.log.info(`长夜：约定的时间到了，去睡（起因「${String(snooze.text || '').slice(0, 30)}」）`)
+      }
+    }
+
     const maybeDream = async () => {
       const cfg = cfgOfFn()
       const s = service.state
@@ -311,6 +450,93 @@ export default {
       s.dreamCount += 1
       await service.save()
       await dreamer.make({ kind: s.sleepKind })
+    }
+
+    /**
+     * 模型复核：「这句话到底是不是让 BOT 自己去睡？」（2026-11-24 加）
+     *
+     * 为什么需要：关键字规则只能看字面，遇到主语被省略、被反转的句子会误判。
+     * 实测踩过的坑：
+     *   「嗯，到我怀里来，在看两集，各回各房睡觉去」→ 规则判要去睡，其实是在安排各睡各的
+     *   「我们家狗睡觉去了」                      → 主语是狗
+     *   「你也早点睡 我困了」                     → 是关心对方，自己不一定马上睡
+     *
+     * 成本控制：**只在这条消息已经被关键字规则判成收线之后**才调用，正常聊天一次都不调。
+     * 失败或超时就当「不是」——宁可少睡一次，也不能因为模型抽风把她按到明早。
+     */
+    /** 「深夜 / 上午 / 下午 / 傍晚」这种，给模型判断时段用。 */
+    function dayPartText(ts = Date.now()) {
+      const h = new Date(ts).getHours()
+      if (h >= 23 || h < 5) return '深夜'
+      if (h < 8) return '清晨'
+      if (h < 12) return '上午'
+      if (h < 14) return '中午'
+      if (h < 18) return '下午'
+      return '傍晚'
+    }
+
+    /**
+     * 带超时的 ask（2026-11-25 加）。
+     *
+     * `api.ask` 本身没有超时参数（`timeoutMs` 传了也不会生效，那是 `api.think` 的选项）。
+     * 而我们是在 `api.on('message')` 里同步 await 模型结果——模型一慢，这条消息的处理
+     * 就整个挂住，主人的消息也发不出去。所以用 Promise.race 自己兜一层。
+     *
+     * 超时不代表失败：调用方拿到 null 就按"不确定"处理（比如判收线时当"不睡"）。
+     */
+    function askWithTimeout(opts, timeoutMs) {
+      return Promise.race([
+        api.ask(opts),
+        new Promise((resolve) => {
+          const t = setTimeout(() => resolve(null), Math.max(500, Number(timeoutMs) || 4000))
+          // 别因为这一个定时器把进程吊着
+          if (typeof t?.unref === 'function') t.unref()
+        }),
+      ]).catch((error) => {
+        api.log.warn('长夜：ask 调用失败 ' + (error?.message || error))
+        return null
+      })
+    }
+
+    /**
+     * 模型复核：这句话是让 BOT **马上**睡、**待会**睡，还是**不是在说这个**？
+     *
+     * 三分类而不是二分类，因为「看完这集就去睡」这种句子用「是/不是」表达不了：
+     *   说「是」→ 她会立刻躺下（错，你还要她看完）
+     *   说「不是」→ 她完全没反应（也不对，你的意思她该应一声）
+     *   说「待会」→ 不睡，但记着，之后自己提
+     *
+     * 成本：只在这条消息已经被关键字规则判成收线之后才调用，正常聊天一次都不调。
+     * 失败/超时/答得含糊一律当「不是」——少睡一次比误睡一整晚代价小。
+     */
+    async function judgeClosing(msg, word) {
+      try {
+        const out = await askWithTimeout({
+          system: '判断对方这句话对「你」的意图。只回答一个词：现在 / 待会 / 不是。'
+            + '现在＝让我马上就去睡；待会＝让我过一会儿或做完某事再去睡；'
+            + '不是＝根本没在说我该睡（说的是别人、宠物、或者在关心我但没让我睡）。',
+          text: `现在是${energy.clockText(Date.now())}（${dayPartText()}）。\n`
+            + `对方说：${String(msg.text || '').slice(0, 200)}\n（触发的词：${word}）\n`
+            + '注意区分：「你去睡觉吧」「快去睡」＝现在；「看完这集再睡」「等下就睡」＝待会；'
+            + '「我家猫去睡了」「你也早点睡吧我自己再待会儿」＝不是。\n'
+            + '另外注意时段：如果现在是白天（不是深夜），对方说「我睡了」多半是在说他自己要睡，'
+            + '不是在安排你睡觉——这种情况答「不是」。',
+          maxTokens: 10,
+        }, 4000)   // 4 秒：再慢就当没判出来，按"不睡"走
+        const t = String(out || '').trim()
+          // 去掉开头/结尾的口头词和标点（模型偶尔会答「嗯，待会。」）
+          .replace(/^[\s，,。.!！、]+/, '')
+          .replace(/^[嗯啊哦唉诶]+[，,、\s]*/, '')
+          .replace(/[。.!！，,\s、]+$/, '')
+        let verdict = 'no'
+        if (/^(现在|马上|立刻|立即|right now|now)$/i.test(t)) verdict = 'now'
+        else if (/^(待会|等会|等下|稍后|一?会儿|later)$/i.test(t)) verdict = 'later'
+        api.log.info(`长夜：模型复核收线「${word}」→ ${t.slice(0, 10) || '(空)'}（${verdict === 'now' ? '马上睡' : verdict === 'later' ? '待会睡' : '不睡'}）`)
+        return verdict
+      } catch (error) {
+        api.log.warn('长夜：模型复核失败，按不睡处理 ' + (error?.message || error))
+        return 'no'
+      }
     }
 
     // ---------------------------------------------------------------- 消息
@@ -329,6 +555,7 @@ export default {
       }
 
       const result = await service.onMessage(msg)
+      // state.mjs 里已经写了明细；block 时这里不再重复记，避免一条消息两行日志
       if (result.block) return true
       if (result.woke) return false
 
@@ -337,12 +564,45 @@ export default {
         service.requestSleep('energy', result.kind || 'night', msg.chatId)
       }
 
-      if (service.state.mode === AWAKE && !service.pendingSleep && cfg.closeEnabled && !isAskingMe(msg.text)) {
+      // 收线只在「主人说的」上生效：群里一屋子机器人互相道晚安，
+      // 不能因此把她按到明早七点，也不能因此闭嘴半小时。
+      const fromOwner = Boolean(api.isOwner?.(msg.userId))
+      if (fromOwner) lastOwnerAt = Date.now()
+      const closeAllowed = cfg.closeScope === 'all' || fromOwner
+      if (!closeAllowed && service.state.mode === AWAKE && cfg.closeEnabled && isClosing(msg.text, {})[0]) {
+        api.log.debug(`长夜：${msg.chatId} 里${msg.nickname || msg.userId} 的收线不算（只认主人）`)
+      }
+      if (closeAllowed && service.state.mode === AWAKE && !service.pendingSleep && cfg.closeEnabled && !isAskingMe(msg.text)) {
         const [closing, strength, word] = isClosing(msg.text, {})
-        if (closing) {
+        // 关键字规则先筛一遍，命中再让模型复核（见 confirmClosing 的注释）
+        // 规则判定之后让模型复核一次：现在睡 / 待会睡 / 不睡
+        const verdict = closing
+          ? (cfg.closeConfirmByLlm ? await judgeClosing(msg, word) : 'now')
+          : 'no'
+        if (verdict === 'later') {
+          // 「看完这集再睡」这类：不睡，但记下这个约定，之后她自己会提
+          const kind = ['午', '眯', '盹', '躺'].some((m) => word.includes(m)) ? 'noon' : 'night'
+          service.requestSnooze(msg.text, kind, msg.chatId)
+          await service.save()
+          api.log.info(`长夜：记下「待会睡」的约定（${kind}）：${String(msg.text || '').slice(0, 40)}`)
+        }
+        if (closing && verdict !== 'no') {
           const wantSleep = strength === 'strong' || (cfg.closeSleepStrength === 'medium' && strength === 'medium')
-          if (wantSleep && cfg.allowSleep) {
-            service.requestSleep('talk', ['午', '眯', '盹', '躺'].some((m) => word.includes(m)) ? 'noon' : 'night', msg.chatId)
+          if (verdict === 'later') {
+            // 待会睡：这一轮什么都不做，只应一声，不静默、不睡
+          } else if (wantSleep && cfg.allowSleep) {
+            // 按时段决定真睡还是只闭嘴（#250：白天一律入睡会消失一整天）
+            const act = energy.closeAction(cfg, word)
+            if (act.sleep) {
+              service.requestSleep('talk', act.kind, msg.chatId)
+            } else {
+              api.log.info(`长夜：现在是白天，收到收线「${word}」不睡，只安静 ${act.muteMinutes} 分钟`)
+              try {
+                api.core?.mutes?.set?.(msg.chatId, act.muteMinutes)
+              } catch {
+                // 没有闭嘴接口就只当没听见——至少别睡
+              }
+            }
           } else if (!ownerPrivate && strength !== 'weak') {
             // 「嗯 / 好 / 收到」这种短答不是收线，别拿它当理由闭嘴；
             // 主人私聊更不该被静默——她不理人是最难解释的状态。
@@ -362,10 +622,78 @@ export default {
     api.on('prompt', async (content, info) => {
       const chat = info?.chat
       if (!chat || chat.kind === 'system') return content
+
+      // ---- 睡着时不主动搭话 ----
+      // 主动搭话走 pushToSession（不经过 onMessage），但会经过这个 prompt 钩子，
+      // 所以在这里拦。以前她一边说「我去睡啦」一边按定时器主动找人，观感很怪。
+      // 用系统提醒的开头认这几条：speakup 的定时 / 催问、白名单朋友、purpose 引擎。
+      // 只在睡着时拦，醒着时原样放行，不影响正常搭话节奏。
+      const looksProactive = content.some(
+        (c) => c?.type === 'text' && /^【系统提醒，不是[^】]*说的话】/.test(String(c.text || '').trim()),
+      )
+      if (looksProactive && service.state.mode !== AWAKE) {
+        api.log.info(`长夜：睡着中（${service.state.mode}），跳过这一次主动搭话`)
+        return null // hub 收到 null 就不交给她，这一轮不产生任何消息
+      }
+
       const hint = service.promptHint(chat)
       if (!hint) return content
       return [{ type: 'text', text: hint }, ...content]
     })
+
+    // ---------------------------------------------------------------- 睡着时不往外发
+    // 媒体类模块（B 站 / 小黑盒 / 热榜 / 过日子）走的是 api.send / api.sendText，
+    // 直接落到 hub.sendSegments，不经过 prompt 钩子——所以以前她睡着了照样会收到
+    // 「刷到一个有意思的」。这里在所有出站消息的必经之路上拦一道：
+    // 睡着就先存着（日志只记一行，醒了补发），醒着一律放行。
+    // 2026-11-24：原来是内存数组 const deferred = []，进程一重启就丢。
+    // 现在存在 service.state.deferred 里（见 state.mjs pushDeferred / takeDeferred）。
+
+    api.on('send', async (message, info) => {
+      const cfg = cfgOfFn()
+      if (!cfg.enabled || !cfg.deferWhileAsleep) return
+      // 只有真睡着才压。waking 是「被叫醒了、正在补昨晚的话」，
+      // 那时候必须放行，否则被 @ 叫起来也发不出声。
+      if (service.state.mode !== ASLEEP) return
+      // 道别本身要放出去（否则「我去睡啦」永远发不出来）
+      if (service.pendingSleep) return
+      const chatId = String(info?.chatId || '')
+      if (!chatId || chatId.startsWith('system:')) return
+      // 她自己主动的、或模块代发的，一律压着；对方主动找上门的那条已经由 reply 链处理
+      const text = (Array.isArray(message) ? message : [])
+        .filter((seg) => seg?.type === 'text')
+        .map((seg) => String(seg.data?.text ?? ''))
+        .join(' ')
+        .trim()
+      await service.pushDeferred({ chatId, message, note: String(info?.note || '') })
+      api.log.info(`长夜：睡着中，${chatId} 这条先存着（${text.slice(0, 30) || info?.note || '无正文'}），醒来再发`)
+      return null
+    })
+
+    /** 醒来以后把睡着期间压着的发出去。只发一次，按时间顺序。 */
+    const flushDeferred = async () => {
+      if (!service.deferredCount()) return
+      const cfg = cfgOfFn()
+      if (!cfg.deferWhileAsleep) {
+        await service.takeDeferred()   // 关掉这个功能就清空，别越攒越多
+        return
+      }
+      const queue = await service.takeDeferred()
+      // 太老的（超过 12 小时）就别发了，隔夜消息发出去只会莫名其妙
+      const fresh = queue.filter((it) => Date.now() - it.at < 12 * 3600_000)
+      if (!fresh.length) return
+      api.log.info(`长夜：醒了，补发睡着期间压下的 ${fresh.length} 条`)
+      // 同一个会话只补发最后一条：一觉醒来把十几条「刷到一个」全推过去像上了发条
+      const latest = new Map()
+      for (const it of fresh) latest.set(it.chatId, it)
+      for (const [chatId, it] of latest) {
+        try {
+          await api.sendSegments(chatId, it.message, it.note || '[补发]')
+        } catch (error) {
+          api.log.warn(`长夜：补发失败（${chatId}）：${error?.message || error}`)
+        }
+      }
+    }
 
     // ---------------------------------------------------------------- 道别改写
     api.on('reply', async (text, info) => {
@@ -399,8 +727,10 @@ export default {
       }
       pending.farewellDone = true
       // 兜底：activity 事件在某些路径（模拟测试、直接 deliver）不一定来，
-      // 道别说过两秒就躺下，别让她一直挂着「马上要睡」的状态。
-      api.later(2000, async () => {
+      // 所以到点强制躺下，别让她一直挂着「马上要睡」的状态。
+      // 2 秒太紧——多气泡回复（「晚安」常带两三条）后面几条会被拦下来存到明早。
+      // 拉到 8 秒，给正常的多条回复留出时间；activity 事件正常时会更快触发，不受影响。
+      api.later(8000, async () => {
         if (!service.pendingSleep) return
         const p = service.pendingSleep
         service.pendingSleep = null
@@ -408,13 +738,20 @@ export default {
         if (ok) lastDreamAttempt = 0
       })
       if (!line) return
-      if (isFarewell(text)) return
-      return text ? `${text}\n${line}` : line
+      // 原来这里有个 `if (isFarewell(text)) return`，想避免重复说晚安，
+      // 但实际把她要去睡的场景全废了——她本来就是在道晚安，text 里必然含「晚安/睡了/困」，
+      // 于是这一段从来没执行过（日志里 0 次道别）。
+      // 改成：原回复已经很长就不再追加；短的才补一句。
+      const already = String(text || '')
+      if (already.length > 60) return
+      return already ? `${already}\n${line}` : line
     })
 
     // ---------------------------------------------------------------- 发出去之后才真正躺下
     api.on('activity', async (a) => {
       if (a?.kind !== 'out') return
+      // 刚醒过来：把睡着期间压着的媒体消息补发掉
+      if (service.state.mode === AWAKE) api.later(3000, () => { flushDeferred() })
       // 正在醒的时候，回了哪个会话就算爬完哪个；全爬完就正式醒
       if (service.state.mode === 'waking' && a.chatId) {
         await service.crawlDone(String(a.chatId))
@@ -435,8 +772,11 @@ export default {
       if (events.includes('wake_natural')) {
         lastDreamAttempt = 0
         await morningGreeting()
+        await flushDeferred()
       }
       await maybeDream()
+      await sleepTalk()
+      await honorSnooze()
     }, '长夜心跳')
 
     // ---------------------------------------------------------------- 命令
@@ -627,7 +967,7 @@ export default {
       return {
       ok: true,
       id: 'night',
-      version: '1.0.0',
+      version: '1.1.0',
       mode: service.state.mode,
       energy: Math.round(service.state.energy),
       dreams: dreamer.items.length,
@@ -648,6 +988,25 @@ export default {
       sleep: (kind = 'night') => service.sleepNow({ reason: 'api', kind, byUser: true }),
       wake: () => service.wakeNow({ reason: 'api' }),
       dream: () => dreamer.make({ kind: service.state.sleepKind }),
+
+      // ---- 给别的模块 / 宿主问「她现在睡着吗」 ----
+      // 主动搭话（speakup）以前完全不知道她的睡眠状态：她一边说「我去睡啦」，
+      // 一边还会按定时器主动找人。这两个函数就是那条线。
+      // 都用 `?.` 兜住，模块被关掉 / 被替换时调用方也不会炸。
+      // 语义要分清三种状态：asleep（真睡着）/ waking（被叫醒了、正在补昨晚的话）/ awake。
+      // waking 时她已经能说话了，只是还没爬完楼——对外一律算「醒着」，
+      // 否则过日子的睡前闸会把醒着的她也关掉。
+      isAsleep: () => service.state.mode === ASLEEP,
+      sleepState: () => ({
+        mode: service.state.mode,
+        asleep: service.state.mode === ASLEEP,
+        waking: service.state.mode === WAKING,
+        reason: service.state.reason || '',
+        kind: service.state.sleepKind || 'night',
+        energy: Math.round(service.state.energy * 10) / 10,
+        sleepAt: service.state.sleepAt || 0,
+        wakeAt: service.state.wakeAt || 0,
+      }),
     }
   },
 }

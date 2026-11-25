@@ -1,0 +1,20 @@
+{
+  "id": "emoji-react",
+  "name": "表情回应拓展",
+  "version": "1.0.0",
+  "api": 1,
+  "description": "遇到合适的消息才贴一个表情回应，由模型自己判断；不发言、不刷屏",
+  "category": "social",
+  "tags": [
+    "表情回应",
+    "reaction",
+    "互动"
+  ],
+  "author": "HDB-Studio",
+  "license": "MIT",
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "plugin-config"
+  ]
+}
