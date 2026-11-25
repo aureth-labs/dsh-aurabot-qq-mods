@@ -5,6 +5,7 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { PROFESSIONS, weekIdxOf, goodsOf } from './professions.mjs'
+import { newTask, willSlack, willGoOut, newOuting, doWork, doSlack, goOut, backHome, stayHome, taskFailed } from './plan.mjs'
 
 const MIN = 60 * 1000
 const HOUR = 60 * MIN
@@ -21,6 +22,12 @@ const DEFAULTS = {
   commuteMin: 30, // 班段开始前多少分钟算通勤
   quietStart: 1, // 睡觉时段（点），只影响注入和状态判定，livin 那边有自己的睡觉闸
   quietEnd: 8,
+  planOn: true, // 她自己拿主意：上班摸鱼还是干活、放假出门还是在家
+  planIntervalMin: 30, // 多久做一次决定（分钟）
+  planShareChance: 25, // 决定完主动跟主人说一声的概率（%）
+  taskOn: true, // 上班时手上有具体的活：按职业生成，有截止时间，拖过头会被说
+  tasksPerDay: 2, // 每天几条活
+  taskHours: 3, // 每条活大概多久到期（会随机浮动）
 }
 
 // 默认班表：周一到五 9 点到 6 点，周末休。这是底座，面板里随时改。
@@ -62,11 +69,11 @@ const LIVIN_ON = new Set(['rest', 'leave', 'home'])
 export default {
   id: 'routine',
   name: '作息',
-  version: '1.1.1',
+  version: '1.2.1',
   api: 1,
   category: 'desktop',
-  tags: ['作息', '上下班', '生活', '职业'],
-  description: '她的一天的骨架：十种职业班表（含三班倒/夜班/双班）、通勤、在家休息、请假调休。只有「在家休息」的时段才让过日子醒来；上班时间注入「此刻处境」，让她自然知道自己在忙什么班。',
+  tags: ['作息', '上下班', '生活', '职业', '自主'],
+  description: '她的一天的骨架：十一种职业班表（含三班倒/夜班/双班）、通勤、在家休息、请假调休。上班是干活还是摸鱼、放假是出门还是在家，都由她自己定（默认半小时决定一次）；上班时手上有按职业生成的活，有截止时间，拖过头会被主管说，影响心情。只有「在家休息」的时段才让过日子醒来；上班时间注入「此刻处境」，让她自然知道自己在忙什么班。',
   capabilities: ['filesystem', 'plugin-config', 'plugin-internals'],
   minPluginVersion: '1.2.0',
   requires: [],
@@ -85,6 +92,11 @@ export default {
     { key: 'commuteMin', label: '通勤时长（分钟）', type: 'number', min: 0, max: 120, step: 5 },
     { key: 'quietStart', label: '睡觉时段从（点）', type: 'number', min: 0, max: 23, step: 1 },
     { key: 'quietEnd', label: '睡觉时段到（点）', type: 'number', min: 1, max: 24, step: 1 },
+    { key: 'planOn', label: '让她自己拿主意', type: 'switch', hint: '上班摸鱼还是干活、放假出门还是在家，都由她自己定' },
+    { key: 'planIntervalMin', label: '多久做一次决定（分钟）', type: 'number', min: 10, max: 180, step: 5 },
+    { key: 'planShareChance', label: '决定完主动说一声的概率（%）', type: 'number', min: 0, max: 100, step: 5, hint: '不是每次都汇报，偶尔冒一句更像人' },
+    { key: 'taskOn', label: '上班有具体的活', type: 'switch', hint: '按职业随机生成，有截止时间；拖过头会被主管说，心情会受影响' },
+    { key: 'tasksPerDay', label: '每天几条活', type: 'number', min: 1, max: 5, step: 1 },
   ],
 
   setup(api) {
@@ -128,11 +140,13 @@ export default {
         raw.current ||= { state: 'home', since: Date.now() }
         raw.lastLivinWrite ||= 0
         raw.managedOn = !!raw.managedOn
+        raw.plan ||= emptyPlan() // 她自己拿主意：今天的活、出门、日志
         return raw
       } catch {
-        return { history: [], self: [], disturb: [], overrides: {}, pressure: 0, day: dayKey(Date.now()), current: { state: 'home', since: Date.now() }, lastLivinWrite: 0 }
+        return { history: [], self: [], disturb: [], overrides: {}, pressure: 0, day: dayKey(Date.now()), current: { state: 'home', since: Date.now() }, lastLivinWrite: 0, plan: emptyPlan() }
       }
     }
+    const emptyPlan = () => ({ day: '', log: [], tasks: [], outing: null, lastAt: 0, lastShareAt: 0, homeAt: 0, livinOff: false })
     let st = load()
     const save = () => writeJson(stateFile(), st)
     const record = (event, extra = {}) => {
@@ -332,6 +346,155 @@ export default {
       if (picks) api.log.info(`[routine] 下周扰动 ${picks} 条已生成`)
     }
 
+    // ---------- 她自己拿主意：上班摸鱼还是干活、放假出门还是在家 ----------
+    // 每 planIntervalMin 分钟决定一次。决定只落四件事：心情、记忆、日志、要不要说一声。
+    const SHARE_GAP = 45 * MIN // 两次主动说至少隔这么久，别刷屏
+    const planConfig = () => {
+      const c = cfg()
+      return { on: !!c.planOn, interval: Number(c.planIntervalMin) || 30, shareChance: Number(c.planShareChance) || 0, taskOn: !!c.taskOn, tasksPerDay: Number(c.tasksPerDay) || 2 }
+    }
+    const planLog = (now, ev) => {
+      const p = st.plan
+      p.log.push({ at: now, ...ev })
+      p.log = p.log.filter((e) => now - e.at < 3 * DAY).slice(-80)
+    }
+
+    const sayToOwner = (text) => {
+      const owner = String(api.config()?.ownerQQ || '')
+      if (!owner) return false
+      try {
+        api.send(`private:${owner}`, text) // hub.deliver：走正常私聊通道，跟 speakup 一样
+        return true
+      } catch (e) { api.log.warn?.(`[routine] 主动说一声失败：${e.message}`); return false }
+    }
+
+    // 关键事件进长期记忆，她以后聊天能想起来
+    const remember = (text) => {
+      try { api.use('memory')?.addEvent?.({ text, tags: ['日常', '工作'], importance: 0.5 }) } catch {}
+    }
+
+    function applyDecision(dec, now) {
+      if (!dec || !dec.kind) return null
+      const c = cfg()
+      const p = st.plan
+      if (dec.mood) { try { api.use('mood')?.nudge?.(dec.mood, dec.text) } catch {} }
+      if (dec.memory) remember(dec.text)
+      const entry = { at: now, kind: dec.kind, text: dec.text, shared: false }
+      const chance = Number(c.planShareChance) || 0
+      if (dec.shareable && dec.say && now - (p.lastShareAt || 0) >= SHARE_GAP && Math.random() * 100 < chance) {
+        entry.shared = sayToOwner(dec.say)
+        if (entry.shared) p.lastShareAt = now
+      }
+      planLog(now, entry)
+      save()
+      api.log.info(`[routine] ${dec.kind}：${dec.text}${entry.shared ? '（说了）' : ''}`)
+      return dec
+    }
+
+    const pendingTasks = () => st.plan.tasks.filter((t) => !t.done && !t.failed)
+    const moodValue = () => { try { return Number(api.use('mood')?.state?.()?.value) || 60 } catch { return 60 } }
+    // 最近记过的同类事，抽新的时先避开，免得连着两天摸同一种鱼、去同一个地方
+    const recentOf = (kind, n = 8) => {
+      const out = []
+      for (let i = st.plan.log.length - 1; i >= 0 && out.length < n; i--) {
+        const e = st.plan.log[i]
+        if (e.kind !== kind) continue
+        const t = String(e.text || '')
+        if (t && !out.includes(t)) out.push(t)
+      }
+      return out
+    }
+    const recentOutings = () => recentOf('out', 6).map((t) => t.replace(/^出门了，/, ''))
+
+    // 每个 tick（5 分钟）都走一遍：查超时、查回家、备活；决定本身按 planIntervalMin 节流
+    function planTick(now, res) {
+      const c = cfg()
+      const p = st.plan
+      const today = dayKey(now)
+      if (p.day !== today) {
+        p.day = today
+        p.tasks = []
+        p.outing = null
+        p.livinOff = false
+        p.homeAt = 0
+        p.log = p.log.filter((e) => now - e.at < 3 * DAY)
+      }
+
+      // 1) 到期没做完的活：被主管说一顿（不管托管开关，挂着的事总得有个结果）
+      if (c.taskOn) {
+        for (const t of p.tasks) {
+          if (!t.done && !t.failed && now >= t.deadline) {
+            t.failed = true
+            applyDecision(taskFailed({ task: t, profId: c.profession }), now)
+          }
+        }
+      }
+
+      // 2) 出门到点回来了：心情缓和一点，livin 还给过日子
+      if (p.outing && now >= p.outing.until) {
+        const o = p.outing
+        p.outing = null
+        if (p.livinOff) {
+          p.livinOff = false
+          try { api.setConfig({ ext: { livin: { enabled: true } } }) } catch {}
+        }
+        applyDecision(backHome({ outing: o }), now)
+      }
+
+      if (!c.enabled || !c.planOn) return null
+
+      // 3) 在班段里就备好今天的活：按班段剩余时间分配截止点，别排到下班以后
+      if (c.taskOn && res.state === 'work' && !p.tasks.length) {
+        const seg = res.seg
+        const mins = minsOf(now)
+        const leftMin = seg ? (seg[1] > seg[0] ? seg[1] - mins : seg[1] + 24 * 60 - mins) : 8 * 60
+        const n = clamp(Number(c.tasksPerDay) || 2, 1, 5)
+        const base = Number(c.taskHours) || 3
+        for (let i = 0; i < n; i++) {
+          const hours = clamp(base * Math.max(0.3, leftMin / 60 / 8), 0.5, 6)
+          // 同一天抽的几条活不能撞，撞了就换
+          p.tasks.push(newTask(c.profession, now, { hours, avoid: p.tasks.map((t) => t.title) }))
+        }
+        record('plan-tasks', { n, titles: p.tasks.map((t) => t.title) })
+        save()
+      }
+
+      // 4) 到点做一次决定
+      if (now - (p.lastAt || 0) < (Number(c.planIntervalMin) || 30) * MIN) return null
+      p.lastAt = now
+      const profId = c.profession || 'office'
+      const mood = moodValue()
+
+      if (res.state === 'work') {
+        const list = pendingTasks()
+        const next = list.slice().sort((a, b) => a.deadline - b.deadline)[0]
+        const urgent = !!next && next.deadline - now < HOUR
+        if (willSlack({ mood, pressure: st.pressure, urgent, now })) {
+          return applyDecision(doSlack({ profId, recent: recentOf('slack', 6) }), now)
+        }
+        if (!next) return null // 活都干完了，没什么可记的，别拿「收了收尾」刷日志
+        return applyDecision(doWork({ task: next }), now)
+      }
+
+      // 休息日：出门还是在家。同一个判断 3 小时内不重复记，免得一天几十条「在家待着」
+      const restDay = res.state === 'home' && (res.day?.type === 'rest' || res.day?.type === 'leave')
+      if (restDay && !p.outing) {
+        if (now - (p.homeAt || 0) < 3 * HOUR) return null
+        p.homeAt = now
+        if (willGoOut({ mood, pressure: st.pressure, now })) {
+          const o = newOuting(now, { recent: recentOutings() })
+          p.outing = o
+          // 出门了就别让过日子按「在家」找乐子
+          try {
+            if (api.config()?.ext?.livin?.enabled) { api.setConfig({ ext: { livin: { enabled: false } } }); p.livinOff = true }
+          } catch {}
+          return applyDecision(goOut({ outing: o }), now)
+        }
+        return applyDecision(stayHome({ now }), now)
+      }
+      return null
+    }
+
     // ---------- 主循环：每 5 分钟对一次表，状态沿才动作 ----------
     const alignLivin = (res, now, why) => {
       const desired = res.livin === true
@@ -359,6 +522,7 @@ export default {
       }
       st.managedOn = on
       if (on) applyLivin(res, now)
+      try { planTick(now, res) } catch (e) { api.log.warn?.(`[routine] 决定：${e.message}`) }
       if (res.state !== st.current.state) {
         st.current = { state: res.state, since: now, label: res.label }
         record('state', { state: res.state, label: res.label })
@@ -386,7 +550,19 @@ export default {
           : `${res.label}${p}，这一段是自己的时间`
         if (res.day?.note && res.day.type !== 'rest') line += `（${res.day.note}）`
       }
-      return line ? `【此刻·作息】${line}。处境只是背景，不用说出来；画图时场景和穿着以画稿为准，不要把作息字眼画进去。` : ''
+      // 今天自己的事：最后三条 + 现在是不是在外面 + 手头还压着什么活
+      const now = Date.now()
+      const pl = st.plan
+      const items = (pl.log || []).filter((e) => now - e.at < 12 * HOUR).slice(-3)
+      const outLine = pl.outing && now < pl.outing.until ? `；现在在外面，${pl.outing.act}` : ''
+      const left = (pl.tasks || []).filter((t) => !t.done && !t.failed)
+      const taskLine = left.length ? `；手头还压着${left.map((t) => `「${t.title}」`).join('')}` : ''
+      const seq = items.map((e) => `${hhmm(e.at)} ${e.text}`).join('；')
+      const donePart = seq || outLine || taskLine
+        ? `【今天·我做的】${seq}${outLine}${taskLine}。这些是我自己今天的事，不用一条条汇报，聊到的时候自然提一句就好。`
+        : ''
+      const base = line ? `【此刻·作息】${line}。处境只是背景，不用说出来；画图时场景和穿着以画稿为准，不要把作息字眼画进去。` : ''
+      return [base, donePart].filter(Boolean).join('\n')
     })
 
     // ---------- 给她的工具：她的日程她自己记 ----------
@@ -433,7 +609,25 @@ export default {
           record('self-add', { day, what: entry.what, kind: entry.kind })
           return { ok: true, message: `记下了：${day}${entry.start ? ' ' + entry.start + (entry.end ? '-' + entry.end : '') : ''} ${entry.what}${entry.kind === 'off' ? '（整天休息）' : ''}` }
         },
-      })
+      }),
+      api.defineTool({
+        name: 'my_day',
+        description: '看看自己今天干了什么、手上还有什么活没做完、是不是在外面。想不起来今天做过什么，或者要回答「你今天忙什么呢」时用。',
+        properties: {},
+        execute: async () => {
+          const now = Date.now()
+          const p = st.plan
+          const items = (p.log || []).filter((e) => now - e.at < 24 * HOUR)
+          const left = (p.tasks || []).filter((t) => !t.done && !t.failed)
+          const done = (p.tasks || []).filter((t) => t.done)
+          const lines = []
+          if (p.outing && now < p.outing.until) lines.push(`现在在外面：${p.outing.act}`)
+          if (left.length) lines.push(`还没做完：${left.map((t) => `「${t.title}」（还有 ${Math.max(0, Math.round((t.deadline - now) / MIN))} 分钟到期）`).join('、')}`)
+          if (done.length) lines.push(`做完了：${done.map((t) => `「${t.title}」`).join('、')}`)
+          if (items.length) lines.push('今天做过：\n' + items.slice(-10).map((e) => `- ${hhmm(e.at)} ${e.text}`).join('\n'))
+          return { ok: true, message: lines.length ? lines.join('\n') : '今天还没做什么，就按作息过。' }
+        },
+      }),
     ])
 
     // ---------- 主人命令：/作息 on|off|状态（QQ 里直接说，不用开面板） ----------
@@ -595,6 +789,35 @@ export default {
         disturb: st.disturb.filter((e) => e.day >= now).map((e) => ({ ...e })),
       }
     })
+    // ---------- 面板：她自己拿主意的日志 ----------
+    api.route('/plan', async (req) => {
+      if (req && req.method === 'POST') {
+        const b = await api.core.http.body(req)
+        const patch = {}
+        if (typeof b.on === 'boolean') patch.planOn = b.on
+        if (Number.isFinite(Number(b.interval)) && b.interval !== undefined) patch.planIntervalMin = clamp(Number(b.interval), 10, 180)
+        if (Number.isFinite(Number(b.shareChance)) && b.shareChance !== undefined) patch.planShareChance = clamp(Number(b.shareChance), 0, 100)
+        if (typeof b.taskOn === 'boolean') patch.taskOn = b.taskOn
+        if (Object.keys(patch).length) { api.saveSettings(patch); record('plan-config', patch) }
+        return { ok: true, config: planConfig() }
+      }
+      const now = Date.now()
+      const p = st.plan
+      return {
+        ok: true,
+        config: planConfig(),
+        log: (p.log || []).slice(-40).reverse().map((e) => ({ ...e })),
+        tasks: (p.tasks || []).map((t) => ({ ...t, leftMin: t.done || t.failed ? 0 : Math.max(0, Math.round((t.deadline - now) / MIN)) })),
+        outing: p.outing && now < p.outing.until ? { ...p.outing, leftMin: Math.round((p.outing.until - now) / MIN) } : null,
+      }
+    })
+    // 面板上「让她现在决定一次」：清掉节流，立刻走一遍
+    api.route('/plan/now', async () => {
+      st.plan.lastAt = 0
+      await tick()
+      const p = st.plan
+      return { ok: true, last: (p.log || [])[0] || null, log: (p.log || []).slice(-40).reverse() }
+    })
     api.route('/history', async () => ({ ok: true, history: st.history.slice(-120).reverse() }))
 
     api.every(5 * MIN, () => { tick().catch((e) => api.log.warn?.(`[routine] tick：${e.message}`)) }, '作息')
@@ -603,6 +826,6 @@ export default {
 
     api.log.info('作息就绪：她的上下班和在家时间由这张表判定')
     // hooks：测试直调
-    return { tick, stateAt, resolveDay, rollDay, genDisturb, applyProfession, switchProfession, st: () => st, sched: () => sched, set: (patch) => { st = { ...st, ...patch } }, reloadSchedule: () => { sched = loadSchedule() } }
+    return { tick, stateAt, resolveDay, rollDay, genDisturb, applyProfession, switchProfession, planTick, st: () => st, plan: () => st.plan, sched: () => sched, set: (patch) => { st = { ...st, ...patch } }, reloadSchedule: () => { sched = loadSchedule() } }
   },
 }

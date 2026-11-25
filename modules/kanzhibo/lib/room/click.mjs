@@ -92,7 +92,8 @@ export function createClicker({ evalJs, send, sleep, note }) {
       if (!u.ok) return { ok: false, reason: '「' + label + '」' + u.reason, list }
       cand = u.cand
     }
-    const h = await hit(0)
+    const pickIdx = found.list.indexOf(cand) >= 0 ? found.list.indexOf(cand) : Math.max(0, list.indexOf(cand))
+    const h = await hit(pickIdx)
     if (!h.ok) return { ok: false, reason: '「' + label + '」' + describeHit(h), hit: h, cand }
     const pt = choosePoint(h.points)
     if (!pt) return { ok: false, reason: '「' + label + '」找不到可点位置', hit: h, cand }
@@ -117,7 +118,8 @@ export function createClicker({ evalJs, send, sleep, note }) {
       if (!u.ok) return { ok: false, reason: '「' + label + '」' + u.reason, list }
       cand = u.cand
     }
-    const h = await hit(0)
+    const pickIdx = found.list.indexOf(cand) >= 0 ? found.list.indexOf(cand) : Math.max(0, list.indexOf(cand))
+    const h = await hit(pickIdx)
     if (!h.ok) return { ok: false, reason: '「' + label + '」' + describeHit(h), hit: h, cand }
     const pt = choosePoint(h.points)
     if (!pt) return { ok: false, reason: '「' + label + '」找不到可点位置', hit: h, cand }
@@ -139,7 +141,8 @@ export function createClicker({ evalJs, send, sleep, note }) {
     if (!sameSig(cand.sig, prepared.cand.sig)) {
       return { ok: false, reason: '等你确认这会，目标换了（' + prepared.cand.text + ' → ' + cand.text + '），这次不点' }
     }
-    const h = await hit(0)
+    const pickIdx = found.list.indexOf(cand) >= 0 ? found.list.indexOf(cand) : Math.max(0, list.indexOf(cand))
+    const h = await hit(pickIdx)
     if (!h.ok) return { ok: false, reason: describeHit(h), hit: h }
     const pt = choosePoint(h.points)
     if (!pt) return { ok: false, reason: '找不到可点位置' }

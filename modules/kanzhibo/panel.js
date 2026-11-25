@@ -116,8 +116,7 @@ return function KanzhiboPanel({ settings, draftSettings, setSettings, toast }) {
     try {
       const r = await call('/selfcheck')
       if (r && r.ok) { setSc(r); setErr('') } else setErr((r && r.message) || '读不到自检')
-      const p = await call('/pending').catch(() => null)
-      setWaiting(p && p.pending ? p.pending : null)
+      setWaiting(r && r.pending ? r.pending : null)
       const lg = await call('/login/state').catch(() => null)
       setLogin(lg || null)
     } catch (e) {
@@ -148,7 +147,7 @@ return function KanzhiboPanel({ settings, draftSettings, setSettings, toast }) {
 
   const lastNote = sc && sc.text ? (String(sc.text).split('\n').filter((x) => x.indexOf('最近一条') === 0)[0] || '') : ''
   const today = sc ? sc.today : ''
-  const badgeDone = sc && sc.badgeDay === today
+  const badgeDone = sc && (sc.badgeDone !== undefined ? sc.badgeDone : sc.badgeDay === today)
   const commentDone = sc && sc.commentedDay === today
 
   return h('div', { className: 'ab-grid' },
@@ -218,15 +217,15 @@ return function KanzhiboPanel({ settings, draftSettings, setSettings, toast }) {
             h(ui.Btn, { small: true, disabled: busy, onClick: () => act('/window?show=1') }, '显示窗口'))) : null,
         h(ui.Row, { key: 'sch', label: '时段', hint: '「按时间段挂」开着 = 只在时段内挂，不在时段会关浏览器；关掉 = 不限时段' },
           sc.schedule ? (sc.inWindow ? ok('在时段内') : warn('不在时段内（不进房，浏览器会关）')) : dim('不限时段')),
-        h(ui.Row, { key: 'cm', label: '今日评论', hint: '同一个直播间每天最多一条' },
+        h(ui.Row, { key: 'cm', label: '今日评论', hint: '全局每天最多一条（换直播间也不重置）' },
           commentDone ? ok('今天发过了') : dim('今天还没发')),
         h(ui.Row, { key: 'bd', label: '今日灯牌', hint: '判据是面板里出现 +100；读不到就不算送过' },
           badgeDone ? ok('今天送过了') : dim('今天还没送')),
         waiting ? h(ui.Row, { key: 'wt', label: '等你确认', hint: '回 QQ 发 /看直播 确认 才动手，超时自动撤销' },
           warn(waiting.label + '（' + Math.round((waiting.leftMs || 0) / 1000) + ' 秒后作废）'),
           h('div', { style: { marginLeft: 8 } },
-            h(ui.Btn, { small: true, kind: 'primary', disabled: busy, onClick: () => act('/probe?what=ok') }, '确认'),
-            h(ui.Btn, { small: true, disabled: busy, onClick: () => act('/probe?what=no') }, '撤销'))) : null,
+            h(ui.Btn, { small: true, kind: 'primary', disabled: busy, onClick: () => act('/confirm?token=' + encodeURIComponent((sc && sc.probeToken) || '')) }, '确认'),
+            h(ui.Btn, { small: true, disabled: busy, onClick: () => act('/cancel?token=' + encodeURIComponent((sc && sc.probeToken) || '')) }, '撤销'))) : null,
         lastNote ? h('div', { key: 'ln', className: 'ab-small ab-muted', style: { marginTop: 8 } }, lastNote) : null,
       ] : h(ui.Empty, { icon: '⏳', text: '正在读自检…' })
     ),
@@ -234,7 +233,7 @@ return function KanzhiboPanel({ settings, draftSettings, setSettings, toast }) {
     // ③ 进房评论
     h(ui.Card, {
       title: '进房评论',
-      desc: '进房后发一条固定的评论。同一个直播间每天最多一次，默认关着。',
+      desc: '进房后发一条固定的评论。全局每天最多一次（换直播间也不重置），默认关着。',
       right: sw('liveCommentOn'),
     },
       h(ui.Row, { label: '评论内容', hint: '多行只发第一行；留空就不发' }, area('liveComment', { placeholder: 'h的大肥鱼进场了' })),
@@ -251,7 +250,9 @@ return function KanzhiboPanel({ settings, draftSettings, setSettings, toast }) {
       h(ui.Row, { label: '等几秒再续', hint: '越早越容易点偏，宁晚不早。默认 30 秒' },
         num('badgeDelaySec', { min: 5, max: 600, step: 5 }), unit('秒')),
       h(ui.Row, { label: '判定方式', hint: '点之前：今日任务 0/3 + 面板里看到 1钻 / 100亲密度；点之后：面板里出现 +100 才算成功' },
-        dim('只认 +100'))
+        dim('以面板 +100 为主，辅以聊天播报/进度')),
+      h(ui.Row, { label: '自己的直播间昵称', hint: '用来在聊天区认出「自己送出了灯牌」那条播报，默认「蔚」' },
+        text('badgeNickname', { placeholder: '蔚' }))
     ),
 
     // ⑤ 送礼
@@ -271,20 +272,17 @@ return function KanzhiboPanel({ settings, draftSettings, setSettings, toast }) {
     h(SayCard, { sc, busy, call, toast, load })
     ,
 
-    // ⑥ 工作区记录（2026-11-21）：每步操作记到 DSH 侧栏的「看直播 · 工作间」会话
+    // ⑥ 操作记录（2026-11-23）：本地 jsonl 的最近若干步（只读）
     h(ui.Card, {
-      title: '工作区记录',
-      desc: '把每步操作同时记进 Aurabot 工作区里的「QQ · 看直播 · 工作间」会话（DSH 侧栏能点开看）。关掉就只写本地日志。',
-      right: sw('opsSession'),
+      title: '操作记录',
+      desc: '每步操作都写进本地 jsonl（modules-data/kanzhibo/worklog）。这里只读展示最近几步。',
+      right: h(ui.Btn, { small: true, onClick: load, disabled: busy }, busy ? '读…' : '刷新'),
     },
-      h(ui.Row, { label: '记录到哪', hint: '挂在「Aurabot · QQ」工作区，和你的 QQ 会话挨着' },
-        v('opsSession') ? ok('看直播 · 工作间') : dim('没开')),
-      h(ui.Row, { label: '最近的步骤', hint: '完整记录在那个工作区会话里' },
-        (sc && sc.ops && sc.ops.items && sc.ops.items.length)
-          ? h('div', { style: { flex: '1 1 320px', minWidth: 0 } },
-              sc.ops.items.map((e, i) => h('div', { key: i, className: 'ab-small ab-muted' },
-                (String(e.at || '').slice(11, 19) || '') + ' ' + (e.ok === false ? '✗ ' : '· ') + String(e.step || '') + (e.detail ? '：' + e.detail : ''))))
-          : dim('还没有记录'))
+      (sc && sc.ops && sc.ops.items && sc.ops.items.length)
+        ? h('div', { style: { flex: '1 1 320px', minWidth: 0 } },
+            [...sc.ops.items].reverse().map((e, i) => h('div', { key: i, className: 'ab-small ab-muted' },
+              (e.at ? new Date(e.at).toLocaleTimeString('zh-CN', { hour12: false }) : '') + ' ' + (e.ok === false ? '✗ ' : '· ') + String(e.step || '') + (e.detail ? '：' + e.detail : ''))))
+        : dim('还没有记录')
     ),
 
     // ⑦ 风险：用一条警示通栏，不再单独占一大卡

@@ -34,7 +34,7 @@ const HELP = [
   '  pending                    看有没有在等你确认的动作',
   '  confirm | cancel           同意 / 撤销那个待确认的动作',
   '  selfcheck                  体检单（浏览器、CDP、视口、今日评论/灯牌）',
-  '  probe <what> [flags]       探针：badge / gift / text / info / pagetext / hit / prep / prepgift / mark / expiry',
+  '  probe <what> [flags]       只读探针：info / text / chat / ax / pagetext / room / hit',
   '  doctor                     面板能不能连上、模块在不在跑、版本对不对',
   '  verify [--live]            跑模块自检（--live 会真起一次浏览器）',
   '',
@@ -195,18 +195,19 @@ if (cmd === 'status') {
 }
 
 if (cmd === 'pending') {
-  const r = await call(base, '/aurabot/api/ext/kanzhibo/pending')
+  const r = await call(base, '/aurabot/api/ext/kanzhibo/selfcheck')
   if (!r.json) { console.error(r.text.slice(0, 200)); process.exit(1) }
-  if (flags.json) { console.log(JSON.stringify(r.json, null, 2)); process.exit(0) }
+  if (flags.json) { console.log(JSON.stringify(r.json.pending || null, null, 2)); process.exit(0) }
   const p = r.json.pending
-  console.log(p ? ('等你确认：' + p.label + '（' + Math.round((p.leftMs || 0) / 1000) + ' 秒后作废）') : '没有等你确认的事')
+  console.log(p ? ('等你确认：' + p.label) : '没有等你确认的事')
   process.exit(0)
 }
 
 if (cmd === 'confirm' || cmd === 'cancel') {
-  // 2026-11-10：/probe 的 what=ok / no 现在要求 &open=1（这一步会真的点下去、可能花钱），
-  //   所以 CLI 这边也要带上，不然 confirm 会被挡回来。
-  const r = await call(base, '/aurabot/api/ext/kanzhibo/probe?what=' + (cmd === 'confirm' ? 'ok' : 'no') + '&open=1')
+  const sc = await call(base, '/aurabot/api/ext/kanzhibo/selfcheck')
+  const token = sc.json && sc.json.probeToken
+  if (!token) { console.error('拿不到面板令牌（selfcheck 失败）'); process.exit(1) }
+  const r = await call(base, '/aurabot/api/ext/kanzhibo/' + cmd + '?token=' + encodeURIComponent(token))
   if (!r.json) { console.error(r.text.slice(0, 200)); process.exit(1) }
   if (flags.json) { console.log(JSON.stringify(r.json, null, 2)); process.exit(0) }
   console.log((r.json.result && r.json.result.message) || (r.json.ok ? '好了' : '没成功'))

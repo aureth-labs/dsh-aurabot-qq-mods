@@ -10,7 +10,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { pickAxNodes, axName, axRole, axRectFromQuad, axSig, AX_HIT_SRC, createAxReader } from '../lib/ax.mjs'
+import { pickAxNodes, axName, axRole, axRectFromQuad, axSig, AX_HIT_SRC, createAxReader } from '../lib/room/ax.mjs'
 
 /* ---------- 小工具 ---------- */
 

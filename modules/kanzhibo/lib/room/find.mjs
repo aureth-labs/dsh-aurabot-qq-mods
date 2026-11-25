@@ -439,16 +439,6 @@ export const BADGE_CHAT_RE = /送出了\s*(?:点亮粉丝团|粉丝团灯牌|粉
  * @param {string} text 整页文字
  * @param {string} nick 自己的昵称（可以为空：那时只要求形如「某昵称：送出了 粉丝团灯牌」）
  */
-export function badgeSentInChat(text, nick) {
-  const t = String(text || '')
-  const name = String(nick || '').trim()
-  const tail = '(?:点亮粉丝团|粉丝团灯牌|粉丝团|灯牌)'
-  const pat = name
-    ? new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*[：:]\\s*送出了\\s*' + tail)
-    : new RegExp('[^\\s：:]{1,24}\\s*[：:]\\s*送出了\\s*' + tail)
-  const m = pat.exec(t)
-  return { hit: Boolean(m), snippet: m ? m[0].slice(0, 40) : '' }
-}
 
 /**
  * 直接读「聊天列表」这个容器，而不是整页 innerText 快照。

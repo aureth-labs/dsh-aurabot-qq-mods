@@ -50,7 +50,7 @@ export function pickAxNodes(nodes, want, limit = 60) {
     const key = role + '|' + name
     if (seen.has(key)) continue
     seen.add(key)
-    out.push({ name, role, frameId: n.frameId, backendNodeId: n.backendDOMNodeId })
+    out.push({ name, role, frameId: n.frameId, backendNodeId: n.backendDOMNodeId, parentId: n.parentId || null, childIds: Array.isArray(n.childIds) ? n.childIds : [] })
     if (out.length >= limit) break
   }
   return out

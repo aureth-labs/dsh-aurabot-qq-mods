@@ -67,7 +67,13 @@ jobs:
           for dir in modules/*/; do
             [ -f "$dir/package.json" ] || continue
             if node -e "process.exit(require('./$dir/package.json').scripts?.test ? 0 : 1)"; then
-              (cd "$dir" && npm ci --ignore-scripts && npm test)
+              # 没有 lockfile 的模块（零依赖的也不少）用 npm install 兜底：
+              # npm ci 见到缺 lockfile 直接 EUSAGE 退 1，会把主分支整个 check 压红。
+              if [ -f "$dir/package-lock.json" ]; then
+                (cd "$dir" && npm ci --ignore-scripts && npm test)
+              else
+                (cd "$dir" && npm install --no-audit --no-fund --ignore-scripts && npm test)
+              fi
             fi
           done
       - name: 跑搬来的模块的测试（要插件源码）
