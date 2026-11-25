@@ -1,0 +1,17 @@
+{
+  "_comment": "按 charts.md 的 /charts/detail 字段构造的脱敏 fixture，不是真实回包",
+  "ret": 0,
+  "sub_ret": 0,
+  "topId": 26,
+  "topType": 1,
+  "topName": "热歌榜",
+  "topDesc": "QQ音乐热歌榜",
+  "listenNum": 1234567,
+  "totalNum": 200,
+  "updateTime": "2026-11-13 06:00:00",
+  "hasMore": true,
+  "trackList": [
+    { "songMid": "0039MnYb0qxYhV", "songName": "晴天", "singerName": "周杰伦", "songH5Url": "https://y.qq.com/n/ryqq/songDetail/0039MnYb0qxYhV" },
+    { "songMid": "000MkMni1yWrP4", "songName": "稻香", "singerName": "周杰伦" }
+  ]
+}

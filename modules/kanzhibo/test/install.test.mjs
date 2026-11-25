@@ -19,6 +19,9 @@ function installCopy() {
     cpSync(join(MOD, name), join(dir, name))
   }
   cpSync(join(MOD, 'lib'), join(dir, 'lib'), { recursive: true })
+  for (const d of ['room', 'core', 'features']) {
+    if (existsSync(join(MOD, d))) cpSync(join(MOD, d), join(dir, d), { recursive: true })
+  }
   return dir
 }
 
