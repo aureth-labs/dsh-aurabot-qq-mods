@@ -9,6 +9,17 @@ const STATE_COLOR = {
   sleep: 'var(--color-text-tertiary, #9e9e9e)',
 }
 const fmt = (t) => t ? new Date(t).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : ''
+// 她自己拿主意的那些事：干活/摸鱼/出门/回家，日志里按颜色分开
+const KIND_COLOR = {
+  work: 'var(--color-success, #2e7d32)',
+  'task-done': 'var(--color-success, #2e7d32)',
+  slack: 'var(--color-warning, #b26a00)',
+  'slack-caught': 'var(--color-danger, #c62828)',
+  'task-failed': 'var(--color-danger, #c62828)',
+  out: 'var(--color-info, #1565c0)',
+  'out-back': 'var(--color-info, #1565c0)',
+  home: 'var(--color-text-tertiary, #9e9e9e)',
+}
 
 return function Panel({ toast }) {
   const [state, setState] = useState(null)
@@ -17,6 +28,7 @@ return function Panel({ toast }) {
   const [events, setEvents] = useState(null)
   const [history, setHistory] = useState([])
   const [profs, setProfs] = useState(null)
+  const [plan, setPlan] = useState(null)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -30,6 +42,7 @@ return function Panel({ toast }) {
     }).catch(() => {})
     call('/events').then((r) => setEvents(r?.ok ? { self: r.self || [], disturb: r.disturb || [] } : null)).catch(() => {})
     call('/history').then((r) => setHistory(r?.ok ? r.history || [] : [])).catch(() => {})
+    call('/plan').then((r) => { if (r?.ok) setPlan(r) }).catch(() => {})
   }
   useEffect(() => { reload(); const t = setInterval(reload, 30000); return () => clearInterval(t) }, [])
 
@@ -72,6 +85,26 @@ return function Panel({ toast }) {
     try {
       const r = await call('/professions', { id })
       if (r?.ok) { toast(`换工作了：${r.name}，班表已按职业重排（手动改过的班表被覆盖）`); reload() } else toast(r?.message || '没换成')
+    } catch (e) { toast('出错了：' + (e.message || e)) }
+    setBusy(false)
+  }
+
+  const savePlan = async (patch) => {
+    setBusy(true)
+    try {
+      const r = await call('/plan', patch)
+      if (r?.ok) { toast('存好了'); reload() } else toast(r?.message || '没存上')
+    } catch (e) { toast('出错了：' + (e.message || e)) }
+    setBusy(false)
+  }
+
+  const decideNow = async () => {
+    setBusy(true)
+    try {
+      const r = await call('/plan/now')
+      const last = r?.last
+      toast(last ? `她决定了：${last.text}` : '这一刻没什么要决定的（不在班段里，也不是休息日）')
+      reload()
     } catch (e) { toast('出错了：' + (e.message || e)) }
     setBusy(false)
   }
@@ -162,5 +195,63 @@ return function Panel({ toast }) {
           'self-cancel': () => `取消日程：${it.what}`,
           schedule: () => '改了班表',
         }[it.event] || (() => it.event))())))),
+
+    // ---------- 她自己拿主意：日志在作息页最下面 ----------
+    plan ? h('div', { style: { marginTop: 14, paddingTop: 10, borderTop: '1px solid rgba(128,128,128,.25)' } },
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 6 } },
+        h('div', { style: { ...infoStyle, fontWeight: 500 } }, '她今天自己做了什么'),
+        h('button', {
+          onClick: decideNow, disabled: busy,
+          style: { fontSize: 11, padding: '2px 10px', borderRadius: 999, border: '1px solid rgba(128,128,128,.35)', background: 'transparent', color: 'inherit', cursor: busy ? 'default' : 'pointer' },
+        }, '让她现在决定一次'),
+        h('span', small, plan.config.on
+          ? `每 ${plan.config.interval} 分钟决定一次 · 约 ${plan.config.shareChance}% 会跟主人说一声`
+          : '「自己拿主意」关着，她只按作息过，不会自己安排活和出门')),
+
+      plan.outing ? h('div', { style: { background: 'rgba(21,101,192,.10)', borderRadius: 10, padding: '6px 12px', marginBottom: 8, ...infoStyle } },
+        `现在在外面：${plan.outing.act}（还有 ${plan.outing.leftMin} 分钟回来）`) : null,
+
+      plan.tasks && plan.tasks.length ? h('div', { style: { marginBottom: 8 } },
+        h('div', { style: { ...infoStyle, fontWeight: 500, marginBottom: 4 } }, '手头的活'),
+        plan.tasks.map((t) => h('div', { key: t.id, style: { display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0', borderBottom: '1px dashed rgba(128,128,128,.2)' } },
+          h('span', { style: { flex: 1, ...infoStyle, textDecoration: t.failed ? 'line-through' : 'none', opacity: t.done || t.failed ? 0.6 : 1 } }, t.title),
+          h('div', { style: { width: 70, height: 6, background: 'rgba(128,128,128,.2)', borderRadius: 3, overflow: 'hidden' } },
+            h('div', { style: { width: Math.min(100, t.progress) + '%', height: '100%', background: t.failed ? 'var(--color-danger, #c62828)' : 'var(--color-success, #2e7d32)' } })),
+          h('span', { style: { fontSize: 11, minWidth: 76, textAlign: 'right', color: t.failed ? 'var(--color-danger, #c62828)' : 'var(--color-text-tertiary, #9e9e9e)' } },
+            t.done ? '做完了' : t.failed ? '拖过期了' : `${t.progress}% · 还剩 ${t.leftMin} 分`)))) : null,
+
+      (plan.log && plan.log.length)
+        ? h('div', null,
+          h('div', { style: { ...infoStyle, fontWeight: 500, marginBottom: 4 } }, '行动日志'),
+          plan.log.slice(0, 24).map((e, i) => h('div', { key: i, style: { display: 'flex', gap: 8, alignItems: 'baseline', padding: '3px 0', borderBottom: '1px dashed rgba(128,128,128,.25)' } },
+            h('span', small, fmt(e.at)),
+            h('span', { style: { width: 4, height: 4, borderRadius: '50%', background: KIND_COLOR[e.kind] || 'var(--color-text-tertiary, #9e9e9e)', flex: '0 0 auto', alignSelf: 'center' } }),
+            h('span', { style: { flex: 1, ...infoStyle, color: KIND_COLOR[e.kind] || 'inherit' } }, e.text),
+            e.shared ? h('span', { style: { fontSize: 11, color: 'var(--color-text-tertiary, #9e9e9e)' } }, '说了') : null)))
+        : h('div', { style: { ...infoStyle, marginBottom: 6 } }, '今天还没有记录，到下一个决定点就有了。'),
+
+      h('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 } },
+        h('label', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 } },
+          h('input', { type: 'checkbox', checked: !!plan.config.on, onChange: (e) => savePlan({ on: e.target.checked }) }),
+          '让她自己拿主意'),
+        h('label', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 } },
+          h('input', { type: 'checkbox', checked: !!plan.config.taskOn, onChange: (e) => savePlan({ taskOn: e.target.checked }) }),
+          '上班有具体的活'),
+        h('label', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 } },
+          '间隔',
+          h('input', {
+            type: 'number', min: 10, max: 180, step: 5, value: plan.config.interval,
+            onChange: (e) => savePlan({ interval: Number(e.target.value) }),
+            style: { width: 58, fontSize: 12, padding: '2px 6px', borderRadius: 6, border: '1px solid rgba(128,128,128,.3)', background: 'transparent', color: 'inherit' },
+          }),
+          '分钟'),
+        h('label', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 } },
+          '说一声',
+          h('input', {
+            type: 'number', min: 0, max: 100, step: 5, value: plan.config.shareChance,
+            onChange: (e) => savePlan({ shareChance: Number(e.target.value) }),
+            style: { width: 58, fontSize: 12, padding: '2px 6px', borderRadius: 6, border: '1px solid rgba(128,128,128,.3)', background: 'transparent', color: 'inherit' },
+          }),
+          '%'))) : null,
   )
 }

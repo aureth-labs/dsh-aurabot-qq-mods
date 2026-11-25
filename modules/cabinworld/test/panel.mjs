@@ -10,7 +10,11 @@ import { GAME_DIR, BRIDGE_JSON } from './_dirs.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const code = fs.readFileSync(path.join(here, '..', 'panel.js'), 'utf8')
-const ok = (cond, label, extra) => console.log((cond ? 'OK ' : 'FAIL ') + label + (extra ? ' - ' + extra : ''))
+const ok = (cond, label, extra) => {
+  if (cond) { console.log('OK ' + label + (extra ? ' - ' + extra : '')); return }
+  console.error('FAIL ' + label + (extra ? ' - ' + extra : ''))
+  process.exitCode = 1
+}
 
 // ---- index.mjs 真正注册了哪些面板路由（面板请求的路径必须都在里面） --------------------------
 const registered = new Set()
@@ -46,6 +50,11 @@ const React = {
     return [store[at], (v) => { store[at] = typeof v === 'function' ? v(store[at]) : v }]
   },
   useEffect: (fn) => { effects.push(fn) },
+  useRef: (init) => {
+    const at = cursor++
+    if (!(at in store)) store[at] = { current: init }
+    return store[at]
+  },
   createElement: (type, props, ...children) => ({ type, props, children }),
 }
 const h = React.createElement
@@ -151,3 +160,39 @@ try {
 } finally {
   for (const fn of broken.cleanups) fn()
 }
+
+// ---- 静态校验：面板对「写路由」的调用必须带 body（也就是走 POST） ----------------------------
+// 运行时的 call 桩看不出方法，所以直接比源码：index.mjs 里 handler 含 assertPost 的路由，
+// panel.js 调它时必须给第二个参数。0.4.4 把 /update 改成 POST，这条能防住「面板还用 GET 打回 405」。
+const indexSrc = fs.readFileSync(path.join(here, '..', 'index.mjs'), 'utf8')
+function routeRequiresPost(routePath) {
+  const start = indexSrc.indexOf("api.route('" + routePath + "'")
+  if (start < 0) return false
+  const next = indexSrc.indexOf("api.route('", start + 12)
+  const block = indexSrc.slice(start, next < 0 ? indexSrc.length : next)
+  return /\bassertPost\b/.test(block)
+}
+const panelCalls = []
+const callRe = /call\('([^']+)'(\s*,)?/g
+let hit = null
+while ((hit = callRe.exec(code)) !== null) panelCalls.push({ path: hit[1], hasBody: Boolean(hit[2]) })
+const postRoutes = [...registered].filter(routeRequiresPost)
+const bodyMissing = panelCalls.filter((c) => postRoutes.indexOf(c.path) >= 0 && !c.hasBody)
+ok(postRoutes.length > 0, 'index.mjs 里有要求 POST 的写路由', postRoutes.join('、'))
+ok(bodyMissing.length === 0, '面板调写路由都带了 body（走 POST）', bodyMissing.length ? '缺 body：' + bodyMissing.map((c) => c.path).join('、') : postRoutes.length + ' 条写路由都对得上')
+const staticUnknown = [...new Set(panelCalls.map((c) => c.path))].filter((p) => !registered.has(p))
+ok(staticUnknown.length === 0, '面板里出现的每个路径都有对应路由（静态）', staticUnknown.length ? '多出：' + staticUnknown.join('、') : panelCalls.length + ' 处调用都对得上')
+
+// action() 工厂把路径当参数传进去，call() 那边看到的是变量 path，上面的正则扫不到——
+// /start、/game/show、/game/hide 这三条写路由必须单独验：路径要在路由表里，
+// 且工厂内部调用时仍然带着 body（否则就是 GET 打 POST 路由）。
+const actionPaths = []
+const actionRe = /action\('([^']+)'/g
+let ah = null
+while ((ah = actionRe.exec(code)) !== null) actionPaths.push(ah[1])
+ok(actionPaths.length > 0, '面板里有 action() 包装的调用', actionPaths.join('、'))
+ok(/call\(path, \{\}\)/.test(code), 'action() 内部调 call 时带 body（走 POST）')
+const actionUnknown = actionPaths.filter((p) => !registered.has(p))
+ok(actionUnknown.length === 0, 'action() 的路径都有对应路由', actionUnknown.length ? '多出：' + actionUnknown.join('、') : actionPaths.length + ' 条')
+const notPost = actionPaths.filter((p) => postRoutes.indexOf(p) < 0)
+ok(notPost.length === 0, 'action() 包的都是写路由', notPost.length ? '这些不是：' + notPost.join('、') : actionPaths.join('、'))

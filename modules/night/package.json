@@ -1,0 +1,14 @@
+{
+  "name": "aurabot-night",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "长夜如梦：作息、睡眠阶段、REM 做梦、概率唤醒",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  }
+}

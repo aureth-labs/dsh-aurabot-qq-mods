@@ -1,25 +1,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-test('actual panel keeps AI suggestions separate until adopted and explicitly saved', async () => {
+import { wakeReadings } from '../lib/speaker/wake.mjs';
+test('actual panel generates comma-separated readings for multiple names and preserves audio preview', async () => {
  const slots=[];let cursor=0;const calls=[];
  const effects=[];let effectCursor=0;const intervals=[];
  const React={useState(initial){const n=cursor++;if(!(n in slots))slots[n]=initial;return [slots[n],v=>{slots[n]=typeof v==='function'?v(slots[n]):v}]},useEffect(fn,deps){effects[effectCursor++]={fn,deps};},useRef(initial){const i=refCursor++;return refs[i]??={current:initial}}};
  const h=(type,props,...children)=>({type,props:props||{},children:children.flat(Infinity)});
  const ui=new Proxy({}, {get:(_,key)=>key});
- const words=['小半','小办','小瓣','小拌','小绊','小扮','小版','晓伴','晓半','晓办'];
  let finishSave, played=0, paused=0;
+ let finishInitialWake;
  let names=['小伴','小半'];
  let refCursor=0;const refs=[];
  let nextAudio={phase:'generating'};
  const preview={currentTime:9,play:async()=>{played++},pause:()=>{paused++}};
  const call=async(path,body)=>{
    calls.push({path,body});
-   if(path.endsWith('/suggest')) return {ok:true,primary:body.primary,names:words};
-   if(path==='/speaker/wake') return {ok:true,wake:{names,greetingNames:[],acknowledgement:'我在这里'},acknowledgementAudio:nextAudio};
+   if(path==='/status') return {ok:true};
+   if(path==='/songs/check') return {ok:true,playlists:[]};
+   if(path.endsWith('/pinyin')) return {ok:true,readings:wakeReadings(body)};
+   if(path==='/speaker/wake') {
+     const response={ok:true,wake:{names,greetingNames:[],acknowledgement:'我在这里'},readings:wakeReadings({names}),acknowledgementAudio:nextAudio};
+     if(!finishInitialWake) return new Promise(resolve=>{finishInitialWake=()=>resolve(response)});
+     return response;
+   }
    if(path.endsWith('/save')) return new Promise(resolve=>{finishSave=()=>{
      names=body.names;
-     resolve({ok:true,wake:{names,acknowledgement:body.acknowledgement,greetingNames:[]},
+     resolve({ok:true,wake:{names,acknowledgement:body.acknowledgement,greetingNames:[]},readings:body.pronunciations,
        acknowledgementAudio:{phase:'ready',id:'a'.repeat(64)}});
    };});
    return {ok:false};
@@ -30,19 +37,31 @@ test('actual panel keeps AI suggestions separate until adopted and explicitly sa
  const label=s=>nodes.find(n=>n.props['aria-label']===s);
  const button=s=>nodes.find(n=>n.type==='Btn'&&n.children.includes(s));
  render();assert.equal(nodes.some(n=>n.props.title==='家庭成员人设'),false);
+ effects.find(({fn})=>String(fn).includes("call('/status').then")).fn();
+ await new Promise(setImmediate);
  assert.equal(nodes.some(n=>n.props.title==='小爱常驻入口'),false);
  assert.equal(nodes.some(n=>n.props['aria-label']==='需先说你好才生效的称呼'),false);
  assert.equal(nodes.some(n=>n.children.includes('开启常驻入口')),false);
  assert.equal(nodes.filter(n=>n.props.right?.type==='Switch'&&n.props.right.props.title==='小爱音响接入开关').length,1);
- assert.match(nodes.find(n=>n.props.label==='主要称呼').props.hint,/每次先说“小爱同学”/);
- label('主要称呼').props.onChange({target:{value:'小伴'}});render();
- await button('AI 补足同音词').props.onClick();render();
- assert.equal(label('同音词与识别变体').props.value,'');
+ assert.match(nodes.find(n=>n.props.label==='主要称呼').props.hint,/先说“小爱同学”/);
+ await label('主要称呼').props.onChange({target:{value:'小伴, 重重，蓝蓝，兰兰'}});render();
+ assert.equal(button('AI 补足同音词'),undefined);
+ assert.equal(label('额外别名'),undefined);
+ const automatic = wakeReadings({names:['小伴','重重','蓝蓝','兰兰']});
+ assert.equal(label('主要称呼读音').props.value,automatic.join('，'));
+ assert.equal(label('去重后的主要称呼读音').children[0],[...new Set(automatic)].join('，'));
+ assert.equal(label('称呼保存栏').props.className,'ab-savebar');
+ assert.equal(button('保存称呼').props.kind,'primary');
  assert.equal(button('保存称呼').props.disabled,true);
- assert.deepEqual(calls.map(x=>x.path),['/speaker/wake/suggest']);
- button('采用候选到草稿').props.onClick();render();
- assert.equal(label('同音词与识别变体').props.value.split('，').length,10);
- label('同音词与识别变体').props.onChange({target:{value:words.join('，')+'，晓瓣'}});render();
+ label('称呼应答').props.onChange({target:{value:'我在这里'}});render();
+ finishInitialWake();await new Promise(setImmediate);render();
+ assert.equal(label('主要称呼').props.value,'小伴, 重重，蓝蓝，兰兰');
+ assert.equal(label('主要称呼读音').props.value,automatic.join('，'));
+ assert.equal(label('称呼应答').props.value,'我在这里');
+ assert.equal(button('保存称呼').props.disabled,false);
+ label('主要称呼读音').props.onChange({target:{value:'xiao ban，chong chong，lan lan'}});render();
+ await label('主要称呼').props.onChange({target:{value:'重重,小伴，蓝蓝'}});render();
+ assert.equal(label('主要称呼读音').props.value,'chong chong，xiao ban，lan lan');
  label('称呼应答').props.onChange({target:{value:'我在这里'}});render();
  assert.equal(button('试听'),undefined);
  const saving=button('保存称呼').props.onClick();render();
@@ -68,12 +87,13 @@ test('actual panel keeps AI suggestions separate until adopted and explicitly sa
  names=['另一称呼','另一同音'];
  await intervals[0]();render();
  assert.equal(label('称呼应答').props.value,'尚未保存');
- assert.equal(label('主要称呼').props.value,'另一称呼');
- assert.equal(label('同音词与识别变体').props.value,'另一同音');
+ assert.equal(label('主要称呼').props.value,'另一称呼，另一同音');
  assert.equal(button('试听'),undefined);
  label('称呼应答').props.onChange({target:{value:'我在这里'}});render();
  assert.match(nodes.find(n=>n.type==='audio'&&n.props.src?.includes('/speaker/wake/audio')).props.src,/id=b+$/);
  const saved=calls.find(x=>x.path==='/speaker/wake/save');
- assert.equal(saved.body.names[0],'小伴');assert.equal(saved.body.names.length,12); assert.deepEqual(saved.body.greetingNames,[]);
+ assert.deepEqual(saved.body.names,['重重','小伴','蓝蓝']);
+ assert.deepEqual(saved.body.pronunciations,['chong chong','xiao ban','lan lan']);
+ assert.deepEqual(saved.body.expectedWake.names,['小伴','小半']);
  assert.equal(saved.body.acknowledgement,'我在这里');
 });

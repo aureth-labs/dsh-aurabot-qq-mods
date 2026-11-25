@@ -8,7 +8,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { latestRelease, unzip, pickRoot, nodeTooOld } from '../lib/install.mjs'
 
-const ok = (cond, label, extra) => console.log((cond ? 'OK ' : 'FAIL ') + label + (extra ? ' - ' + extra : ''))
+const ok = (cond, label, extra) => {
+  if (cond) { console.log('OK ' + label + (extra ? ' - ' + extra : '')); return }
+  console.error('FAIL ' + label + (extra ? ' - ' + extra : ''))
+  process.exitCode = 1
+}
 const zip = process.argv[2] || path.join(os.tmpdir(), 'CabinWorld-win64.zip')
 const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'cabincheck-'))
 
@@ -21,8 +25,17 @@ try {
   try {
     rel = await latestRelease({})
   } catch (e) {
-    console.log('SKIP 查不到 GitHub Release（' + ((e && e.message) || e) + '），跳过安装检查')
-    process.exit(0)
+    // 这个文件测的是真实下载，需要网络和 GitHub 可达性；默认套件里当跳过，
+    // 设 CABIN_NET_TEST=1 时才把「查不到 Release」当失败。
+    // 退出前先清临时目录（finally 会被 process.exit 跳过，以前每次 SKIP 都在 %TEMP% 留一个 cabincheck-*）。
+    await fsp.rm(tmp, { recursive: true, force: true }).catch(() => {})
+    if (process.env.CABIN_NET_TEST === '1') {
+      console.error('FAIL 查不到 GitHub Release（' + ((e && e.message) || e) + '）')
+      process.exit(1)
+    }
+    console.log('SKIP 查不到 GitHub Release（' + ((e && e.message) || e) + '）；设 CABIN_NET_TEST=1 可要求它必须通过')
+    // 用 exitCode 而不是 0：前面已经失败的断言不能被这次 SKIP 洗掉。
+    process.exit(process.exitCode || 0)
   }
   ok(!!rel.tag && !!rel.asset.url, '查到最新版本', rel.tag + ' / ' + rel.asset.name + ' / ' + (rel.asset.size / 1048576).toFixed(1) + ' MB')
 

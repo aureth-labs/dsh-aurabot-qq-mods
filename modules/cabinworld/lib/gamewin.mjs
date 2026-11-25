@@ -40,31 +40,22 @@ const TYPE = [
 // （表现是 ShowWindow 调了、IsWindowVisible 却还是旧值，实测踩过）；
 // -EncodedCommand 又会把 progress 流按 CLIXML 吐进 stdout，同样污染结果。
 function ps(body) {
-  const file = path.join(os.tmpdir(), 'cabin-win-' + process.pid + '-' + (Date.now() % 1e7) + '.ps1')
+  // 私有临时目录：mkdtempSync 保证目录名随机且只归当前进程，
+  // 不再是可预测的 tmpdir/cabin-win-<pid>-<ts>.ps1。
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cabinwin-'))
+  const file = path.join(dir, 'win.ps1')
   fs.writeFileSync(file, TYPE + '\r\n' + body, 'utf8')
   try {
     // 不能加 -NonInteractive：带上它，ShowWindow/SetForegroundWindow 会静默失败
     // （脚本一模一样，手动跑 ok:True，从 node 调用就 ok:False，实测）。
     return execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', file], { encoding: 'utf8', timeout: 20000, windowsHide: true })
   } finally {
-    try { fs.unlinkSync(file) } catch { /* 临时文件已经不在了 */ }
+    try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* 临时目录已经不在了 */ }
   }
 }
 
 function processName(gameDir) {
   return String(exeName(gameDir) || 'CabinWorld.exe').replace(/[.]exe$/i, '').replace(/[^\w.-]/g, '')
-}
-
-/** 找游戏窗口句柄；游戏没开或窗口还没建就返回 0。 */
-export function gameHandle(gameDir) {
-  try {
-    const out = ps([
-      "$p = Get-Process -Name '" + processName(gameDir) + "' -ErrorAction SilentlyContinue | Select-Object -First 1",
-      'if (-not $p) { Write-Output 0; return }',
-      'Write-Output ([int64][CabinWin]::Find([uint32]$p.Id))',
-    ].join('\n'))
-    return Number(String(out).trim().split(/\s+/).pop()) || 0
-  } catch { return 0 }
 }
 
 /** mode: 'hide' 藏起来（连任务栏一起），'show' 显示并置前。 */

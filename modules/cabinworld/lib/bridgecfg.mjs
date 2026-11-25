@@ -3,30 +3,13 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { spawn, execFileSync } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
 
-import { ensureHost, startHost, hostPidFile, killBridge } from './host.mjs'
-import { exePath, assertInside } from './exe.mjs'
-
-const PATCHES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'patches', 'apply.mjs')
-
-const FILE_NAME = 'bridge.config.json'
-
-function stripBom(text) {
-  const s = String(text || '')
-  return s.charCodeAt(0) === 0xfeff ? s.slice(1) : s
-}
-
-export function configPath(gameDir) {
-  return assertInside(gameDir, path.join(String(gameDir || '').trim(), 'bridge', FILE_NAME))
-}
+import { ensureHost, startHost, hostPidFile, killBridge, waitBridge, PATCHES, bridgeAlive } from './host.mjs'
+import { exePath, assertInside, readJsonFile, configPath, exeMissingText } from './exe.mjs'
 
 export function readBridgeConfig(gameDir) {
   const file = configPath(gameDir)
-  const raw = fs.readFileSync(file, 'utf8')
-  const json = JSON.parse(stripBom(raw))
-  return { file, raw, json }
+  return { file, ...readJsonFile(file) }
 }
 
 export function bridgeConfigInfo(gameDir) {
@@ -50,19 +33,6 @@ export function bridgeConfigInfo(gameDir) {
 
 // exePath 在 lib/exe.mjs：host.mjs、install.mjs 也要用，放在本文件会成环。
 
-/** 备份只留最近 3 份，别无限堆。 */
-function pruneBackups(file) {
-  try {
-    const dir = path.dirname(file)
-    const prefix = path.basename(file) + '.bak-'
-    const rows = fs.readdirSync(dir)
-      .filter(name => name.startsWith(prefix))
-      .map(name => { const full = path.join(dir, name); return { full, mtime: fs.statSync(full).mtimeMs } })
-      .sort((a, b) => b.mtime - a.mtime)
-    for (const row of rows.slice(3)) fs.rmSync(row.full, { force: true })
-  } catch { /* 清理失败不影响写入 */ }
-}
-
 export function writeBridgeConfig(gameDir, patch, forget) {
   const got = readBridgeConfig(gameDir)
   const next = JSON.parse(JSON.stringify(got.json))
@@ -85,10 +55,10 @@ export function writeBridgeConfig(gameDir, patch, forget) {
   if (!applied.length) return { file: got.file, backup: '', applied }
   const backup = got.file + '.bak-' + Date.now()
   fs.copyFileSync(got.file, backup)
-  const tmp = got.file + '.tmp-' + Date.now()
+  // 后缀带随机数：两个写请求落同一毫秒时，.tmp-<ts> 会撞名。
+  const tmp = got.file + '.tmp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8)
   fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n', 'utf8')
   fs.renameSync(tmp, got.file)
-  pruneBackups(got.file)
   if (typeof forget === 'function') { try { forget() } catch { /* 缓存清不掉不影响写入 */ } }
   return { file: got.file, backup, applied }
 }
@@ -99,19 +69,12 @@ export function bridgeDataDir(gameDir) {
   return assertInside(gameDir, path.resolve(path.join(String(gameDir).trim(), 'bridge'), info.dataDir || '../data'))
 }
 
-function pidAlive(pid) {
-  try {
-    const out = execFileSync('powershell.exe', ['-NoProfile', '-Command', '(Get-Process -Id ' + Number(pid) + ' -ErrorAction SilentlyContinue).Id'], { encoding: 'utf8', timeout: 10000 })
-    return String(out).trim() !== ''
-  } catch { return false }
-}
-
 /** 重启桥：按 bridge.json 里的 pid 关掉旧的，同步宿主副本（bridge-host），再用副本启动。 */
 export async function restartBridge({ gameDir, dataDir, log, forget }) {
   const dir = String(gameDir || '').trim()
   const bridgeJson = path.join(String(dataDir || '').trim(), 'bridge.json')
   let pid = 0
-  try { pid = Number(JSON.parse(stripBom(fs.readFileSync(bridgeJson, 'utf8'))).pid) || 0 } catch { /* 没有 bridge.json 就是没有旧桥 */ }
+  try { pid = Number(readJsonFile(bridgeJson).json.pid) || 0 } catch { /* 没有 bridge.json 就是没有旧桥 */ }
   // 先停自己的副本桥（host.pid）、再停 bridge.json 里那座（可能是官方 start.cmd 起的）。
   // 只按命令行确认身份后才动手：副本桥是插件宿主 spawn 出来的，按父进程杀会把机器人本体一起杀掉。
   let hostPid = 0
@@ -120,40 +83,44 @@ export async function restartBridge({ gameDir, dataDir, log, forget }) {
   for (const p of [hostPid, pid]) {
     if (!p || tried.indexOf(p) >= 0) continue
     tried.push(p)
-    const stopped = killBridge(p)
+    const stopped = killBridge(p, dir)
     if (log) log.info(stopped.killed ? '小屋世界：已停掉' + stopped.why + '（pid ' + p + '）' : '小屋世界：' + stopped.why)
   }
-  if (tried.length) {
-    await new Promise(function (r) { setTimeout(r, 2500) })
-    if (pid > 0 && pidAlive(pid)) return { ok: false, message: '旧的桥进程 ' + pid + ' 关不掉，所以没有起新的桥：去任务管理器结束它再试一次。' }
-  }
+  // 先确认「官方桥和 exe 都在」再动手杀：校验放在杀之后的话，一旦失败就会留下
+  // 「游戏被关、桥被杀」却没有桥能用的状态（bridge/bridge.mjs 被删或被杀毒隔离时）。
   let exe = ''
   try { exe = exePath(dir) } catch (e) { return { ok: false, message: '读不到桥配置里的游戏 exe：' + String((e && e.message) || e) } }
+  if (!fs.existsSync(path.join(dir, 'bridge', 'bridge.mjs'))) return { ok: false, message: '找不到官方桥：' + path.join(dir, 'bridge', 'bridge.mjs') + '（先用 /小屋 安装）' }
+  if (!fs.existsSync(exe)) return { ok: false, message: exeMissingText(exe) }
+  if (tried.length) {
+    await new Promise(function (r) { setTimeout(r, 2500) })
+    // 要检查所有试过的 pid：host.pid 里那座副本桥可能还活着，而 bridge.json 里的 pid 是 0 或过期。
+    // 只盯 pid 会放行到 ensureHost，随后 rename bridge-host 必然 EPERM。
+    // 必须验身份：pid 被系统复用给无关进程时，killBridge 说「不是小屋世界的桥」，
+    // 而纯存活检查说「还活着」，于是每次点重启都得到同一句「关不掉」。
+    const alive = tried.filter(function (p) { return bridgeAlive(p, dir) })
+    if (alive.length) return { ok: false, message: '旧的桥进程 ' + alive.join('、') + ' 关不掉，所以没有起新的桥：去任务管理器结束它再试一次。' }
+  }
   // 这几条都是"能预期到的失败"，统一用 {ok,message} 返回：三个调用方都按返回值处理，
   // throw 出来会变成未捕获异常（/小屋 启动 只回一句空话，面板 500）。
-  if (!fs.existsSync(exe)) return { ok: false, message: '找不到 ' + exe + '：先一键安装' }
-  const synced = ensureHost({ gameDir: dir, patchesScript: PATCHES, log: log || console })
+  const synced = await ensureHost({ gameDir: dir, patchesScript: PATCHES, log: log || console })
   if (!synced.ok) return { ok: false, message: synced.message }
   // 补丁没打上：桥能跑，但 sleep / toolpose 这两个工具不存在。
   if ((synced.degraded || synced.patched === false) && log && log.warn) log.warn('小屋世界：' + String(synced.message || '补丁没打上'))
   const started = startHost({ gameDir: dir, configPath: configPath(dir), log: log || console })
   if (!started.ok) return { ok: false, message: started.message }
-  const deadline = Date.now() + 25000
-  let last = null
-  while (Date.now() < deadline) {
-    await new Promise(function (r) { setTimeout(r, 1500) })
-    try {
-      const info = JSON.parse(stripBom(fs.readFileSync(bridgeJson, 'utf8')))
-      const url = String(info.url || '')
-      if (!url) continue
-      const res = await fetch(url + '/v1/health', { signal: AbortSignal.timeout(3000) })
-      const body = await res.json()
-      last = body
-      if (body && body.ok === true) {
-        if (typeof forget === 'function') { try { forget() } catch { /* 缓存清不掉不影响重启 */ } }
-        return { ok: true, url: url, game: body.game === true }
-      }
-    } catch { /* 还在起 */ }
+  let seen = ''
+  const waited = await waitBridge(async function () {
+    const info = readJsonFile(bridgeJson).json
+    if (!String(info.url || '')) return null
+    seen = String(info.url)
+    const res = await fetch(seen + '/v1/health', { signal: AbortSignal.timeout(3000) })
+    const body = await res.json()
+    return { row: body, done: !!(body && body.ok === true) }
+  }, 25000)
+  if (waited.hit) {
+    if (typeof forget === 'function') { try { forget() } catch { /* 缓存清不掉不影响重启 */ } }
+    return { ok: true, url: seen, game: waited.row.game === true }
   }
-  return { ok: false, message: '桥重启后 25 秒内没连上' + (last ? '（最后一次：' + JSON.stringify(last) + '）' : '') + '：看 bridge-host/host.log 末尾有没有报错，或端口被占。' }
+  return { ok: false, message: '桥重启后 25 秒内没连上' + (waited.row ? '（最后一次：' + JSON.stringify(waited.row) + '）' : '') + '：看 bridge-host/host.log 末尾有没有报错，或端口被占。' }
 }

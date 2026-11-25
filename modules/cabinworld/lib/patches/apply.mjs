@@ -146,6 +146,9 @@ if (problems.length) {
   process.exit(2);
 }
 
+// 先算 ensureTools，让 --dry 的报告顺序和实际写入顺序一致。
+report.push(ensureTools());
+
 if (!dry) {
   fs.mkdirSync(dstDir, { recursive: true });
   for (const item of pending) {
@@ -154,8 +157,6 @@ if (!dry) {
     fs.writeFileSync(item.full, item.text);
   }
 }
-
-report.push(ensureTools());
 
 for (const [kind, what] of report) say((kind === 'added' ? '＋ ' : '＝ ') + what);
 

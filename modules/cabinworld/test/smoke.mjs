@@ -51,7 +51,11 @@ const api = {
 }
 
 await mod.setup(api)
-const ok = (cond, label, extra) => console.log((cond ? 'OK ' : 'FAIL ') + label + (extra ? ' - ' + extra : ''))
+const ok = (cond, label, extra) => {
+  if (cond) { console.log('OK ' + label + (extra ? ' - ' + extra : '')); return }
+  console.error('FAIL ' + label + (extra ? ' - ' + extra : ''))
+  process.exitCode = 1
+}
 const firstLine = (s) => String(s || '').split('\n')[0]
 
 // 挂上的 = CORE 与桥清单的交集（桥没打补丁时自然少 sleep/toolpose），不写死数字
@@ -64,23 +68,31 @@ ok(calls.rules.length > 0 && String(calls.rules[0]).includes('小屋世界'), '�
 
 const byName = (n) => calls.tools.find(t => t.name === n)
 
-if (byName('cabin_status')) {
-  const res = await byName('cabin_status').execute({})
+// 工具没挂上要算失败：以前这里只用 if 包着，缺工具时整块跳过、进程照样退 0。
+const statusTool = byName('cabin_status')
+ok(!!statusTool, '挂上了 cabin_status')
+if (statusTool) {
+  const res = await statusTool.execute({})
   ok(res && res.ok === true, 'cabin_status 返回 ok', firstLine(res && res.message))
   console.log('  ' + String((res && res.message) || '').split('\n').slice(0, 7).join('\n  '))
 }
 
-if (byName('cabin_look')) {
-  const res = await byName('cabin_look').execute({})
+const lookTool = byName('cabin_look')
+ok(!!lookTool, '挂上了 cabin_look')
+if (lookTool) {
+  const res = await lookTool.execute({})
   ok(res && res.ok === true, 'cabin_look 返回 ok', firstLine(res && res.message))
 }
 
-if (byName('cabin_go')) {
-  const res = await byName('cabin_go').execute({ place: 'park' })
+const goTool = byName('cabin_go')
+ok(!!goTool, '挂上了 cabin_go')
+if (goTool) {
+  const res = await goTool.execute({ place: 'park' })
   ok(res && res.ok === true, 'cabin_go park', firstLine(res && res.message))
 }
 
 const routeHealth = calls.routes.get('/health')
+ok(!!routeHealth, '注册了 /health 路由')
 const fakeReq = { socket: { remoteAddress: '127.0.0.1' }, headers: {}, method: 'GET' }
 if (routeHealth) {
   const h = await routeHealth(fakeReq, {})

@@ -20,6 +20,7 @@ async function harness({ firstUse = false, dialogue = false, music = { entries: 
       if (path === '/onboarding/networks') return { ok: true, networks: [{ name: 'Synthetic LAN', addresses: ['192.0.2.1'] }] };
       if (path === '/speaker/check') { checked = true; return { ok: true, historyReadable: true }; }
       if (path === '/speaker/wake') return { ok: true, wake: { names: ['小伴'] } };
+      if (path === '/speaker/wake/pinyin') return { ok: true, readings: ['xiao ban'] };
       if (path === '/speaker/wake/save') { wakeSaved = true; return { ok: true, wake: body }; }
       if (path === '/reminders') return { ok: true, reminders: [] };
       if (path === '/settings/options') return { ok: true, voices: { options: [{ id: '', label: '跟随宿主' }] } };
@@ -137,7 +138,7 @@ test('first-use panel gates music until storage, connection and names, with opti
   assert.equal(switchProps().disabled, true);
   assert.ok(label('可用网卡')); assert.ok(label('主要称呼'));
   assert.equal(h.button('完成配置，进入模块').props.disabled, true);
-  assert.equal(h.button('AI 补足同音词').props.disabled, true);
+  assert.equal(h.button('AI 补足同音词'), undefined);
   await h.button('检查登录与连接').props.onClick(); h.render();
   assert.match(notice().children[0], /保存主要称呼/);
   assert.equal(switchProps().disabled, true);

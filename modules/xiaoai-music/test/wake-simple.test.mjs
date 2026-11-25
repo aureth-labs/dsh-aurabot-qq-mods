@@ -44,3 +44,31 @@ test('concurrent editors cannot overwrite a newer wake preference', async t => {
   assert.deepEqual(preference.get(), latest);
   assert.deepEqual(await new WakePreference(file).open(), latest);
 });
+
+test('pronunciation override persists and can be cleared without losing existing aliases', async t => {
+ const dir=await mkdtemp(join(tmpdir(),'xiaoai-pronunciation-'));
+ t.after(()=>rm(dir,{recursive:true,force:true}));
+ const file=join(dir,'wake.json'), preference=new WakePreference(file);
+ const value={names:['重重','小伴'],greetingNames:[],primaryPinyin:'chong chong'};
+ await preference.save(value);
+ const reloaded=new WakePreference(file);await reloaded.open();
+ assert.equal(reloaded.get().primaryPinyin,'chong chong');
+ assert.ok(matchWakePrefix('虫虫你好',reloaded.get()));
+ await reloaded.save({...value,primaryPinyin:''},reloaded.get());
+ assert.equal(reloaded.get().primaryPinyin,undefined);
+ assert.deepEqual(reloaded.get().names,value.names);
+});
+
+test('pronunciation overrides apply to each saved name and require a corresponding entry', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'xiaoai-multiple-readings-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const file = join(dir, 'wake.json');
+  const preference = new WakePreference(file);
+  const config = { names: ['小伴', '重重'], greetingNames: [], pronunciations: ['xiao ban', 'zhong zhong'] };
+  await preference.save(config);
+  const reloaded = new WakePreference(file);
+  assert.deepEqual((await reloaded.open()).pronunciations, ['', 'zhong zhong']);
+  assert.ok(matchWakePrefix('晓半你好', reloaded.get()));
+  assert.ok(matchWakePrefix('众众你好', reloaded.get()));
+  await assert.rejects(reloaded.save({ ...config, pronunciations: ['chong chong'] }), /逐项对应/);
+});

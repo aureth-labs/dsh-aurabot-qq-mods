@@ -127,7 +127,7 @@ function fakeApi({ deviceSerial = '', adbConnect } = {}) {
     enabled: true, adbPath: 'C:/fake/adb.exe', deviceSerial,
     whitelist: 'com.a', maxSteps: 5, rateLimit: 30, confirmWrites: true,
     dryRun: false, closeAppsAfter: false, sessionTimeoutMs: 60000,
-    writeEventMemory: true, decisionModel: '', autoBrowse: false, intervalHours: 4, maxRunsPerDay: 3,
+    writeEventMemory: true, decisionModel: '', visibleDecisions: true, autoBrowse: false, intervalHours: 4, maxRunsPerDay: 3,
   }
   const fakeAdb = {
     currentPackage: async () => 'com.a',

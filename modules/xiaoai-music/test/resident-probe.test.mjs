@@ -38,6 +38,48 @@ async function harness(t, options = {}) {
     setTime: value => { now = value; }, setRecords: value => { records = value; } };
 }
 
+test('per-record diagnostics distinguish unmatched, completed and failed records without replay', async t => {
+ const h=await harness(t);
+ await h.probe.arm({persistent:true});
+ const unmatched=record(100001,'unmatched','普通文字'), matched=record(100002,'matched');
+ h.setRecords([unmatched,matched]);await h.probe.poll();await settle();
+ assert.match(h.probe.observations.get(recordKey(unmatched)),/未命中/);
+ assert.match(h.probe.observations.get(recordKey(matched)),/流程完成/);
+ await h.probe.poll();await settle();assert.equal(h.questions.length,1);
+ assert.match(h.probe.observations.get(recordKey(matched)),/流程完成/);
+ assert.equal(JSON.stringify(h.probe.status()).includes('普通文字'),false);
+ const failure=await harness(t,{probe:{ask:async()=>{throw new Error('private error')}}});
+ await failure.probe.arm({persistent:true});failure.setRecords([matched]);await failure.probe.poll();await settle();
+ assert.ok(failure.probe.observations.has(recordKey(matched)));
+ assert.doesNotMatch(failure.probe.observations.get(recordKey(matched)),/流程完成|private error/);
+ for(let i=0;i<50;i++)h.probe.observe(record(i,'bounded-'+i),'未命中');
+ assert.equal(h.probe.observations.size,30);
+});
+
+test('changing the saved name never replays already ignored records, even past the diagnostics limit', async t => {
+  let wake = { names: ['小伴'], greetingNames: [] };
+  const h = await harness(t, { probe: { getWakeConfig: () => wake } });
+  await h.probe.arm({ persistent: true });
+  const old = record(100001, 'old', '蓝蓝，播放测试歌曲');
+  const later = Array.from({ length: 32 }, (_, index) => record(100002 + index, 'other-' + index, '普通文字'));
+  h.setRecords([old, ...later]);
+  await h.probe.poll();
+  assert.equal(h.probe.observations.has(recordKey(old)), false);
+  assert.deepEqual(h.questions, []);
+
+  wake = { names: ['蓝蓝'], greetingNames: [] };
+  h.setRecords([old, record(100100, 'fresh', '篮篮，接着说测试内容')]);
+  await h.probe.poll();
+  await settle();
+  assert.deepEqual(h.questions.map(question => question.text), ['接着说测试内容']);
+  assert.equal(h.probe.status().handled, 1);
+
+  h.setTime(161000);
+  h.setRecords([]);
+  await h.probe.poll();
+  assert.equal(h.probe.ignoredRecords.size, 0);
+});
+
 test('resident mode stays active beyond ten minutes, is idempotent and switches back to a timed window', async t => {
   let invalidated = 0;
   const h = await harness(t, { probe: { onInvalidate: () => { invalidated++; } } });

@@ -7,7 +7,22 @@ import { hostDir } from '../lib/host.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 // 测试默认连模块数据目录里的游戏（模块目录只放代码，游戏和存档在 modules-data/<id>/）。
-export const GAME_DIR = process.env.CABIN_GAME_DIR || path.join(HERE, '..', '..', '..', 'modules-data', 'cabinworld')
+// 从插件安装位置跑时它对得上；从源码仓库跑时那里没有 modules-data，
+// 所以要再试一次本机 DSH 的插件数据目录，否则所有跟桥清单有关的断言都会静默退化。
+const HOME = process.env.USERPROFILE || process.env.HOME || ''
+function pickGameDir() {
+  const cands = [
+    process.env.CABIN_GAME_DIR,
+    path.join(HERE, '..', '..', '..', 'modules-data', 'cabinworld'),
+    HOME ? path.join(HOME, '.dsh', 'plugins-data', 'aurabot', 'modules-data', 'cabinworld') : '',
+  ]
+  for (const c of cands) {
+    if (!c) continue
+    try { if (fs.existsSync(path.join(c, 'bridge'))) return c } catch (e) { /* 试下一个 */ }
+  }
+  return cands[1]
+}
+export const GAME_DIR = pickGameDir()
 export const BRIDGE_JSON = process.env.CABIN_BRIDGE_JSON || path.join(GAME_DIR, 'data', 'bridge.json')
 
 // 桥清单里到底有哪些工具名（优先副本 bridge-host，其次官方 bridge；都读不到就用模块的离线兜底清单）。

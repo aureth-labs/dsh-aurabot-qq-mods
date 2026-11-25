@@ -61,7 +61,7 @@ export async function setupOnboarding(api, setupRuntime, { localPost, localReque
   const status = () => ({ ...(runtime?.status() || { ok: true, connected: false, songs: { entries: [], jobs: [] }, playlists: [],
     playback: { phase: 'idle' }, listener: { enabled: false }, login: { phase: 'idle' }, storage: { root } }), onboarding: view() });
   const setupRoutes = new Set(['/status', '/settings/options', '/settings/save', '/speaker/check', '/speaker/login/start',
-    '/speaker/login/select', '/speaker/login/qr', '/speaker/login', '/speaker/wake', '/speaker/wake/audio', '/speaker/wake/save', '/speaker/wake/suggest', '/capabilities']);
+    '/speaker/login/select', '/speaker/login/qr', '/speaker/login', '/speaker/wake', '/speaker/wake/audio', '/speaker/wake/save', '/speaker/wake/pinyin', '/speaker/wake/suggest', '/capabilities']);
   api.onDispose(() => { closed = true; });
   const start = async () => {
     if (runtime) return runtime;

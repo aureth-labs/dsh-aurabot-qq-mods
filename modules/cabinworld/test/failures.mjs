@@ -8,7 +8,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { createBridge } from '../lib/bridge.mjs'
 
-const ok = (cond, label, extra) => console.log((cond ? 'OK ' : 'FAIL ') + label + (extra ? ' - ' + extra : ''))
+const ok = (cond, label, extra) => {
+  if (cond) { console.log('OK ' + label + (extra ? ' - ' + extra : '')); return }
+  console.error('FAIL ' + label + (extra ? ' - ' + extra : ''))
+  process.exitCode = 1
+}
 const quiet = { info() {}, warn() {}, error() {} }
 const mk = (file) => createBridge({ getFile: () => file, log: quiet })
 

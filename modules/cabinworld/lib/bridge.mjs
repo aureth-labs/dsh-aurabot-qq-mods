@@ -96,6 +96,9 @@ export function createBridge({ getFile }) {
     if (second.status === 401) {
       return { ok: false, status: 401, message: '小屋世界的 token 仍然不对：点面板上的「重启小屋世界」重新起一次（别用官方 start.cmd，那会换成没打补丁的桥）。' }
     }
+    // 重试这一次也要过同一套状态判定：只判 ok 不判 status 的话，403/409/500 会被当成成功
+    // 带回 executeTool（body 里没有 status:"done"，于是成了「ok:true + 一段原始 JSON」）。
+    if (second.status !== 200) return { ok: false, status: second.status, body: second.body, message: explain(second.status, second.body) }
     return second
   }
 
@@ -103,6 +106,9 @@ export function createBridge({ getFile }) {
     const text = String(body2?.error || body2?.message || '').trim()
     if (status === 503) return '游戏没打开或还没连上：在面板点「启动小屋世界」（或直接双击游戏目录里的 CabinWorld.exe），等窗口里出现画面再试。'
     if (status === 409) return '她正在做别的事，先做完这一件：' + (text || '稍等一会儿，或者用 cabin_stop 停下。')
+    // 401（token 过期）在 call() 里已经重读并重试过了，走到 403 时 token 基本不是原因。
+    // 别建议删 data/bridge.json：文件一缺，读连接信息那步会直接报「文件还不存在」，更难恢复。
+    if (status === 403) return '桥拒绝了这次调用（403）：点面板上的「重启小屋世界」重新握手。'
     if (status === 404) return text || '没有这个接口或工具。'
     if (status === 400) return text || '这个动作游戏不接受（参数不对）。'
     if (status >= 500) return '小屋世界桥出错了：' + (text || status)
@@ -119,11 +125,14 @@ export function createBridge({ getFile }) {
   async function callTool(name, args = {}, { waitMs = 30000 } = {}) {
     const payload = { ...(args || {}) }
     if (Number.isFinite(waitMs) && waitMs > 0) payload.waitMs = Math.round(waitMs)
-    const got = await call('/v1/tool', { method: 'POST', body: { name, arguments: payload } })
+    // 桥里可能还在排队，模块这边别比 waitMs 先放弃。
+    const got = await call('/v1/tool', { method: 'POST', body: { name, arguments: payload }, timeoutMs: Math.max(60000, Math.round(waitMs) + 15000) })
     if (!got.ok) return got
-    if (got.status !== 200) return { ok: false, status: got.status, body: got.body, message: explain(got.status, got.body) }
     if (!got.body || got.body.ok === false) {
-      return { ok: false, status: got.status, body: got.body, message: String(got.body?.error || '小屋世界没有执行这个动作。') }
+      // 桥把「游戏为什么没做成」放在 result.outcome（例如「已经在床上了」），只读 error 会把它整句丢掉。
+      const b = got.body || {}
+      const r = b.result || {}
+      return { ok: false, status: got.status, body: got.body, message: String(b.error || r.outcome || r.error || '小屋世界没有执行这个动作。') }
     }
     return { ok: true, status: 200, body: got.body }
   }
@@ -135,5 +144,5 @@ export function createBridge({ getFile }) {
     return { ok: true, status: 200, body: got.body }
   }
 
-  return { info, forget, call, health, callTool, status, explain, file }
+  return { info, forget, call, health, callTool, status, file }
 }

@@ -11,6 +11,7 @@ import { formatTemplateList } from './lib/list.mjs';
 import { buildIndex, matchTemplate, parseInput, describe, words, readRequest } from './lib/catalog.mjs';
 import { rawText, collectImages } from './lib/media.mjs';
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { downloadEnv } from './scripts/download-options.mjs';
 
 const HELP = `表情制作
 #表情列表 [页码] · #表情搜索 关键词 [页码]
@@ -23,10 +24,10 @@ const HELP = `表情制作
 主人：#表情禁用 模板 / #表情启用 模板
 #表情别名 新词=模板 · #表情开 / #表情关`;
 export default {
-  id: 'meme', name: '表情制作', version: '1.3.8', api: 1,
+  id: 'meme', name: '表情制作', version: '1.3.10', api: 1,
   description: '用头像、图片或文字制作表情，支持预览和自定义触发词',
   panel: 'panel.js',
-  defaults: { rest: DEFAULT_REST, enabled: true, direct: false, groups: '', private: true, cooldown: 3, indexColumns: 5, avatar: true, disabled: [], favorites: [], aliases: {} },
+  defaults: { rest: DEFAULT_REST, enabled: true, direct: false, groups: '', private: true, cooldown: 3, indexColumns: 5, avatar: true, disabled: [], favorites: [], aliases: {}, downloadTimeoutMinutes: 60, downloadProxyEnabled: false, downloadProxy: '' },
   settings: [
     { key: 'enabled', label: '启用表情制作', type: 'switch' },
     { key: 'direct', label: '允许省略 #', type: 'switch', hint: '关闭时，制作和查询都要以 # 开头，例如“#摸摸”“#表情列表”' },
@@ -58,13 +59,13 @@ export default {
     function acceptCatalog(result) {
       items = result.items; version = result.version; aliasKey = ''; refreshIndex(); error = '';
     }
-    const extension = new ExtensionManager({dir:api.dir,runtimeDir,engine,onCatalog:acceptCatalog,save:patch=>api.saveSettings(patch),log:api.log});
+    const extension = new ExtensionManager({dir:api.dir,runtimeDir,engine,onCatalog:acceptCatalog,save:patch=>api.saveSettings(patch),log:api.log,downloadEnv:()=>downloadEnv(settings())});
     async function load() {
       await checkEnvironment();
       const result = await engine.call('catalog'); acceptCatalog(result); api.log.info(`离线引擎就绪：${items.length} 个模板`);
     }
     let wanted = false;
-    const bootstrap = new BootstrapManager({dir:api.dir,runtimeDir,log:api.log,onReady:async()=>{await load();if(wanted)await extension.restore();}});
+    const bootstrap = new BootstrapManager({dir:api.dir,runtimeDir,log:api.log,downloadEnv:()=>downloadEnv(settings()),onReady:async()=>{await load();if(wanted)await extension.restore();}});
     function ensureReady() {
       if (bootstrap.status().busy) throw new UserError('表情库正在准备，请稍后再试');
       if (error || bootstrap.status().error || !items.length) throw new UserError('模板库暂时不可用，请联系主人');

@@ -1,0 +1,20 @@
+{
+  "id": "act-format",
+  "name": "动作互动",
+  "version": "0.2.0",
+  "description": "把 *动作* 这类包裹文本解析成结构化动作（观察者，不拦消息）；睡眠期间只保留模糊体感残留，不记录具体发生了什么",
+  "category": "platform",
+  "tags": [
+    "动作",
+    "角色扮演",
+    "解析"
+  ],
+  "author": "YLin55",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "filesystem"
+  ]
+}
