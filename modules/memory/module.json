@@ -1,0 +1,15 @@
+{
+  "id": "memory",
+  "name": "记忆（向量版）",
+  "version": "0.4.4",
+  "description": "替换内置记忆，检索名额一半关键词、一半本地向量：字面对不上的旧事也能按意思翻出来。读写仍是同一份 memories.json，卸载即回内置。模型和运行时不随包分发，首次缺文件才联网下载，仅 Windows x64。",
+  "category": "social",
+  "tags": ["记忆", "向量", "检索", "离线"],
+  "author": "Nightc",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["network", "filesystem", "plugin-config", "plugin-internals"],
+  "replacesBuiltin": true
+}
