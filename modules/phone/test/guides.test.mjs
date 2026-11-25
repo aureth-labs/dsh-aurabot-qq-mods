@@ -8,13 +8,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createGuides, BUILTIN_GUIDES } from '../lib/guides.mjs'
 
-test('内置指引：五个 key 都有正文，generic 永远可取；总纲 main 不挂包名/关键词（resolve 不会自动挑它）', () => {
-  assert.deepEqual(Object.keys(BUILTIN_GUIDES).sort(), ['bili', 'douyin', 'generic', 'heybox', 'main'])
+test('内置指引：条目都有正文，generic 永远可取；总纲 main 不挂包名/关键词（resolve 不会自动挑它）', () => {
+  // 手册会持续增加，这里只钉住「必须存在」的核心项，不再断言固定条数
+  for (const key of ['main', 'generic', 'bili', 'douyin', 'heybox']) {
+    assert.ok(BUILTIN_GUIDES[key], `缺少内置指引 ${key}`)
+  }
   assert.deepEqual(BUILTIN_GUIDES.main.packages, [])
   assert.deepEqual(BUILTIN_GUIDES.main.keywords, [])
   for (const [key, g] of Object.entries(BUILTIN_GUIDES)) {
     assert.ok(g.text.length > 100, `${key} 指引正文太短`)
     assert.ok(g.text.includes('finish'), `${key} 指引应交代 finish 约定`)
+    assert.ok(!/^main$/.test(key) || (g.packages.length === 0 && g.keywords.length === 0), 'main 不应挂包名/关键词')
   }
 })
 
@@ -39,7 +43,10 @@ test('resolve：显式指定 > 包名 > 关键词 > generic', () => {
   assert.equal(guides.resolve({ flowGuide: 'myguide', packages: ['tv.danmaku.bili'], goal: '刷抖音' }), 'myguide')
   assert.equal(guides.resolve({ packages: ['com.ss.android.ugc.aweme'] }), 'douyin')
   assert.equal(guides.resolve({ goal: '去B站签到' }), 'bili')
-  assert.equal(guides.resolve({ goal: '打开计算器按两下' }), 'generic')
+  // 有关键词命中的走专属手册
+  assert.equal(guides.resolve({ goal: '打开计算器按两下' }), 'calc')
+  // 完全没线索的落到 generic
+  assert.equal(guides.resolve({ goal: '随便看看' }), 'generic')
 })
 
 test('upsert 校验：非法 key 抛错', () => {

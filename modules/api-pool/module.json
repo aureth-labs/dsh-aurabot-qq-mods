@@ -1,0 +1,14 @@
+{
+  "id": "api-pool",
+  "name": "关键词调 API 池",
+  "version": "1.6.0",
+  "description": "只在指定群里，群友发某个关键词就自动调用设定好的接口，把返回的文本/图片/视频/音频直接发回群里。纯机械触发，不经过模型、不费 token。",
+  "category": "tool",
+  "tags": ["API", "关键词", "群功能", "图片", "文本"],
+  "author": "Epiphuany",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["network", "filesystem", "plugin-internals"]
+}

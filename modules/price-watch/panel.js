@@ -1,7 +1,7 @@
-// 价格监控面板：总开关 + 监控列表 + 添加 / 查价 + 设置草稿。
+// 价格监控面板：总开关 + 监控列表 + 添加 / 查价 + 价格记忆 + 设置草稿。
 // 这段代码是函数体，由 Aurabot 面板在受限作用域里执行，最后要 return 一个 React 组件。
 // React / h / ui / call / settings / draftSettings / setSettings / save / toast 全部来自参数，不能 import。
-// 接口：GET /state；POST /check { id? }、/add { query }、/remove { id }、/search { query }。
+// 接口：GET /state、/memory；POST /check { id? }、/add { query }、/remove { id }、/search { query }、/memory { clear, query? }。
 
 const { useState, useEffect, useCallback } = React
 
@@ -21,6 +21,12 @@ const DEFAULTS = {
   guestWatch: false,
   alertCooldownMinutes: 180,
   watchTtlDays: 90,
+  // 查价结果里是否附上爆料链接
+  queryShowLink: true,
+  // 查到的价格写进记忆，保留 memoryTtlMinutes 分钟（默认 30，0 = 永久）
+  memorySync: true,
+  memoryTtlMinutes: 30,
+  memoryImportance: 0.45,
 }
 
 const EMPTY_WATCH_TEXT = '还没有监控的商品。点上面的「添加监控」，填商品名就能开始。'
@@ -38,12 +44,31 @@ function yuan (value) {
   return '¥' + String(Math.round(n * 100) / 100)
 }
 
-// 带「需用券」之类的原文优先，没有原文再用数字价。
+// 价格默认用数字（¥872）；原文里「需用券 / 凑单」这类条件只作为括号里的补充，
+// 不把「过期 | 831.3元（需用券）」整段原样丢出来。没有数字价时才退回原文。
 function priceOf (row) {
   if (!row) return ''
-  const text = row.priceText
-  if (typeof text === 'string' && text.trim()) return text.trim()
-  return yuan(row.price)
+  const price = yuan(row.price)
+  if (!price) {
+    const text = row.priceText
+    return typeof text === 'string' && text.trim() ? text.trim() : ''
+  }
+  const note = conditionOf(row.priceText)
+  return note ? price + '（' + note + '）' : price
+}
+
+function conditionOf (raw) {
+  const text = String(raw || '').trim()
+  if (!text) return ''
+  return text
+    .replace(/[\d.]+\s*元[起]?/g, ' ')
+    .replace(/过期|售罄|已结束/gi, ' ')
+    .replace(/[|｜]/g, ' ')
+    .replace(/[\s　]+/g, ' ')
+    .trim()
+    .replace(/^[（(]\s*/, '')
+    .replace(/\s*[）)]$/, '')
+    .slice(0, 24)
 }
 
 function toDate (ts) {
@@ -72,6 +97,26 @@ function windowLabel (w) {
   const e = Number(w.endHour)
   if (!Number.isFinite(s) || !Number.isFinite(e) || s === e) return '全天'
   return s + ' 点至 ' + e + ' 点'
+}
+
+/** 保留时长的中文说法：30 分钟 / 2 小时 / 1 天 / 长期。和 lib 里的 ttlLabel 保持一致（面板不能 import）。 */
+function ttlText (minutes) {
+  const n = Math.round(Number(minutes))
+  if (!Number.isFinite(n) || n <= 0) return '长期有效'
+  if (n < 60) return n + ' 分钟'
+  if (n % 1440 === 0) return (n / 1440) + ' 天'
+  if (n % 60 === 0) return (n / 60) + ' 小时'
+  const hours = Math.floor(n / 60)
+  const rest = n % 60
+  if (hours < 24) return hours + ' 小时 ' + rest + ' 分钟'
+  const days = Math.floor(hours / 24)
+  const restHours = hours % 24
+  if (restHours) return days + ' 天 ' + restHours + ' 小时'
+  return rest ? days + ' 天 ' + rest + ' 分钟' : days + ' 天'
+}
+
+function memoryAvailableEmpty () {
+  return '记忆里还没有价格。上面的「查询价格」查一次，就会记下来。'
 }
 
 function qualityName (quality, label) {
@@ -107,6 +152,10 @@ return function Panel (props) {
 
   const [askingId, setAskingId] = useState('')
   const [showAllWatches, setShowAllWatches] = useState(false)
+  const [memory, setMemory] = useState(null)
+  const [memoryBusy, setMemoryBusy] = useState(false)
+  // 正在确认删除的那条价格记忆（'' = 没有）
+  const [askingMemoryId, setAskingMemoryId] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [localPatch, setLocalPatch] = useState({})
 
@@ -138,6 +187,15 @@ return function Panel (props) {
   const maxWatches = numOf(cfg.maxWatches)
   const locked = Boolean(busy || addBusy || searchBusy || (state && state.busy))
 
+  const loadMemory = useCallback(async function () {
+    try {
+      const next = await request('/memory')
+      if (next && next.ok !== false) setMemory(next)
+    } catch (err) {
+      setMemory({ ok: false, message: (err && err.message) || '读取记忆失败。' })
+    }
+  }, [])
+
   const load = useCallback(async function () {
     setLoading(true)
     setLoadError('')
@@ -160,6 +218,7 @@ return function Panel (props) {
   }, [])
 
   useEffect(function () { load() }, [load])
+  useEffect(function () { loadMemory() }, [loadMemory])
 
   // 后台正在检查（可能是 QQ 里触发的），几秒刷新一次直到结束。
   const serverBusy = Boolean(state && state.busy)
@@ -192,6 +251,30 @@ return function Panel (props) {
       setBusy('')
     }
   }
+
+  // 删价格记忆：传 id 只删那一条；传 query 按编号 / 关键词；都不传是全清。
+  const deleteMemory = async function (payload) {
+    if (memoryBusy) return
+    setMemoryBusy(true)
+    try {
+      const result = await request('/memory', payload || { clear: true })
+      if (!result || result.ok === false) {
+        notify((result && result.message) || '删除失败。', 'err')
+        return false
+      }
+      notify(result.message || '已删除。', 'ok')
+      setAskingMemoryId('')
+      await loadMemory()
+      await load()
+      return true
+    } catch (err) {
+      notify((err && err.message) || '请求失败。', 'err')
+      return false
+    } finally {
+      setMemoryBusy(false)
+    }
+  }
+  const clearMemory = function (query) { return deleteMemory({ clear: true, query: query || '' }) }
 
   const checkAll = async function () {
     const result = await runAction('check', '/check', {})
@@ -273,7 +356,14 @@ return function Panel (props) {
         notify(msg, 'err')
         return
       }
-      setSearchResult({ ok: true, message: result.message || '', groups: Array.isArray(result.groups) ? result.groups : [] })
+      setSearchResult({
+        ok: true,
+        message: result.message || '',
+        groups: Array.isArray(result.groups) ? result.groups : [],
+        memory: result.memory || null,
+      })
+      // 查完顺手刷新记忆卡片：这次的价格有没有真的写进去，一眼能看到
+      await loadMemory()
     } catch (err) {
       const msg = (err && err.message) || '请求失败。'
       setSearchResult({ ok: false, message: msg })
@@ -422,7 +512,16 @@ return function Panel (props) {
       return h('div', { className: 'ab-note', style: { marginTop: 10 } },
         rawGroups.length ? '这次各平台都没有在售结果，过会儿再查。' : (result.message || EMPTY_SEARCH_TEXT))
     }
-    return h('div', { className: 'ab-grid', style: { gap: 12, marginTop: 10 } }, groups.map(renderGroup))
+    // 查完就把「这次价格进没进记忆」说清楚，别让人以为一定记下了
+    const memoryNote = !result.memory
+      ? null
+      : result.memory.ok
+        ? h('div', { className: 'ab-small ab-muted', style: { marginTop: 6 } },
+          '这次的价格已记进记忆，保留 ' + (result.memory.ttlLabel || '30 分钟') + '。')
+        : h('div', { className: 'ab-small ab-muted', style: { marginTop: 6 } }, '记忆这会儿写不进去，这次的价格只留在插件记录里。')
+    return h('div', { className: 'ab-grid', style: { gap: 12, marginTop: 10 } },
+      memoryNote,
+      groups.map(renderGroup))
   }
 
   const addBlock = h('div', {
@@ -461,6 +560,65 @@ return function Panel (props) {
       h('div', { className: 'nm' }, option.title || '未命名商品'),
       h('div', { className: 'tg' }, (option.mall || '平台未知') + (priceOf(option) ? ' · ' + priceOf(option) : '')))
     }))
+    : null)
+
+  const memoryItems = memory && Array.isArray(memory.items) ? memory.items : []
+  const memoryEnabled = cfg.memorySync !== false
+  const memoryTtl = numOf(cfg.memoryTtlMinutes)
+  const memoryKeep = memoryTtl === null ? 30 : memoryTtl
+  const memoryNote = !memory
+    ? '正在读取记忆状态…'
+    : memory.available === false
+      ? '记忆模块没在跑（或被关掉了）：查到的价格只留在本插件的记录里，不会进记忆。'
+      : !memoryEnabled
+        ? '「查到的价格写进记忆」关着：查价照常返回结果，但不写记忆。'
+        : '查价和后台检查看到的价格都会写进记忆（带「价格监控」标签），保留 ' +
+          (memoryKeep > 0 ? ttlText(memoryKeep) + '，到期自动失效' : '长期') + '。'
+
+  const memoryRow = function (item, index) {
+    const asking = askingMemoryId === item.id
+    return h('div', { key: item.id, className: 'ab-li' },
+      h('div', { className: 'body' },
+        h('div', null, (index + 1) + '. ' + item.text),
+        h('div', { className: 'ab-small ab-muted' },
+          '记于 ' + (fmtTime(item.at) || '未知时间') +
+          (item.validUntil > 0 ? ' · ' + fmtTime(item.validUntil) + ' 失效' : ' · 长期有效')),
+        asking
+          ? h('div', { className: 'ab-flex', style: { marginTop: 6 } },
+            h('span', { className: 'ab-small' }, '删除这一条价格记忆，确定吗？'),
+            h(ui.Btn, {
+              small: true,
+              kind: 'danger',
+              disabled: memoryBusy,
+              onClick: function () { deleteMemory({ clear: true, id: item.id }) },
+            }, memoryBusy ? '删除中…' : '确认删除'),
+            h(ui.Btn, { small: true, kind: 'ghost', disabled: memoryBusy, onClick: function () { setAskingMemoryId('') } }, '取消'))
+          : null),
+      h('div', { className: 'ab-flex', style: { flexWrap: 'nowrap' } },
+        h(ui.Btn, {
+          small: true,
+          kind: 'ghost',
+          disabled: memoryBusy || asking,
+          onClick: function () { setAskingMemoryId(item.id) },
+        }, '删除')))
+  }
+
+  const memoryCard = h(ui.Card, {
+    title: '价格记忆（' + memoryItems.length + '）',
+    desc: '记忆里存着查过的价格，她以后被问到「上次那个多少钱」时能想起来；有效期到了自动失效。',
+    right: h(ui.Btn, {
+      small: true,
+      kind: 'ghost',
+      disabled: memoryBusy || !memoryItems.length,
+      onClick: function () { clearMemory('') },
+    }, memoryBusy ? '清理中…' : '清空价格记忆'),
+  },
+  h('div', { className: memory && memory.available === false ? 'ab-note warn' : 'ab-small ab-muted' }, memoryNote),
+  memoryItems.length
+    ? h('div', { className: 'ab-list', style: { marginTop: 8 } }, memoryItems.slice(0, 10).map(memoryRow))
+    : h(ui.Empty, { icon: '🧠', text: memoryAvailableEmpty() }),
+  memoryItems.length > 10
+    ? h('div', { className: 'ab-small ab-muted', style: { marginTop: 6 } }, '只列最近 10 条，一共 ' + memoryItems.length + ' 条。')
     : null)
 
   const settingsForm = h('div', null,
@@ -508,6 +666,9 @@ return function Panel (props) {
     h(ui.Row, { label: '查询价格显示条数', hint: '查价时最多列几条最便宜的（默认 3）；群里刷屏就调小' },
       numField('queryTopN', { min: 1, max: 20, step: 1, def: 3 }),
       h('span', { className: 'ab-muted' }, '条')),
+    h(ui.Row, { label: '查价附带链接', hint: '打开时每条报价下面带原文链接；关掉只报价格和平台，群里不至于被一整屏网址刷屏' },
+      h(ui.Switch, { on: cfg.queryShowLink !== false, onChange: function (value) { set('queryShowLink', value) } }),
+      h('span', { className: 'ab-muted ab-small' }, cfg.queryShowLink !== false ? '（当前：带链接）' : '（当前：只报价格）')),
     h('details', null,
       h('summary', { className: 'ab-small ab-muted', style: { cursor: 'pointer', marginTop: 4 } }, '更多设置'),
       h('div', { style: { marginTop: 4 } },
@@ -520,7 +681,15 @@ return function Panel (props) {
         h(ui.Row, { label: '访客查价格', hint: '别人在群里能不能查价格' },
           h(ui.Switch, { on: cfg.guestQuery !== false, onChange: function (value) { set('guestQuery', value) } })),
         h(ui.Row, { label: '访客加监控', hint: '别人在群里能不能加监控' },
-          h(ui.Switch, { on: Boolean(cfg.guestWatch), onChange: function (value) { set('guestWatch', value) } })))))
+          h(ui.Switch, { on: Boolean(cfg.guestWatch), onChange: function (value) { set('guestWatch', value) } })),
+        h(ui.Row, { label: '查到的价格写进记忆', hint: '查价和后台检查看到的价格，记成一条带「价格监控」标签的记忆；关掉就只留在本插件记录里' },
+          h(ui.Switch, { on: cfg.memorySync !== false, onChange: function (value) { set('memorySync', value); loadMemory() } })),
+        h(ui.Row, { label: '价格记忆保留', hint: '记忆里的价格多久后自动失效；默认 30 分钟，0 = 永久。价格有时效，留太久容易拿过期价当真' },
+          numField('memoryTtlMinutes', { min: 0, max: 5256000, step: 5, def: 30 }),
+          h('span', { className: 'ab-muted' }, '分钟'),
+          h('span', { className: 'ab-muted ab-small' }, '（0 = 永久；当前 ' + ttlText(memoryKeep) + '）')),
+        h(ui.Row, { label: '价格记忆重要度', hint: '0.1–0.9，越高越容易被想起来；日常比价 0.4 左右就够' },
+          numField('memoryImportance', { min: 0.1, max: 0.9, step: 0.05, def: 0.45 })))))
 
   if (!state && loading) {
     return h(ui.Card, { title: '价格监控' }, h(ui.Empty, { icon: '⏳', text: '正在读取监控状态…' }))
@@ -614,11 +783,12 @@ return function Panel (props) {
   },
   settingsOpen
     ? settingsForm
-    : h('div', { className: 'ab-small ab-muted' }, '点右上角「展开编辑」可以改检查间隔、降价阈值和数量上限。'))
+    : h('div', { className: 'ab-small ab-muted' }, '点右上角「展开编辑」可以改检查间隔、降价阈值、数量上限和价格记忆保留时长。'))
 
   return h('div', { className: 'ab-grid' },
     topCard,
     listCard,
     searchCard,
+    memoryCard,
     settingsCard)
 }
