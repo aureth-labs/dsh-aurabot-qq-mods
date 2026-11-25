@@ -183,7 +183,9 @@ return function Panel({ toast, settings, draftSettings, setSettings, save }) {
     const r = await load()
     const list = (r && r.items) || []
     const prev = lastFilesRef.current
-    lastFilesRef.current = new Set(list.map((x) => x.file))
+    // 只有手动刷新才推进基线：一分钟一次的自动刷新会把「新冒出来的那篇」悄悄吃进基线，
+    // 等用户再点刷新时就没有「新篇」可跳了
+    if (manual) lastFilesRef.current = new Set(list.map((x) => x.file))
     if (!list.length) { setEntry(null); return }
     const before = entryRef.current
     const cur = before && before.file ? list.find((x) => x.file === before.file) : null
@@ -221,7 +223,8 @@ return function Panel({ toast, settings, draftSettings, setSettings, save }) {
     if (!e || !e.file) return
     const i = items.findIndex((x) => x.file === e.file)
     if (i >= 0) setPage(i)
-  }, [items])
+    // 也要盯 entry：刷新时先换列表再换正文，只盯 items 的话页码停在上一篇，左边目录高亮和右边正文对不上
+  }, [items, entry])
   useEffect(() => {
     if (!entry && firstFile) open(firstFile)
   }, [firstFile, entry, open])
