@@ -190,8 +190,8 @@
     {
       "id": "autonomy",
       "name": "自主生活",
-      "version": "0.6.1",
-      "description": "让她自己决定这一刻做什么、下次什么时候醒。运行时不预设任何权限：调模型、操作手机都要主人在面板里逐项授权后才生效。",
+      "version": "0.6.2",
+      "description": "让她自己决定这一刻做什么、下次什么时候醒。运行时不预设任何权限：调模型、操作手机、进虚拟机都要主人在面板里逐项授权后才生效。",
       "category": "desktop",
       "tags": [
         "自主",
@@ -212,13 +212,13 @@
       ],
       "replacesBuiltin": false,
       "homepage": "https://github.com/asyncxt/aurabot-mod-autonomy",
-      "tag": "autonomy-v0.6.1",
-      "file": "autonomy-v0.6.1.zip",
-      "path": "autonomy-v0.6.1/autonomy-v0.6.1.zip",
-      "size": 44324,
-      "sha256": "27c05ceaec78a0c27637e17e42c7b6323067c080a4fe591e518e9c78cccaf407",
-      "commit": "7791e955408ea84c2a40c9b4a250617aa1be77ce",
-      "publishedAt": "2026-11-10T04:45:09.858Z"
+      "tag": "autonomy-v0.6.2",
+      "file": "autonomy-v0.6.2.zip",
+      "path": "autonomy-v0.6.2/autonomy-v0.6.2.zip",
+      "size": 56572,
+      "sha256": "a6ee2acfdc9bc58ff50eddc08f8cc35f7205df8f732a7bd7f8ad869882028e8e",
+      "commit": "319d5d5daf67a205ed8f211f6fe51744f8ba3370",
+      "publishedAt": "2026-11-25T12:06:28.597Z"
     },
     {
       "id": "bambu-print",
@@ -634,6 +634,36 @@
       "sha256": "8cf95bb96d37f3b86bd2b48bafa45c1fba5644c9de9ca4af0b72af5cf7465c4f",
       "commit": "9b3e577853d934f7983f4f4e7ce0427f2356676f",
       "publishedAt": "2026-11-24T03:18:06.903Z"
+    },
+    {
+      "id": "draw-request-check",
+      "name": "画图前核对请求",
+      "version": "1.0.2",
+      "description": "准备画图时，让当前聊天模型核对用户是否想生成或修改图片。",
+      "category": "creative",
+      "tags": [
+        "绘图"
+      ],
+      "platforms": [
+        "qq"
+      ],
+      "author": "b1ghawk119",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.1",
+      "requires": [],
+      "capabilities": [
+        "plugin-internals",
+        "network"
+      ],
+      "replacesBuiltin": false,
+      "tag": "draw-request-check-v1.0.2",
+      "file": "draw-request-check-v1.0.2.zip",
+      "path": "draw-request-check-v1.0.2/draw-request-check-v1.0.2.zip",
+      "size": 7181,
+      "sha256": "9d0709bcaa0b495b35483201411269608e9048872b12f6e9781bf9d10d1cc943",
+      "commit": "319d5d5daf67a205ed8f211f6fe51744f8ba3370",
+      "publishedAt": "2026-11-25T12:06:28.597Z"
     },
     {
       "id": "dsh-image",
@@ -1799,7 +1829,7 @@
     {
       "id": "phone",
       "name": "手机逛逛",
-      "version": "0.4.1",
+      "version": "0.4.2",
       "description": "通过 ADB 操控 Android 手机：按主人教好的流程自动签到/浏览/点赞，或自由推理完成一句话任务",
       "category": "platform",
       "tags": [
@@ -1820,13 +1850,13 @@
         "plugin-internals"
       ],
       "replacesBuiltin": false,
-      "tag": "phone-v0.4.1",
-      "file": "phone-v0.4.1.zip",
-      "path": "phone-v0.4.1/phone-v0.4.1.zip",
-      "size": 118709,
-      "sha256": "b02f852140d9471953cf528f49b1e02cb93781c50ace715369f67fe921a11024",
-      "commit": "c314aab8d30cdc0ec664900d6d7fa1250ecd103b",
-      "publishedAt": "2026-11-11T08:34:44.509Z"
+      "tag": "phone-v0.4.2",
+      "file": "phone-v0.4.2.zip",
+      "path": "phone-v0.4.2/phone-v0.4.2.zip",
+      "size": 120384,
+      "sha256": "6f1ae5f9dde924d45601883285beb644898f829a91f3eb161cbebe07b1290c08",
+      "commit": "319d5d5daf67a205ed8f211f6fe51744f8ba3370",
+      "publishedAt": "2026-11-25T12:06:28.597Z"
     },
     {
       "id": "pocket",
@@ -2870,5 +2900,5 @@
       "reason": "作者主动撤回。"
     }
   ],
-  "generatedAt": "2026-11-25T12:05:17.223Z"
+  "generatedAt": "2026-11-25T12:06:28.597Z"
 }
