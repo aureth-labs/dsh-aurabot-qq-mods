@@ -5,7 +5,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   parsePrice, formatPrice, productKey, scoreRate, heatScore,
-  qualityOf, matchScore, pickCandidates, evaluateAlert,
+  qualityOf, matchScore, pickCandidates, evaluateAlert, relevanceOf, rankResults, splitQuery, broadenKeyword,
   pruneRecords, retryIntervalMs, dueWatches, FAIL_BACKOFF_MAX_MS,
 } from '../lib/core.mjs'
 
@@ -84,6 +84,99 @@ test('查询匹配：中文整串与英文词边界', () => {
   assert.ok(matchScore('咖啡机', '德龙 全自动咖啡机') >= 0.9)
   assert.equal(matchScore('显卡', '立白洗衣液'), 0)
   assert.equal(matchScore('', '任何标题'), 0)
+})
+
+test('品牌中英对照：说拓竹，标题写 Bambu Lab 也算命中', () => {
+  assert.ok(matchScore('拓竹 A1', 'Bambu Lab A1 3D打印机 单机版') >= 0.9)
+  assert.ok(matchScore('拓竹', 'Bambu Lab A1 mini 3D打印机') >= 0.9)
+  assert.ok(matchScore('Bambu Lab A1', '拓竹 A1 3D打印机') >= 0.9, '反过来也认')
+  assert.ok(matchScore('红米 K80', 'REDMI 红米 K80 5G手机') >= 0.9)
+  assert.ok(matchScore('任天堂 switch', 'Nintendo Switch 2 港版') >= 0.9)
+  // 不相干的品牌不能靠别名蹭上
+  assert.equal(matchScore('索尼 耳机', 'Bambu Lab A1 3D打印机'), 0)
+})
+
+test('型号按边界判断：A1 不被 A1C / A1mini / A2L 蹭到，A1 Pro 算同系列', () => {
+  assert.equal(matchScore('拓竹 A1', 'Bambu Lab A1 3D打印机 单机版').toFixed(2), '1.00')
+  assert.equal(matchScore('拓竹 A1', 'Bambu Lab A1 热卖 3D打印机 整机').toFixed(2), '1.00', '型号后面跟中文不算另一个型号')
+  // 另一个 SKU：压在弱相关线以下，别进强候选
+  for (const title of ['Bambu Lab A1C 3D打印机', 'Bambu Lab A1mini 打印机', 'Bambu Lab A2L 3D打印机']) {
+    const score = matchScore('拓竹 A1', title)
+    assert.ok(score < 0.6, JSON.stringify(title) + ' 不该算强相关，实际 ' + score.toFixed(2))
+  }
+  // 同系列的另一个版本：算候选，但不是同一件商品，别拿它的价格冒充
+  const variant = matchScore('拓竹 A1', '拓竹 A1 Pro 3D打印机')
+  assert.ok(variant >= 0.6 && variant < 1, 'A1 Pro 是候选，不是同一个：' + variant)
+  assert.ok(matchScore('红米 K80', '红米 K80 Pro 5G手机') >= 0.6, 'K80 Pro 是同系列，算候选')
+})
+
+test('粘连写法：拓竹A1 / 红米K80 / 索尼WH-1000XM5 都拆得开', () => {
+  assert.deepEqual(splitQuery('拓竹A1'), ['拓竹', 'a1'])
+  assert.deepEqual(splitQuery('拓竹 A1'), ['拓竹', 'a1'])
+  assert.deepEqual(splitQuery('红米K80'), ['红米', 'k80'])
+  assert.deepEqual(splitQuery('索尼WH-1000XM5'), ['索尼', 'wh1000xm5'])
+  assert.deepEqual(splitQuery('switch 2'), ['switch', '2'])
+  assert.deepEqual(splitQuery('  '), [])
+  // 关键：不加空格也要能认出整机，而不是只匹配到「适用拓竹A1」的耗材
+  assert.equal(matchScore('拓竹A1', 'Bambu Lab A1 3D打印机 单机版').toFixed(2), '1.00')
+  assert.equal(matchScore('拓竹A1', 'kaaber 3D打印耗材 适用拓竹A1').toFixed(2), '1.00')
+  const items = [
+    { title: 'Bambu Lab A1 3D打印机 单机版', price: 872 },
+    { title: 'kaaber 3D打印耗材 适用拓竹A1', price: 18 },
+  ]
+  assert.equal(rankResults('拓竹A1', items, 3).picked[0].price, 872, '整机排在耗材前面')
+  assert.equal(rankResults('拓竹A1', items, 3).hasMain, true)
+})
+
+test('只搜到配件时：hasMain=false、onlyAccessory=true，不能当成「最低价」', () => {
+  const parts = [
+    { title: 'kaaber 3D打印耗材 适用拓竹A1', price: 18 },
+    { title: 'Bambu Lab 纹理PEI打印板 配件', price: 17 },
+  ]
+  const out = rankResults('拓竹 A1', parts, 3)
+  assert.equal(out.hasMain, false)
+  assert.equal(out.onlyAccessory, true)
+  assert.equal(out.weak, false, '相关是相关的，只是全是周边')
+})
+
+test('broadenKeyword：拆出型号单独再搜，没有型号就不重搜', () => {
+  assert.equal(broadenKeyword('拓竹 A1'), 'a1')
+  assert.equal(broadenKeyword('拓竹A1'), 'a1')
+  assert.equal(broadenKeyword('红米 K80 Pro'), 'k80')
+  assert.equal(broadenKeyword('咖啡机'), '')
+})
+
+test('相关度分层：配件 / 耗材不进「强相关且是商品」这一层', () => {
+  const printer = relevanceOf('拓竹 A1', { title: 'Bambu Lab A1 3D打印机 单机版' })
+  const part = relevanceOf('拓竹 A1', { title: 'Bambu Lab 纹理PEI打印板 3D打印机配件' })
+  const filament = relevanceOf('拓竹 A1', { title: 'kaaber 3D打印耗材 PETG 适用拓竹A1' })
+  assert.equal(printer.tier, 2)
+  assert.equal(part.tier <= 1, true)
+  assert.equal(filament.tier <= 1, true)
+  // 查询自己带了「打印板」，就不再把打印板当配件降权
+  assert.equal(relevanceOf('拓竹 打印板', { title: 'Bambu Lab 纹理PEI打印板' }).tier, 2)
+})
+
+test('排序：先像不像这件商品，同层再比价格（便宜的配件不能顶掉主商品）', () => {
+  const items = [
+    { title: 'kaaber 3D打印耗材 PETG 适用拓竹A1', price: 18.77 },
+    { title: 'Bambu Lab 纹理PEI打印板 配件', price: 17 },
+    { title: 'Bambu Lab A1 3D打印机 单机版', price: 1449 },
+    { title: 'Bambu Lab A1 3D打印机 单机版 需用券', price: 1395 },
+  ]
+  const out = rankResults('拓竹 A1', items, 3)
+  assert.equal(out.weak, false)
+  assert.equal(out.picked[0].price, 1395, '主商品里最便宜的排第一')
+  assert.equal(out.picked[1].price, 1449)
+  assert.ok(out.picked[0].accessory !== true)
+})
+
+test('排序：没有强相关结果时老实标成 weak，不假装是这件商品', () => {
+  const out = rankResults('完全不存在的型号 X9', [
+    { title: 'Bambu Lab A1 3D打印机', price: 1449 },
+  ], 3)
+  assert.equal(out.weak, true)
+  assert.equal(out.picked.length, 1, '弱相关也给候选，但文案要说清楚')
 })
 
 test('匹配候选：唯一命中直接选中，多个命中和无命中都给候选项', () => {

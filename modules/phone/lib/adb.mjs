@@ -82,6 +82,11 @@ export function createAdb({ adbPath, serial = '', timeoutMs = 10000 } = {}) {
       return run(['shell', 'input', 'tap', String(Math.round(x)), String(Math.round(y))]).then(() => undefined)
     },
 
+    /** 直接跑一条 device shell 命令（字符串返回）。给「保持常亮」这类内部开关用。 */
+    shell(args) {
+      return run(['shell', ...args]).then((o) => String(o == null ? '' : o))
+    },
+
     /** 滑动（默认 300ms）。 */
     swipe(x1, y1, x2, y2, ms = 300) {
       return run([
@@ -105,16 +110,60 @@ export function createAdb({ adbPath, serial = '', timeoutMs = 10000 } = {}) {
      * 输入文本：input text 不认空格（转 %s）；非 ASCII（如中文）原生 input 无法输入，
      * 需要 ADB Keyboard 输入法——按约定抛带提示的错误，由工作区标注「本步跳过」。
      */
-    async inputText(text) {
+    /**
+     * @param {string} text 要输入的文字
+     * @param {[number,number]|null} focusXY 输入框中心坐标（主循环 dump 出来的，切输入法前取）
+     *   ⚠️ 三个坑，都实测踩过（DeepSeek 连续挂了三轮才定位到）：
+     *   1. 顺序：先切 IME，再点输入框，最后广播。反过来会让输入框失焦，
+     *      base64 广播被静默丢弃（`Broadcast completed: result=0` 照样返回成功）。
+     *   2. **广播前不要 dump**。`uiautomator dump` 会打断输入连接，dump 完再广播同样丢字。
+     *      所以这里绝不在点之前重新观察界面，只用传进来的坐标。
+     *   3. 坐标会漂移：软键盘弹出会把输入框顶上去，切 IME 又会让它落回来。
+     *      根治办法是把默认输入法**常驻 ADB Keyboard**（它没有软键盘 UI，界面永远不顶位置），
+     *      见 tools/set-adb-ime.mjs；那样这个坐标就是稳定可用的。
+     */
+    async inputText(text, focusXY = null) {
       const s = String(text)
-      // 非 ASCII 字符：中文/emoji 等 input text 无法直接输入
-      if (/[^\x00-\x7F]/.test(s)) {
-        const e = new Error(`输入文本含非 ASCII 字符（需 ADB Keyboard，本步跳过）: ${s.slice(0, 40)}`)
-        e.code = 'ADB_ERROR'
-        e.cmd = 'adb shell input text'
-        e.stderr = 'non-ascii input requires ADB Keyboard IME'
-        throw e
+      const px = Array.isArray(focusXY) && focusXY.length === 2 && Number.isFinite(focusXY[0]) ? focusXY : null
+      /** 切完 IME 之后点一下输入框拿焦点（不 dump，见坑 2）。 */
+      const focusNow = async () => {
+        if (!px) return
+        await this.tap(px[0], px[1]).catch(() => {})
+        await new Promise((z) => setTimeout(z, 400))
       }
+      // 非 ASCII（中文/emoji）：input text 不支持，得走 ADB Keyboard 的 base64 广播
+      if (/[^\x00-\x7F]/.test(s)) {
+        const ADB_IME = 'com.android.adbkeyboard/.AdbIME'
+        let prev = ''
+        try {
+          prev = String(await run(['shell', 'settings', 'get', 'secure', 'default_input_method'])).trim()
+        } catch (e) {}
+        if (prev !== ADB_IME) {
+          await run(['shell', 'ime', 'set', ADB_IME])
+          await new Promise((z) => setTimeout(z, 700))
+        }
+        await focusNow()
+        // 分段发送：整段一次广播 = 屏幕上"唰"地蹦出一整句话，和真人一个字一个字敲差太远。
+        // 按 2~5 字切块、块间停 60~280ms，看上去就是正常打字速度（反自动化检测也会看输入节奏）。
+        const chunks = []
+        for (let i = 0; i < s.length;) {
+          const n = 2 + Math.floor(Math.random() * 4)
+          chunks.push(s.slice(i, i + n))
+          i += n
+        }
+        for (const c of chunks) {
+          const b64 = Buffer.from(c, 'utf8').toString('base64')
+          await run(['shell', `am broadcast -a ADB_INPUT_B64 --es msg ${b64}`])
+          await new Promise((z) => setTimeout(z, 60 + Math.random() * 220))
+        }
+        if (prev && prev !== ADB_IME && /^[a-z]/i.test(prev)) {
+          await new Promise((z) => setTimeout(z, 400 + Math.random() * 400))
+          await run(['shell', 'ime', 'set', prev]).catch(() => {})
+        }
+        return
+      }
+      // ASCII：不用切 IME，但同样要先把焦点点进去（假输入框尤其需要）
+      await focusNow()
       // 一审 #19-1：adb 会把参数拼成远端 shell 命令，元字符必须转义（空格走 input text 的 %s 约定），
       // 否则 `;`、`|`、`$()` 之类会被远端 shell 当命令执行。
       const escaped = s.replace(/[\\;|&$`'"<>()*?!#~{}[\]\s]/g, (c) => (c === ' ' ? '%s' : '\\' + c))

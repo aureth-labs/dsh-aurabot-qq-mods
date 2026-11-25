@@ -8,16 +8,40 @@
  * 三种工作方式：
  *   1. mimo_say 工具 —— 她自己决定把某句话用语音说出来
  *   2. 自动语音 —— 按概率把回复里的短句换成语音条（面板可开关和调概率）
- *   3. 替换内置 voice —— 把模块文件夹改名成 voice，所有语音都走 MiMo
+ *   3. 替换内置 voice —— 文件夹改名成 voice 即可（id 取自文件夹名），所有语音都走 MiMo
  *
  * 所有可变数据写 api.dataDir()，模块目录保持静态（否则会触发重载）。
  */
 
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
-import { basename, extname, join } from 'node:path'
+import { basename, dirname, extname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const PLUGIN_ID = 'aura-mimo'
+// ---------------------------------------------------------------------------
+// 自己的 id：直接用「文件夹名」。
+// ---------------------------------------------------------------------------
+// aurabot 给模块定 id 的方式是 scanUser() 里的 `id: e.name`（就是文件夹名），
+// 校验的也是「index.mjs 导出的 id === 文件夹名」。module.json 里的 id 它不读。
+// 所以文件夹名才是权威答案，用它能天然对齐。
+//
+// 这里踩过一次坑：先前改成从 module.json 读 id。用户把文件夹改名成 voice 后，
+// 只要 module.json 没改、或者读取出错兜底成旧值，导出的 id 就和文件夹名不符，
+// 框架判定「模块 id 要和文件夹名一样」不通过 → 加载失败 → 回退内置 voice。
+// 表现出来就是「接管之后面板没了」（内置 voice 用 tab，没有 panel）。
+// 用文件夹名就没有这种可能：改个文件夹名就自动对上了。
+//
+// 另外 aurabot 会把模块快照到 <模块>/.aurabot-cache/<版本戳>/ 再 import，
+// 那种情况下 import.meta.url 指向快照目录，要往上退两层才是模块目录。
+const HERE = dirname(fileURLToPath(import.meta.url))
+const PARENT = dirname(HERE)
+const PLUGIN_DIR = basename(PARENT) === '.aurabot-cache' ? dirname(PARENT) : HERE
+const PLUGIN_ID = basename(PLUGIN_DIR)
+// 市场打包校验（pack 的 smokeTest）会把发布内容复制进随机名暂存目录（aurabot-mod-XXXX）再加载
+// 入口，此时「文件夹名」是暂存目录名，永远对不上 module.json，全仓试打包必挂（2026-11-10 CI 实测）。
+// 这种目录是打包工具的临时产物，不是真安装：导出 module.json 的 id 让校验通过即可；
+// 真实运行（装在 modules/<名字>/ 或改名为 voice）不受影响，仍然跟随文件夹名。
+const EXPORT_ID = PLUGIN_ID.startsWith('aurabot-mod-') ? 'aura-mimo' : PLUGIN_ID
 const DEFAULT_API_BASE = 'https://api.xiaomimimo.com/v1'
 const DEFAULT_MODEL = 'mimo-v2.5-tts-voiceclone'
 const MODEL_DESIGN = 'mimo-v2.5-tts-voicedesign'
@@ -157,9 +181,9 @@ function pcm16ToWav(raw) {
 }
 
 export default {
-  id: PLUGIN_ID,
+  id: EXPORT_ID,
   name: 'aura-mimo',
-  version: '1.0.0',
+  version: '1.1.2',
   api: 1,
   author: 'zcx1021',
   description: '用一段参考音频零训练克隆音色，调小米 MiMo TTS 合成语音。她可以用自己的声音说话。',
@@ -780,5 +804,24 @@ export default {
           (issues.length ? ` · 待处理：${issues.join('；')}` : ' · 配置完整'),
       )
     })
+
+    // -----------------------------------------------------------------------
+    // 接管内置语音时用的接口
+    // -----------------------------------------------------------------------
+    // 内置 voice 模块的 setup 返回 { speak, edgeInstalled }，聊天中枢发语音条时
+    // 就是调 api.use('voice').speak(text) 拿 { file, engine }。
+    // 把本模块改名成 voice 之后，必须补上同一个接口，否则中枢调到的就是 undefined
+    // —— 光改目录名和 id 只是能加载，真正「接管」靠的是这个 speak。
+    async function speak(text) {
+      const cfg = settingsOf(api)
+      if (!cfg.apiKey) throw new Error('还没有填 MiMo API Key，请在面板里填好并保存')
+      if (!String(text || '').trim()) throw new Error('要念的文字是空的')
+      const r = await speakToFile(String(text), cfg)
+      return { file: r.file, engine: 'mimo' }
+    }
+
+    // 只有自己确实是 voice 才把接口挂出去；平时（id 还是 aura-mimo）返回空，
+    // 不影响任何现有行为，也不会和内置 voice 抢。
+    return PLUGIN_ID === 'voice' ? { speak } : undefined
   },
 }

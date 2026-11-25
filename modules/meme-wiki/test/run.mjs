@@ -6,15 +6,17 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { EventEmitter } from 'node:events'
 
-const MOD = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+const MOD = fileURLToPath(new URL('..', import.meta.url))
 const results = []
+const instances = []
 const check = (name, ok, detail = '') => results.push({ name, ok: Boolean(ok), detail: String(detail || '') })
 
 // ---------- 造一个假 api ----------
 function makeApi({ settings = {} } = {}) {
+  const cleanups = []
   const events = {}
   const routes = {}
   const tools = []
@@ -44,7 +46,7 @@ function makeApi({ settings = {} } = {}) {
     route: (p, h) => { routes[p] = h; return () => {} },
     every: () => () => {},
     later: () => () => {},
-    onDispose: () => () => {},
+    onDispose: (fn) => { cleanups.push(fn); return () => {} },
     context: () => () => {},
     emit: () => {},
     use: () => null,
@@ -52,7 +54,9 @@ function makeApi({ settings = {} } = {}) {
     has: () => false,
     core: {},
   }
-  return { api, events, routes, tools, commands, getRules: () => rulesFn, logs, dataDir }
+  const instance = { api, events, routes, tools, commands, getRules: () => rulesFn, logs, dataDir, dispose: () => cleanups.reverse().forEach(fn => fn()) }
+  instances.push(instance)
+  return instance
 }
 
 // 假请求：带上 JSON 请求体和一个 header
@@ -91,6 +95,9 @@ ins.run('测试梗长', '测试梗长', '', '开头。' + '填充'.repeat(200), 
 // 触发重建索引：模块没暴露 rebuild，借 /import 之外的办法——加一条再删一条
 const before = (await routes['/stats']()).total
 check('统计能读到条数', before === 4, 'total=' + before + '（4 条 = 甲/乙/丙/长）')
+
+const populatedRules = JSON.stringify(getRules()('social', {}))
+check('有词条时规则不带动态条数', !/\d+ 条/.test(populatedRules) && populatedRules.includes('你有一个本地梗库。'))
 
 // ---------- 注入 ----------
 const inject = async (text, chat = { chatId: 'private:1', kind: 'private' }) =>
@@ -162,6 +169,8 @@ check('默认上限下不出现工具截断说明', !String(tFull.message).inclu
 // ---------- 加 / 删词条 ----------
 const added = await routes['/add'](fakeReq({ title: '手动梗丁', aliases: '丁丁', text: '手动加的一条。' }))
 check('加词条成功', added.ok === true, String(added.message))
+check('新增后规则不变', JSON.stringify(getRules()('social', {})) === populatedRules)
+check('新增后面板仍更新条数', (await routes['/stats']()).total === before + 1)
 const dup = await routes['/add'](fakeReq({ title: '手动梗丁', text: '再来' }))
 check('重复加被拒', dup.ok === false && /已经在库里/.test(String(dup.message)), String(dup.message))
 const emptyTitle = await routes['/add'](fakeReq({ title: '   ', text: 'x' }))
@@ -174,6 +183,8 @@ const delBuiltin = await routes['/del'](fakeReq({ title: '测试梗甲' }))
 check('内置词条不给删', delBuiltin.ok === false && /不是手动加的/.test(String(delBuiltin.message)), String(delBuiltin.message))
 const delMine = await routes['/del'](fakeReq({ title: '手动梗丁' }))
 check('手动词条能删', delMine.ok === true, String(delMine.message))
+check('删除后规则不变', JSON.stringify(getRules()('social', {})) === populatedRules)
+check('删除后面板仍更新条数', (await routes['/stats']()).total === before)
 const gone = await routes['/peek']({ url: '/peek?q=' + encodeURIComponent('手动梗丁') })
 check('删完查不到', gone.text.includes('没有'), String(gone.text).slice(0, 20))
 
@@ -190,9 +201,14 @@ check('有 /import 路由', typeof routes['/import'] === 'function')
 const st = await routes['/import-status']()
 check('导入状态可读', st.ok === true && typeof st.total === 'number', JSON.stringify(st).slice(0, 60))
 
+// 清空后不能继续宣称有可查询的梗库。
+db.exec('DELETE FROM memes')
+check('清空后恢复未导入提示', String(getRules()('social', {})).includes('还没导入'))
+
 // ---------- 收尾 ----------
 db.close()
-try { rmSync(dataDir, { recursive: true, force: true }) } catch (e) {}
+for (const made of instances) made.dispose()
+for (const made of instances) rmSync(made.dataDir, { recursive: true, force: true })
 
 const pass = results.filter((r) => r.ok).length
 const fail = results.filter((r) => !r.ok)
