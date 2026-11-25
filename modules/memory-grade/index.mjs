@@ -259,7 +259,7 @@ async function absorbInbox({ inbox, api, log, memory, max = 300 } = {}) {
 export default {
   id: 'memory-grade',
   name: '记忆总库',
-  version: '2.1.1',
+  version: '2.1.2',
   api: 1,
   description: '存记忆、判密级、贴标签、算时效，还能顺手标八卦。写库前自动盖章，过期的只标「当时」不删除。东西全在自己机器上，不联网、不外传。',
   panel: 'panel.js',
@@ -291,6 +291,8 @@ export default {
     expireScan: true,
     // 存储引擎：'json' 还是 'sqlite'。默认 json，用熟了再换
     storage: 'json',
+    trivialDecay: true, // 碎片压权重：短句压到很低，让遗忘曲线自己清
+    trivialImportance: 0.1, // 碎片压到多少
     redLine: true, // 机密红线：非主人场合带家里身份就整条拦下
     neverForget: true,
     clsSelfCheck: true, // 每小时自检密级 // 过目不忘：知识类重要度一直保持 0.6 以上
@@ -493,6 +495,24 @@ export default {
       type: 'number',
       hint: '填 90，就是 90 天休眠、180 天归档。上一个开关关着时这一项不起作用。',
       placeholder: '90',
+    },
+    {
+      key: 'trivialDecay',
+      label: '⑤ 遗忘 · 碎片压权重（不删，只让它淡）',
+      type: 'switch',
+      hint:
+        '打开（默认）：会话提炼出的短句（「先查一下」「这个是啥」这种没什么信息量的）' +
+        '重要度压到很低，让遗忘曲线自己去清。不删，只是让它不显眼。' +
+        '机密、置顶、知识、规矩、事实、长期印象、约定这些一律不压。',
+    },
+    {
+      key: 'trivialImportance',
+      label: '⑤ 遗忘 · 碎片压到多少',
+      type: 'number',
+      hint:
+        '默认 0.1。重要度越低淡得越快——0.1 大概半个多月休眠，0.5 要两个多月。' +
+        '上一个开关关掉时这项不起作用。',
+      placeholder: '0.1',
     },
     {
       key: 'neverForget',
