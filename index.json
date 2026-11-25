@@ -65,6 +65,36 @@
       "publishedAt": "2026-11-12T04:18:02.203Z"
     },
     {
+      "id": "anti-bot",
+      "name": "人机反面教材",
+      "version": "1.1.0",
+      "description": "从 B 站 / 聊天里认出「一眼就是 AI」的发言，当反面教材收起来，每轮聊天提醒别那么说话；同时收真人说得有意思的金句当学习材料。",
+      "category": "social",
+      "tags": [
+        "人机检测",
+        "语感",
+        "反例",
+        "金句"
+      ],
+      "author": "旭光Ⅺ",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "anti-bot-v1.1.0",
+      "file": "anti-bot-v1.1.0.zip",
+      "path": "anti-bot-v1.1.0/anti-bot-v1.1.0.zip",
+      "size": 15068,
+      "sha256": "f6d49ffc529f444cd94fc7f73f951ce93eccdf0789f99a5ab669df3c6cebb569",
+      "commit": "5765ecd2826bb9d66567dff2adc2dd0c81d43d86",
+      "publishedAt": "2026-11-25T13:53:46.777Z"
+    },
+    {
       "id": "api-pool",
       "name": "关键词调 API 池",
       "version": "1.6.0",
@@ -3208,5 +3238,5 @@
       "reason": "作者主动撤回。"
     }
   ],
-  "generatedAt": "2026-11-25T13:50:24.305Z"
+  "generatedAt": "2026-11-25T13:53:46.777Z"
 }
