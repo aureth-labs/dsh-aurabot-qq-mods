@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { fixture, defer, ok } from './helpers.mjs'
-import { isPeakTime, normalizeCookie, today } from '../lib/site.mjs'
+import { isPeakTime, linkIdOf, normalizeCookie, today } from '../lib/site.mjs'
 import { AUTH_STATUS } from '../lib/api.mjs'
 
 // 固定东八区，让本地午夜和 UTC 日期不同，能检出 UTC 重置的回归。
@@ -203,5 +203,38 @@ test('Cookie 只有 pkey 时补同值的 user_pkey，login 状态算登录失效
   assert.equal(normalizeCookie('heybox_id=1'), 'heybox_id=1')
   assert.equal(normalizeCookie(''), '')
   assert.ok(AUTH_STATUS.has('login'))
+})
+
+test('linkIdOf 认 app 端 16 进制分享链接、网页路径与直接给的 id', () => {
+  // app 端分享链接：link_id 是 16 进制，接口原样接受
+  const share = 'https://api.xiaoheihe.cn/v3/bbs/app/api/web/share?h_camp=link&h_session_id=TGtTqLjhcLHk1BE4&h_src=YXBwX3NoYXJl&link_id=855a72949646&new_post_share_style_v2=1'
+  assert.equal(linkIdOf(share), '855a72949646')
+  assert.equal(linkIdOf('https://www.xiaoheihe.cn/app/bbs/link/855a72949646'), '855a72949646')
+  // 十进制老链接和裸 id 照旧
+  assert.equal(linkIdOf('https://www.xiaoheihe.cn/app/bbs/link/192865129'), '192865129')
+  assert.equal(linkIdOf('192865129'), '192865129')
+  assert.equal(linkIdOf('855a72949646'), '855a72949646')
+  // 认不出就返回空，不能把整条 URL 里的数字拼成一个假 id
+  assert.equal(linkIdOf(''), '')
+  assert.equal(linkIdOf('随便一句话'), '')
+  assert.equal(linkIdOf(undefined), '')
+})
+
+test('watch 拿到 app 端分享链接时按原样 16 进制 link_id 拉详情', async (t) => {
+  const seen = []
+  const detailFetch = async (url) => {
+    seen.push(url)
+    assert.equal(url.pathname, '/bbs/app/link/tree')
+    assert.equal(url.searchParams.get('link_id'), '855a72949646')
+    return ok({ link: { title: '测试帖', description: '正文内容', user: { username: '作者' }, link_like_count: 3 } })
+  }
+  const f = fixture({ fetcher: detailFetch })
+  t.after(() => f.close())
+  const share = 'https://api.xiaoheihe.cn/v3/bbs/app/api/web/share?h_camp=link&h_session_id=TGtTqLjhcLHk1BE4&h_src=YXBwX3NoYXJl&link_id=855a72949646&new_post_share_style_v2=1'
+  const r = await f.hb.watch(share)
+  assert.equal(seen.length, 1)
+  assert.equal(r.ok, true)
+  assert.match(r.message, /测试帖/)
+  assert.match(r.message, /正文内容/)
 })
 
