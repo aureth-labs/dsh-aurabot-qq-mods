@@ -1982,6 +1982,38 @@
       "publishedAt": "2026-11-08T15:53:07.925Z"
     },
     {
+      "id": "roast-mode2",
+      "name": "毒舌模式2",
+      "version": "1.4.0",
+      "description": "三档分级毒舌模式（傲娇嘴硬/损友毒舌/狂暴模式）：3档贴吧狂暴风短句连击，针对当前消息现编，模型失败回落双句狂暴语料",
+      "category": "social",
+      "tags": [
+        "毒舌",
+        "吐槽",
+        "互动",
+        "损友",
+        "分级"
+      ],
+      "author": "winston-hoo",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "process",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "roast-mode2-v1.4.0",
+      "file": "roast-mode2-v1.4.0.zip",
+      "path": "roast-mode2-v1.4.0/roast-mode2-v1.4.0.zip",
+      "size": 18537,
+      "sha256": "efa19f34f006928b898db404c53a110d1e2e0f2a01da48f0bcac44a358871380",
+      "commit": "0dac9be4c3d301bed19a22f9d2fb10c9825eb044",
+      "publishedAt": "2026-11-25T04:54:28.904Z"
+    },
+    {
       "id": "room3d",
       "name": "房间",
       "version": "1.0.4",
@@ -2634,5 +2666,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-25T04:53:00.294Z"
+  "generatedAt": "2026-11-25T04:54:28.904Z"
 }
