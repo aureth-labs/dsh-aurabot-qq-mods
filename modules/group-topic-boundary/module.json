@@ -1,0 +1,21 @@
+{
+  "id": "group-topic-boundary",
+  "name": "群聊话题边界",
+  "version": "1.0.0",
+  "description": "群聊不深入敏感政治话题；明显内容发送前转开话题。普通私聊不变，无额外模型调用。",
+  "category": "manage",
+  "author": "b1ghawk119",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.1",
+  "requires": [],
+  "capabilities": [],
+  "platforms": [
+    "qq"
+  ],
+  "tags": [
+    "群聊",
+    "话题",
+    "政治"
+  ]
+}

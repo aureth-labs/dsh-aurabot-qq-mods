@@ -280,9 +280,8 @@
     playAnim(name, null, 'idle') // 播完走 afterAnim：autoIdle 才继续接，否则停在这一段末尾回静态
   }
   let idleTimer = null
-  // 动画节奏倍率（1.0.14，服务端 /config 的 animRate，经主进程 __setAnimRate 推下来）：空闲轮播间隔 ÷ 它。
-  // 口径说明：只缩「排下一段 idle 的等待时间」，不碰物理/移动/气泡时长——1 = 正常，2 = 更活泼，0.5 = 更慵懒。
-  let animRate = 1
+  // 动画节奏倍率：声明与 __setAnimRate 见文件开头（2026-11-07 参数化契约块），此处只消费——
+  // 1.0.15 曾在此重复 `let animRate` 引发 SyntaxError 整页挂掉（桌宠全透明不显示），已删。
   function scheduleIdle() {
     clearTimeout(idleTimer)
     if (!autoIdle) return // 自动轮播关着：不排下一段（动作全交给 AI 行为 / 说话 / 点击）
@@ -294,8 +293,7 @@
     }, (6000 + Math.random() * 8000) / pace)
   }
   // 主进程/调试用：恢复自动轮播 / 单播一段 idle 池动画（AI 的 idle_anim 动作走这条）
-  window.__setAnimRate = (v) => { animRate = Number(v) || 1 } // 只影响下一次 scheduleIdle 的间隔，不重排正在等的定时
-  // 主进程/调试用：恢复自动轮播 / 单播一段 idle 池动画（AI 的 idle_anim 动作走这条）
+  // （__setAnimRate 的定义也在文件开头块里，1.0.15 曾在此重复定义，已删）
   window.__setAutoIdle = (v) => { autoIdle = !!v; if (autoIdle && !currentAnim) playIdle(); else if (!autoIdle) scheduleIdle() }
   window.__playIdleOnce = () => { const name = pickFrom('idle'); return name ? playAnim(name, null, 'idle') : false }
 

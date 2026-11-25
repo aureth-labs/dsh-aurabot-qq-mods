@@ -1,0 +1,23 @@
+{
+  "_comment": "按 me.md 日报字段构造的脱敏 fixture，不是真实账号数据",
+  "ret": 0,
+  "sub_ret": 0,
+  "dayData": {
+    "listenTime": 3900,
+    "activeHour": 20,
+    "averageTime": [
+      { "currentAverage": { "sum": 600 }, "nearAverage": { "sum": 500 } }
+    ],
+    "singerListen": [
+      { "sum": 1200, "singerMid": "0025NhlN2yWrP4", "singerName": "周杰伦" },
+      { "sum": 900, "singerMid": "001BLpXF2DyJe2", "singerName": "林俊杰" },
+      { "sum": 600, "singerMid": "003OUlho2HcRHC", "singerName": "陈奕迅" },
+      { "sum": 300, "singerMid": "004AlfUb18AMdE", "singerName": "五月天" }
+    ],
+    "songListen": [
+      { "sum": 5, "songMid": "0039MnYb0qxYhV", "songName": "晴天", "singerMid": "0025NhlN2yWrP4", "singerName": "周杰伦" },
+      { "sum": 4, "songMid": "000MkMni1yWrP4", "songName": "稻香", "singerMid": "0025NhlN2yWrP4", "singerName": "周杰伦" },
+      { "sum": 0, "songMid": "", "songName": "", "singerName": "" }
+    ]
+  }
+}
