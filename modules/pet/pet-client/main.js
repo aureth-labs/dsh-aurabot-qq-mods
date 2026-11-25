@@ -47,9 +47,19 @@ const metaApi = packmeta || {
 
 const HOST_FILE = process.env.AURABOT_PET_HOST || path.join(__dirname, '..', 'host.json')
 const POLL_WAIT_MS = 25_000
+// 连续这么多轮连不上插件就自退（DSH 关掉后桌宠不能变成孤儿留在屏幕上）
+const ORPHAN_MAX_ATTEMPTS = 12
 const FETCH_TIMEOUT_MS = 40_000
 
 if (!app.requestSingleInstanceLock()) app.quit() // 单实例锁
+
+// 启动期任何未捕获异常都落盘：否则进程静默退出时只能靠猜。
+process.on('uncaughtException', (e) => {
+  try { fs.appendFileSync(path.join(__dirname, 'startup-error.log'), `[${new Date().toISOString()}] uncaught: ${e && e.stack || e}\n`) } catch {}
+})
+process.on('unhandledRejection', (e) => {
+  try { fs.appendFileSync(path.join(__dirname, 'startup-error.log'), `[${new Date().toISOString()}] rejection: ${e && (e.stack || e.message) || e}\n`) } catch {}
+})
 
 let win = null
 let tray = null
@@ -59,6 +69,45 @@ let focusOn = false
 let clientId = 'pet-' + Math.random().toString(16).slice(2, 10)
 let pack = null        // 当前形象包视图（/config 的 pack 字段）
 let apiBase = null     // { baseUrl, api, token }
+
+// ---------- 多桌宠：窗口注册表 + 碰撞 broker ----------
+// dsh-pet 的做法：每只宠物一个窗口，主进程汇总所有宠物状态（broker）后广播给每个窗口，
+// 窗口在飞行时用别人的实时位置做跨窗碰撞检测。
+// 这里保持向后兼容：`win` 仍是**主窗口**（旧代码全部只认它），额外窗口放 extraWins。
+// 只有开第二只时才会有跨窗碰撞，单只时 broker 只有自己、碰撞自然不触发。
+const PET_ID = 'main'
+/** petId -> { id, win, state:{x,y,vx,vy,size,bottomPad}, alive } */
+const petRegistry = new Map()
+function registerPetWindow(petId, w) {
+  const id = String(petId || 'main')
+  petRegistry.set(id, { id, win: w, state: { x: 0, y: 0, vx: 0, vy: 0, size: 0, bottomPad: 0 }, alive: true })
+  broadcastPetStates()
+}
+function dropPetState(petId) {
+  const rec = petRegistry.get(String(petId))
+  if (rec) { rec.alive = false; petRegistry.delete(String(petId)) }
+  broadcastPetStates()
+}
+/** 更新某只宠物的实时状态并广播（节流交给调用方：飞行中 ~30ms 一次）。 */
+function updatePetState(petId, partial) {
+  const rec = petRegistry.get(String(petId))
+  if (!rec) return
+  Object.assign(rec.state, partial || {})
+  broadcastPetStates()
+}
+/** 把所有宠物的状态广播给每个窗口（含自己：渲染页据此做碰撞检测）。 */
+function broadcastPetStates() {
+  const states = {}
+  for (const [id, rec] of petRegistry) {
+    if (!rec.alive) continue
+    states[id] = { ...rec.state }
+  }
+  for (const rec of petRegistry.values()) {
+    const w = rec.win
+    if (!w || w.isDestroyed()) continue
+    try { w.webContents.send('pet:flight-states', states) } catch {}
+  }
+}
 
 function readHost() {
   try {
@@ -115,6 +164,33 @@ function apiPost(pathname, body) {
     body: JSON.stringify(body || {}),
   }).catch(() => {})
 }
+/** 诊断日志落盘（只给排查用，正常路径不写，失败也不影响任何功能）。 */
+function appendDebugLog(obj) {
+  try {
+    fs.appendFileSync(path.join(__dirname, 'debug-crop.log'), JSON.stringify({ at: new Date().toISOString(), ...obj }) + '\n')
+  } catch {}
+}
+/** 主人明确要关掉桌宠（托盘 / 右键菜单的「退出桌宠」）。
+ *  先通知插件记下「不想开着」——否则下次 DSH 启动的自动拉起会把她又放出来，等于没退掉。
+ *  只等最多 800ms：插件连不上也必须能退出，绝不能因为服务端不来而卡住不退。
+ *  注意这条路和「连不上插件自退」是两回事：自退不调这里，意图标记保持原样，下次照样自动拉起。 */
+async function quitByUser(from) {
+  running = false
+  try {
+    const host = readHost()
+    if (host) {
+      await Promise.race([
+        fetch(`${host.baseUrl}${host.api}/intent/quit`, {
+          method: 'POST',
+          headers: { 'x-pet-token': host.token, 'content-type': 'application/json' },
+          body: JSON.stringify({ from: String(from || '') }),
+        }).catch(() => {}),
+        new Promise((r) => setTimeout(r, 800)),
+      ])
+    }
+  } catch {}
+  try { app.quit() } catch { process.exit(0) }
+}
 /** 需要看响应的 POST（图标动作 /behavior/icon/act 用）：失败/非 JSON 一律返回 null，不抛。
  *  注意：服务端拒绝时回 **HTTP 400 + 同一份 JSON body**（{ok:false, reason:'icon-mischief-disabled'}），
  *  所以 4xx 也要把 body 读回来——否则安全闸的中文原因全丢，面板只能显示一句「被拒绝」。 */
@@ -140,6 +216,27 @@ function assetUrl(packName, file) {
   if (!host) return ''
   return `${host.baseUrl}${host.api}/asset/${encodeURIComponent(packName)}/${encodeURIComponent(file)}?token=${host.token}`
 }
+/** 梗图 / 音效地址表：名字 → 带 token 的 URL（从 dsh-pet 搬来的能力）。 */
+function memeUrlMap() {
+  const host = readHost()
+  if (!host) return {}
+  const out = {}
+  const memes = (pack && Array.isArray(pack.memes)) ? pack.memes : []
+  for (const m of memes) {
+    const name = typeof m === 'string' ? m : (m && m.name)
+    if (!name) continue
+    out[name] = `${host.baseUrl}${host.api}/pic/memes/${encodeURIComponent(name)}.png?token=${host.token}`
+  }
+  // 点击音效：素材目录里有就给它一个地址，没有就不响
+  if (pack && pack.clickSound) {
+    out.__clickSound = `${host.baseUrl}${host.api}/sound/${encodeURIComponent(pack.clickSound)}?token=${host.token}`
+  }
+  // 自定义字体：同理
+  if (pack && pack.font) {
+    out.__font = `${host.baseUrl}${host.api}/fonts/${encodeURIComponent(pack.font)}?token=${host.token}`
+  }
+  return out
+}
 /** 把当前形象包推给渲染页：素材地址表 + 池 + 权重 + 物理参数。 */
 function pushPackToRenderer() {
   if (!win || win.isDestroyed()) return
@@ -154,30 +251,103 @@ function pushPackToRenderer() {
   }
   const js = `window.__setPack && window.__setPack(${JSON.stringify({
     anims,
+    memes: memeUrlMap(), // 梗图名 → 带 token 的地址（含 __clickSound 音效）
     pools: view ? view.animations : { idle: [], speak: [], click: [] },
     weights: view ? view.weights : {},
     events: view ? view.events : {},
     workStatus: view ? (view.workStatus || {}) : {}, // 干活状态 → 动画（服务端按命名约定/包配置解析好）
     physics: view ? view.physics : null,
+    atTop: isTopCorner(), // 出生点在上沿：渲染页把气泡翻到人物下方往下长
   })})`
   win.webContents.executeJavaScript(js).catch(() => {})
 }
+<<<<<<< HEAD
+/** 出生点四个角。 */
+const CORNERS = { 'bottom-right': 1, 'bottom-left': 1, 'top-right': 1, 'top-left': 1 }
+/** 「要不要重推素材表」的指纹：剔掉 atTop（它只影响布局翻转，由 __setCorner 单独下发）。
+ *  不剔的话，改出生点会被误判成换素材包 → 重推整表 → __setPack 重置裁切 + 重播动画 → 闪一下。 */
+function packSig(p) {
+  if (!p) return ''
+  const { atTop, ...rest } = p
+  return JSON.stringify(rest)
+}
+/** 出生点指纹：角落 + 两个边距，任何一项变了都算「主人改了出生点」。 */
+function cornerKey(p) {
+  const o = (p && p.position) || {}
+  const c = CORNERS[o.corner] ? o.corner : 'bottom-right'
+  const mx = Number.isFinite(Number(o.marginX)) ? Number(o.marginX) : 24
+  const my = Number.isFinite(Number(o.marginY)) ? Number(o.marginY) : 16
+  return `${c}|${mx}|${my}`
+}
+let positionApplied = false // 启动后是否已按面板设置摆过位（之后只听「出生点有没有被改」）
+function isTopCorner() {
+  const p = (pack && pack.position) || {}
+  return CORNERS[p.corner] ? p.corner.startsWith('top') : false
+}
+/** 只推「上沿/下沿」这一个布尔给渲染页（翻布局用）。
+ *  千万不能顺手推整份素材表：__setPack 会重置裁切并重播待机动画，表现就是画面一闪一闪。 */
+function pushCornerToRenderer() {
+  if (!win || win.isDestroyed()) return
+  win.webContents.executeJavaScript(`window.__setCorner && window.__setCorner(${isTopCorner()})`).catch(() => {})
+=======
 /** 把动画节奏倍率推给渲染页（1.0.14）：渲染页 scheduleIdle 的间隔 ÷ 它（>1 更活泼）。
  *  独立于 pushPackToRenderer：包没变、只改节奏时也能即时生效（8 秒轮询刷新路径）。 */
 function pushAnimRate() {
   if (!win || win.isDestroyed()) return
   win.webContents.executeJavaScript(`window.__setAnimRate && window.__setAnimRate(${JSON.stringify(animRate)})`).catch(() => {})
+>>>>>>> origin/main
 }
 let lastWorkKey = ''
 // 人物大小倍率（服务端 /config 的 scale，0.5~2.0）：整窗等比缩放 = setSize + setZoomFactor，
 // 布局（舞台/气泡/字体）随 zoom 一起缩，物理身体盒由 bodyBox 按窗口宽反推，天然对上。
-const BASE_W = 280, BASE_H = 430 // createWindow 的原始窗口尺寸（缩放的基准；BASE_H 只是「气泡全开」的上限）
+const BASE_W = 280, BASE_H = 430 // createWindow 的原始窗口尺寸（缩放的基准；BASE_H 只是「气泡全开」的上限，见 H_MAX_BASE）
 let curScale = 1
 // 当前「贴合内容」所需的基础高度（缩放前 px，由渲染页按气泡是否显示上报，见 pet:fit）。
 // applyScale 必须乘它、而不是 BASE_H：否则 /config 的 scale 一到达就把窗口按 430 重设，
 // 刚缩掉的上方空白又被加回来（实测过：窗口先 290 后跳回 473）。
-const REST_H = 264 // 16(底距)+240(舞台)+8(顶距)
+// 舞台高度 360（不是 240）：素材人物基准高 268px，伸展帧能到 319px，
+// 240 的舞台会把伸展帧切掉。渲染页的 #stage 高度必须与这里一致。
+const STAGE_H_CSS = 360
+const REST_H = 16 + STAGE_H_CSS + 8 // 16(底距)+360(舞台)+8(顶距) = 384
 let fitBaseH = REST_H
+// 窗口尺寸守卫：真实尺寸必须恒等于「期望尺寸」。
+// 实测故障：窗口被撑到 2081×1008 DIP（期望 252×346），人物钉在窗口底边，
+// 于是人一路沉到任务栏下面；同时边界按期望高度算，物理上永远夹不住。
+// 任何来源（DPI 缩放竞态 / setZoomFactor 与 setSize 交互 / 外部程序）改了尺寸，
+// 都在这里拉回来。resizingSelf 防自激：我们自己 setSize 触发的那次 resize 直接放行。
+let resizingSelf = false
+// 容差：Windows 在 150% 缩放下 setSize(DIP) 会因物理像素取整读回 ±2px（252↔254）。
+// 按 ±1 判会让守卫和这个舍入反复对打（实测每 20ms 一次 setSize，窗口一直在抖），
+// 所以只纠正**明显**偏离（> SIZE_TOLERANCE），舍入抖动直接放行。
+const SIZE_TOLERANCE = 8
+// 冷却：真出问题时也别每帧都 setSize，1s 最多纠一次，避免自己把窗口线程打满。
+let lastSizeFixAt = 0
+function expectedWinSize() {
+  return {
+    w: Math.round(BASE_W * curScale),
+    h: Math.round(fitBaseH * curScale),
+  }
+}
+function enforceWindowSize(why) {
+  if (!win || win.isDestroyed() || resizingSelf) return
+  try {
+    const { w: ew, h: eh } = expectedWinSize()
+    const [w, h] = win.getSize()
+    if (Math.abs(w - ew) <= SIZE_TOLERANCE && Math.abs(h - eh) <= SIZE_TOLERANCE) return
+    const now = Date.now()
+    if (now - lastSizeFixAt < 1000) return
+    lastSizeFixAt = now
+    appendDebugLog({ kind: 'size-fix', why: String(why || ''), from: [w, h], to: [ew, eh], fitBaseH, curScale })
+    resizingSelf = true
+    try {
+      win.setResizable(true)
+      win.setSize(ew, eh)
+      win.setResizable(false)
+    } finally { resizingSelf = false }
+    // 尺寸变了，抛掷空间缓存必须作废（边界是按窗口高算的）
+    invalidateThrowSpace()
+  } catch {}
+}
 // 松手后落地开关（服务端 /config 的 releaseLand）：开 = 按甩出速度抛出去并落回地面（原行为）；
 // 关 = 拖到哪松手就停在哪（不抛也不落，连「温柔放下」的原地掉落也一并停掉）。
 // 拦截点放主进程 pet:throw 一处：渲染页的甩抛（pet:throw）和原地掉落（throwWith(0,0)）都走这条通道。
@@ -196,23 +366,46 @@ function effectivePhysics() {
 function applyScale(s) {
   if (!win || win.isDestroyed()) return
   const v = Math.min(2, Math.max(0.5, Number(s) || 1))
+  // zoom 每次都要对齐：窗口尺寸可能已被 pet:fit 改成 v 倍，
+  // 而 zoomFactor 若没跟上（例如只走了改尺寸那条路），人物就会比窗口「大一圈」，
+  // 视觉上像卡住/错位。这里强制同步，不再依赖 curScale 的差值判断。
+  try {
+    if (Math.abs((win.webContents.getZoomFactor() || 1) - v) > 0.01) win.webContents.setZoomFactor(v)
+  } catch {}
   if (Math.abs(v - curScale) < 0.01) return
   curScale = v
+  resizingSelf = true
   try {
     win.setResizable(true) // 创建时是 resizable:false，编程改尺寸前临时放开
     setSizeDip(Math.round(BASE_W * v), Math.round(fitBaseH * v)) // 高度跟当前贴合值走，别按 430 撑回原样
     win.setResizable(false)
-    win.webContents.setZoomFactor(v)
-  } catch {}
+  } catch {} finally { resizingSelf = false }
+  invalidateThrowSpace() // 尺寸变了，边界缓存作废
 }
 async function refreshConfig() {
   try {
     const cfg = await apiGet('/config')
     if (cfg && cfg.ok) {
-      const changed = JSON.stringify(pack) !== JSON.stringify(cfg.pack || null)
+      // 比较时剔掉 atTop：它只影响翻不翻布局，由 __setCorner 单独处理。
+      // 留着它会让「改出生点」被误判成「换素材包」→ 重推整份素材表 → __setPack 重置裁切并重播动画 → 闪一下。
+      const changed = packSig(pack) !== packSig(cfg.pack || null)
+      const prevCorner = cornerKey(pack)
       pack = cfg.pack || null
       focusOn = cfg.focus === true
       applyScale(cfg.scale)
+      // 出生点：① 启动后第一次拿到 /config —— 摆到面板设定的角落；
+      //         ② 之后面板改了角落/边距 —— 立刻挪过去（这是主人明确要求改的，不能被「只做一次」挡住）；
+      //         ③ 其余轮询一律不动她，主人自己拖到哪儿就是哪儿。
+      // cornerKey 每次现算：pack 对象每 9 秒被整个换掉，挂在 pack 上的标记活不过一轮。
+      const nowCorner = cornerKey(pack)
+      if (!positionApplied || nowCorner !== prevCorner) {
+        positionApplied = true
+        // 注意：这里**不能**再调 pushPackToRenderer()。__setPack 会 resetStageCrop + playStill，
+        // 等于把动画从头重播一遍——每 9 秒一轮配置就会「闪」一次。
+        // atTop 只需要翻布局，下面单独推一个轻量标记就够了。
+        pushCornerToRenderer()
+        try { goHome() } catch {}
+      }
       releaseLand = cfg.releaseLand !== false
       // 参数化契约消费（坏值/缺字段一律回落默认，参考 releaseLand/petScale 的写法口径）：
       const ph = cfg.physics && typeof cfg.physics === 'object' ? cfg.physics : {}
@@ -271,7 +464,32 @@ async function refreshConfig() {
 
 // ---------- 气泡 / 动画点播（P2） ----------
 const BUBBLE_TAG = { test: '碎碎念', whisper: '碎碎念' }
+<<<<<<< HEAD
+
+/**
+ * 播放语音（从 dsh-pet 的 voiceEnabled 搬来）：渲染页里用 Audio 播，主进程只管把地址递过去。
+ * 失败一律静默——语音出不来不该影响气泡本身。
+ */
+async function playVoice(audio, volume) {
+  if (!win || win.isDestroyed()) return
+  const url = audio && (audio.url || audio) ? (audio.url || audio) : ''
+  if (!url) return
+  // 相对地址（/aurabot/api/audio/xxx）要补上 host，渲染页是 file:// 页面，拿不到相对路径
+  let full = String(url)
+  if (!/^https?:\/\//i.test(full)) {
+    const host = readHost()
+    if (!host) return
+    full = `${host.baseUrl}${full.startsWith('/') ? '' : '/'}${full}`
+  }
+  const vol = Number.isFinite(Number(volume)) ? Math.max(0, Math.min(1, Number(volume))) : 1
+  try {
+    await win.webContents.executeJavaScript(`window.__playVoice && window.__playVoice(${JSON.stringify(full)}, ${vol})`)
+  } catch {}
+}
+async function showBubble(text, mood, modality, anim, playbackId, purpose, tagOverride, emotionProfile, audio, voiceVolume) {
+=======
 async function showBubble(text, mood, modality, anim, playbackId, purpose, tagOverride, emotionProfile, big) {
+>>>>>>> origin/main
   if (!win) return
   const secs = Math.min(30, Math.max(6.5, 4.5 + String(text).length * 0.11))
   // 标签：菜单「碎碎念」/ 定时碎碎念 / 干活结束各有各的标签，别都标成「主动来找你」
@@ -283,6 +501,8 @@ async function showBubble(text, mood, modality, anim, playbackId, purpose, tagOv
     // __bubble 返回实际起播的动画与回执号（没有可用素材时 anim 为空 → 不上报）
     if (played && played.playbackId) apiPost('/playback', { playbackId: played.playbackId, anim: played.anim || '', status: 'played' })
   } catch {}
+  // 语音：气泡先出，声音跟上（不等它，避免 TTS 慢把气泡拖住）
+  if (audio) playVoice(audio, voiceVolume).catch(() => {})
 }
 
 // ---------- 干活状态（DSH 会话事件 → 动画 + 结束提醒） ----------
@@ -359,7 +579,7 @@ async function pollLoop() {
         }
         if (e.type === 'behavior' && !firstBoot) { handleBehavior(e).catch((err) => console.error('行为动作执行失败：', err && err.stack ? err.stack : err)); continue } // 下发层：行为动作单
         if (e.type === 'proactive' && String(e.text || '').trim() && !firstBoot) {
-          await showBubble(e.text, e.mood, e.modality, e.anim, e.playbackId, e.purpose, '', e.emotionProfile)
+          await showBubble(e.text, e.mood, e.modality, e.anim, e.playbackId, e.purpose, '', e.emotionProfile, e.audio, e.voiceVolume)
         } else if (e.type === 'chat' && !firstBoot) {
           // 对话框回复（对话框开着时服务端走这条；messageId 与 POST 响应同源，chat.html 自己去重）
           if (chatWin && !chatWin.isDestroyed()) {
@@ -370,6 +590,21 @@ async function pollLoop() {
         } else if (e.type === 'focus') {
           focusOn = e.enabled === true
           if (focusOn) hideBubble()
+        } else if (e.type === 'debugCrop') {
+          // 诊断：插件侧要「人物包围盒 vs 舞台」的真实数据（查动画被切掉用）
+          let r = null
+          try { r = await debugCrop() } catch (err) { r = { threw: String(err && err.message || err) } }
+          appendDebugLog({ kind: 'debugCrop', askId: e.askId, r })
+          apiPost('/debug/report', { kind: 'crop', id: e.askId, result: r })
+        } else if (e.type === 'debugMeasure') {
+          let r = null
+          try { r = await debugMeasure(e.anim) } catch (err) { r = { threw: String(err && err.message || err) } }
+          appendDebugLog({ kind: 'debugMeasure', askId: e.askId, r })
+          apiPost('/debug/report', { kind: 'measure', id: e.askId, result: r })
+        } else if (e.type === 'debugProbe') {
+          let r = null
+          try { r = await debugProbe(e.x, e.y) } catch (err) { r = { threw: String(err && err.message || err) } }
+          apiPost('/debug/report', { kind: 'probe', id: e.askId, result: r })
         }
       }
       refreshConfig() // 便宜：跟着轮询节奏对齐包配置与素材路由（新放素材也能被发现）
@@ -377,6 +612,14 @@ async function pollLoop() {
     } catch {
       hadError = true
       attempt++
+      // 父进程守护：插件（DSH）关掉之后，没有人会来停这个小窗，
+      // 它会一直重连、一直留在屏幕上。连续失败超过上限就自己退出——
+      // 12 次 × 平均 9 秒 ≈ 两分钟，够 DSH 重启（换端口）而不至于变成孤儿。
+      if (attempt >= ORPHAN_MAX_ATTEMPTS) {
+        console.error(`[pet] 连续 ${attempt} 次连不上插件，判定 DSH 已退出，桌宠自行关闭`)
+        try { app.quit() } catch { process.exit(0) }
+        return
+      }
       await sleep(Math.min(15_000, 1500 + attempt * 1500)) // 出错退避，并重读 host.json（端口可能漂了）
     }
   }
@@ -392,7 +635,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 //      按舞台反推即可。若按 宽×9/16 当身体高，静止点会比屏幕底还低 183px —— 一扔就掉出屏幕外再也不回来。
 const THROW_FRAME_MS = 16   // ≈60fps
 const THROW_MAX_MS = 10000  // 一次抛掷最多算 10 秒，之后强制落地（兜底，绝不留半空死状态）
-const BODY = { left: 20, bottom: 16, width: 240, height: 240 } // 与 index.html 的 #stage 一致（裁切后人物填满舞台）
+const BODY = { left: 20, bottom: 16, width: 240, height: 360 } // 与 index.html 的 #stage 一致（240 宽 × 360 高）
 let thrower = null          // 抛掷循环定时器句柄（非空 = 正在飞）
 
 // ---------- 统一尺寸入口（2026-11-07 E2E 实测补）：运行时自标定，不赌平台语义 ----------
@@ -453,14 +696,45 @@ function setWinPos(x, y) {
   lastMove = { x: x, y: y }
   return true
 }
+/** 把窗口拉回**可见的**工作区。
+ *  必须按**窗口整体**判，不能只看左上角：左上角在屏内、窗口下半截伸到屏幕外，
+ *  用户看到的就是「人跑到屏幕下面去了」。
+ *  规则：窗口完全落在某块屏工作区内就原样不动；否则夹进最近的那块。 */
 function clampWindowToArea() {
   if (!win || win.isDestroyed()) return
+  // 先纠正尺寸：夹取必须按真实窗口算，尺寸错了怎么夹都还是会出界。
+  enforceWindowSize('clamp')
   const [wx, wy] = win.getPosition()
+<<<<<<< HEAD
+  const [w, h] = win.getSize()
+  const ds = screen.getAllDisplays ? screen.getAllDisplays() : [screen.getPrimaryDisplay()]
+  const areas = ds.map((d) => d.workArea)
+  let bestX = Math.round(wx)
+  let bestY = Math.round(wy)
+  let bestD = Infinity
+  for (const a of areas) {
+    const cx = Math.round(Math.min(Math.max(wx, a.x), a.x + Math.max(0, a.width - w)))
+    const cy = Math.round(Math.min(Math.max(wy, a.y), a.y + Math.max(0, a.height - h)))
+    if (cx === Math.round(wx) && cy === Math.round(wy)) { bestX = cx; bestY = cy; bestD = 0; break }
+    // 横向跨缝允许（窗口横跨两块屏是正常的），纵向严格夹住。
+    // 只有一块屏时绝不能走这条，否则 overlapsX 恒真、横向就完全不受限了。
+    const overlapsX = wx + w > a.x && wx < a.x + a.width
+    const touchesNeighbor = areas.some((o) => o !== a &&
+      (Math.abs(o.x - (a.x + a.width)) <= 1 || Math.abs(a.x - (o.x + o.width)) <= 1))
+    if (touchesNeighbor && overlapsX && cy === Math.round(wy)) { bestX = Math.round(wx); bestY = cy; bestD = 0; break }
+    const dx = wx - cx
+    const dy = wy - cy
+    const d2 = dx * dx + dy * dy
+    if (d2 < bestD) { bestD = d2; bestX = cx; bestY = cy }
+  }
+  if (bestX !== Math.round(wx) || bestY !== Math.round(wy)) setWinPos(bestX, bestY)
+=======
   const [w, h] = winSizeDip()
   const area = screen.getDisplayNearestPoint({ x: wx + w / 2, y: wy + h / 2 }).workArea
   const nx = Math.round(Math.min(Math.max(wx, area.x), area.x + area.width - w))
   const ny = Math.round(Math.min(Math.max(wy, area.y), area.y + area.height - h))
   if (nx !== Math.round(wx) || ny !== Math.round(wy)) setWinPos(nx, ny)
+>>>>>>> origin/main
 }
 /** 所有显示器 bounds 的并集（虚拟桌面）：拖拽允许跨屏走，但窗口绝不能跑出所有屏之外。
  *  （用户反馈「桌宠跑到屏幕外」的直接原因：拖拽通道原来没有任何边界钳制。） */
@@ -497,6 +771,124 @@ setInterval(() => {
     setWinPos(wx + (fixed.x - Math.round(body.x)), wy + (fixed.y - Math.round(body.y)))
   }
 }, 30_000)
+// 显示器热更新（dsh-pet 的 display-sync）：分辨率/缩放变化、插拔屏、旋转都会让桌面几何失效。
+// 之前只在启动时算一次，运行期永不更新 —— 拔掉一块屏或改分辨率后，桌宠的边界就永远错着，
+// 表现成「贴着不存在的边弹回来」或「掉进空洞里看不见」。事件会连发，去抖后只处理一次。
+let displayTimer = null
+/** 上一次的屏工作区快照：拓扑变化时用来做「世界坐标守恒」换算。 */
+let prevAreas = null
+function snapshotAreas() {
+  try {
+    const ds = screen.getAllDisplays ? screen.getAllDisplays() : [screen.getPrimaryDisplay()]
+    return ds.map((d) => ({ x: d.workArea.x, y: d.workArea.y, width: d.workArea.width, height: d.workArea.height }))
+  } catch { return null }
+}
+/** 显示器拓扑变化后就地重挂（dsh-pet 的 relayout）：
+ *  - 拖拽中不动（用户正握着）
+ *  - 飞行中不动（下一帧物理会按新边界夹取）
+ *  - 其余情况：窗口**世界坐标守恒**地搬过去，只有真的落在空洞里才夹到最近屏。
+ *  为什么不能直接 clamp：屏拓扑平移时，直接拿旧坐标去夹会让桌宠每次开合屏都漂一次。 */
+function relayout(oldAreas) {
+  if (!win || win.isDestroyed()) return
+  invalidateThrowSpace()
+  // 拖拽/飞行中不插手：位置由输入或物理驱动。
+  // 注意 hitBusy 声明在后面（let 有暂时性死区），所以用 typeof 安全读。
+  const busy = (typeof hitBusy !== 'undefined') && hitBusy
+  if (busy || thrower) return
+  const newAreas = snapshotAreas()
+  if (!newAreas || !newAreas.length) return
+  const [wx, wy] = win.getPosition()
+  const [w, h] = win.getSize()
+  // 世界坐标守恒（dsh-pet 的 rebaseCenter）：窗口左上角是**绝对屏幕坐标**，
+  // 显示器拓扑变化不改变它的世界位置，所以「守恒」就是原地不动。
+  // 只有两种情况需要动：
+  //   ① 视口原点平移（多屏时外接矩形左上角变了）：此时绝对坐标本来就该跟着平移
+  //   ② 真的不落在任何新屏里（屏被拔掉/分辨率变小）：夹进最近的屏
+  let tx = wx
+  let ty = wy
+  if (Array.isArray(oldAreas) && oldAreas.length && newAreas.length) {
+    const oldX = Math.min(...oldAreas.map((a) => a.x))
+    const oldY = Math.min(...oldAreas.map((a) => a.y))
+    const newX = Math.min(...newAreas.map((a) => a.x))
+    const newY = Math.min(...newAreas.map((a) => a.y))
+    // 原点平移量：屏布局整体挪动时，窗口跟着挪同样的量，视觉上才「没动」
+    tx = wx + (newX - oldX)
+    ty = wy + (newY - oldY)
+  }
+  const inAny = newAreas.some((a) => tx + w > a.x && tx < a.x + a.width && ty + h > a.y && ty < a.y + a.height)
+  if (inAny) {
+    // 可见：只在原点平移时挪（平移量为 0 就一点都不动，这就是守恒）
+    if (tx !== wx || ty !== wy) setWinPos(Math.round(tx), Math.round(ty))
+    return
+  }
+  // 落在空洞/已拔掉的屏上：夹进最近的屏
+  clampWindowToArea()
+}
+const onDisplayChange = () => {
+  if (displayTimer) clearTimeout(displayTimer)
+  displayTimer = setTimeout(() => {
+    displayTimer = null
+    const old = prevAreas
+    prevAreas = snapshotAreas()
+    // 抛掷中先收尾，免得用旧空间继续积分飞到不存在的地方
+    stopThrow()
+    // 按世界坐标守恒重挂（拖拽/飞行中它会自己跳过）
+    relayout(old)
+    try { appendDebugLog({ kind: 'displays-changed', geo: screen.getAllDisplays().map((d) => ({ id: d.id, bounds: d.bounds, work: d.workArea })) }) } catch {}
+  }, 300)
+  displayTimer.unref?.()
+}
+try {
+  screen.on('display-metrics-changed', onDisplayChange)
+  screen.on('display-added', onDisplayChange)
+  screen.on('display-removed', onDisplayChange)
+} catch {}
+/** 构造抛掷空间（dsh-pet 的 throwSpace）：**逐屏一套 AABB**，而不是整个桌面一个大框。
+ *  为什么必须逐屏：不规则多屏布局下外接矩形含大片不属于任何屏的空洞，
+ *  拿外接矩形当边界会把桌宠扔进用户看不见的地方（这正是「跑到屏幕外」的根因之一）。
+ *  panels 用 display.bounds（含任务栏区），areas 用 workArea：
+ *  越界侧有没有邻屏必须按 panels 探测——任务栏位于屏缝时 workArea 之间会空出一条带，
+ *  按 workArea 探测会把接缝当墙，桌宠永远穿不过去。 */
+/** 抛掷空间缓存（dsh-pet 的 throwSpaceOf）：飞行中每帧重建是浪费，
+ *  只在「屏拓扑 / 窗口尺寸 / 缩放」变化时重建。键用这些值的拼接。 */
+let throwSpaceCache = null
+let throwSpaceKey = ''
+function buildThrowSpace(w, h) {
+  const ds = screen.getAllDisplays ? screen.getAllDisplays() : [screen.getPrimaryDisplay()]
+  // 边界必须按**真实窗口高**算，不能用期望的 baseH。
+  // 用 baseH 时若窗口被撑大（实测会到 1008 DIP），maxY 会按 346 算出来，
+  // 窗口底边就落到 1014+1008=2022，整整沉到任务栏下面 —— 这正是「停下后慢慢超出屏幕底部」。
+  const realH = Math.round(Number(h) || 0) || Math.round(REST_H * curScale)
+  // 缓存键：屏拓扑 + 窗口尺寸 + 缩放。任何一项变了才重建。
+  const key = ds.map((d) => `${d.workArea.x},${d.workArea.y},${d.workArea.width},${d.workArea.height}|${d.bounds.width}x${d.bounds.height}`).join(';')
+    + `#${w}x${realH}@${curScale}`
+  if (throwSpaceCache && throwSpaceKey === key) return throwSpaceCache
+  const body = bodyBox(w, h)
+  const areas = ds.map((d) => ({ x: d.workArea.x, y: d.workArea.y, width: d.workArea.width, height: d.workArea.height }))
+  const panels = ds.map((d) => ({ x: d.bounds.x, y: d.bounds.y, width: d.bounds.width, height: d.bounds.height }))
+  const space = physics.throwSpace({
+    areas,
+    panels,
+    bodyW: body.width,
+    bodyH: body.height,
+    offsetX: body.offsetX,
+    offsetY: body.offsetY,
+    winW: w,
+    winH: realH,
+    sideAllow: Math.round(body.width * 0.08), // 身体左右各内缩一点才贴边反弹
+  })
+  // 注：参考实现的 `minY -= size * topInsetRatio` 只在 macOS 生效
+  // （desktop-geometry.js: platform === 'darwin' ? ... : 0）。
+  // Windows 上该值为 0，照搬会让窗口能顶出屏幕顶 13~21px，所以这里不做顶部内缩。
+  throwSpaceCache = space
+  throwSpaceKey = key
+  return space
+}
+/** 屏拓扑变了：缓存作废。 */
+function invalidateThrowSpace() {
+  throwSpaceCache = null
+  throwSpaceKey = ''
+}
 function startThrow(vx, vy) {
   if (!win || win.isDestroyed()) return
   stopThrow()
@@ -506,24 +898,54 @@ function startThrow(vx, vy) {
   // 跨屏/窗口挪动时要二次换算，容易漏）。bounds 每帧按当前窗口中心重算工作区并经 throwBounds 的
   // areaX/areaY 入参拿到绝对边界，每步硬钳——「甩出去飞出屏幕」从机制上不可能。
   const [wx, wy] = win.getPosition()
+<<<<<<< HEAD
+  const [w, h] = win.getSize()
+  // 逐屏抛掷空间（不是单屏 throwBounds）：跨屏飞行、屏缝穿越、空洞回避全靠它
+  const space = buildThrowSpace(w, h)
+  if (!space.areas.length) return
+  const ph = { ...physics.DEFAULT_PHYSICS, ...(pack && pack.physics ? pack.physics : {}) }
+  // 起始状态用**屏幕绝对坐标**（与 space 的 areas 同系），不再减 area.x/area.y：
+  // 逐屏方案要能在多块屏之间换算，减掉某一块屏的原点会让跨屏时整体偏移。
+  let st = { x: wx, y: wy, vx, vy }
+  // 起点先夹进最近那块屏的边界：上次若被扔到屏幕外，这一次甩就自动把桌宠拉回来
+  {
+    const i0 = physics.screenOfBox(space, st.x, st.y)
+    const b0 = space.bounds[i0]
+    if (b0) {
+      st.x = Math.min(Math.max(st.x, b0.minX), b0.maxX)
+      st.y = Math.min(Math.max(st.y, b0.minY), b0.maxY)
+    }
+  }
+=======
   const [w0, h0] = winSizeDip()
   const d0 = virtualDesktopBounds()
   const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi)
   // 起点也先钳回虚拟桌面（历史 bug 已把桌宠扔出屏时，这一甩自动拉回来）
   let st = { x: clamp(wx, d0.x, d0.x + d0.w - w0), y: clamp(wy, d0.y, d0.y + d0.h - h0), vx, vy }
   const ph = effectivePhysics()
+>>>>>>> origin/main
   const t0 = Date.now()
   let last = t0
   let lastPos = ''
   let squashAt = 0
   let squashCount = 0
+  let lastFlightReport = 0
   const finish = () => {
     stopThrow()
+<<<<<<< HEAD
+    // 落地后最后一道防线：尺寸被撑大时人已经沉下去了，这里拉回来并重新贴地。
+    enforceWindowSize('throw-end')
+    clampWindowToArea() // 缩回正常尺寸后，位置可能仍然偏低，按真实尺寸再夹一次
+    // 落定后把自己的最终位置报给 broker（速度归零），别的宠物才不会拿陈速度做碰撞
+    updatePetState(PET_ID, { x: st.x, y: st.y, vx: 0, vy: 0, size: w, bottomPad: 0 })
+    if (win && !win.isDestroyed()) win.webContents.executeJavaScript('window.__onThrowEnd && window.__onThrowEnd()').catch(() => {})
+=======
     if (win && !win.isDestroyed()) {
       clampWindowToArea() // 收尾兜底：把窗口贴回工作区（粗钳整窗，足够收口）
       applyFitWindow(true) // 飞行期间被跳过的窗高调整也在这里补
       win.webContents.executeJavaScript('window.__onThrowEnd && window.__onThrowEnd()').catch(() => {})
     }
+>>>>>>> origin/main
   }
   const stepFrame = () => {
     thrower = null
@@ -550,6 +972,48 @@ function startThrow(vx, vy) {
     let impact = 0
     const n = physics.throwSubsteps(st.vx, st.vy, dt)
     for (let i = 0; i < n; i++) {
+<<<<<<< HEAD
+      st = physics.throwStepRegion(st, dt / n, space, ph)
+      if (st.bounced && st.vy > 0) impact = Math.max(impact, Math.abs(st.vy))
+      if (st.atRest) break
+    }
+    if (now - t0 > THROW_MAX_MS) {
+      // 超时兜底：直接落回当前屏底部，别留半空死状态
+      const iEnd = physics.screenOfBox(space, st.x, st.y)
+      const bEnd = space.bounds[iEnd]
+      st = bEnd ? { ...st, y: bEnd.maxY, vx: 0, vy: 0, atRest: true } : { ...st, vx: 0, vy: 0, atRest: true }
+    }
+    // ---- 多桌宠碰撞（dsh-pet 的 collidePet 接入）----
+    // 只在 petCollision 开启、且确实有别的宠物时才跑。
+    if (ph.petCollision !== false) {
+      const myBody = physics.bodyPixelBox({ x: st.x, y: st.y, size: w, bottomPad: 0 })
+      for (const [oid, rec] of petRegistry) {
+        if (oid === PET_ID || !rec.alive) continue
+        const o = rec.state
+        if (!o || !o.size) continue
+        const otherBody = physics.bodyPixelBox({ x: o.x, y: o.y, size: o.size, bottomPad: o.bottomPad || 0 })
+        if (!physics.rectsOverlap(myBody, otherBody)) continue
+        const hit = physics.collidePet(
+          { x: st.x, y: st.y, vx: st.vx, vy: st.vy, size: w },
+          { x: o.x, y: o.y, vx: o.vx || 0, vy: o.vy || 0, size: o.size },
+        )
+        if (!hit) continue
+        // 自己按动量结果弹开
+        st = { ...st, vx: hit.fvx, vy: hit.fvy }
+        // 被撞方：把它的新初速转发过去，让它自己起飞
+        const targetRec = petRegistry.get(oid)
+        if (targetRec && targetRec.win && !targetRec.win.isDestroyed()) {
+          try { targetRec.win.webContents.send('pet:collide-hit', { vx: hit.hvx, vy: hit.hvy }) } catch {}
+        }
+        break // 一帧只处理一次碰撞，避免连锁抖动
+      }
+    }
+    // 上报飞行状态给 broker（~30ms 节流）：别的宠物据此做跨窗碰撞
+    if (now - lastFlightReport > 30) {
+      lastFlightReport = now
+      updatePetState(PET_ID, { x: st.x, y: st.y, vx: st.vx, vy: st.vy, size: w, bottomPad: 0 })
+    }
+=======
       st = physics.throwStep(st, dt / n, bounds, ph)
       // 硬保险（任务书口径）：throwStep 已按当帧 bounds 反弹；若因跨屏边界突变仍越界，
       // 硬钳回并清该轴速度——宁可少弹一下也绝不飞出屏。正常单屏反弹不受影响（取舍见任务留言）。
@@ -562,6 +1026,7 @@ function startThrow(vx, vy) {
     }
     // 超时兜底也用当帧 bounds：直接贴到当帧地面（旧实现按首帧 area，跨屏后会把 y 钉错地方）
     if (now - t0 > THROW_MAX_MS) st = { ...st, y: bounds.maxY, vx: 0, vy: 0, atRest: true }
+>>>>>>> origin/main
     const px = Math.round(st.x)
     const py = Math.round(st.y)
     const key = px + ',' + py
@@ -1756,15 +2221,55 @@ setInterval(() => {
 ipcMain.on('pet:move', (_e, { x, y }) => {
   stopThrow()
   if (!win || !Number.isFinite(x) || !Number.isFinite(y)) return
+<<<<<<< HEAD
+  // 拖拽前先纠正尺寸：尺寸被撑大时 w/h 是错的，夹取会算出错误的边界，
+  // 结果就是「拖到屏幕下沿、人却还是掉到任务栏下面」。
+  enforceWindowSize('drag-move')
+  const [w, h] = win.getSize()
+  // 拖拽夹取：**窗口整体**必须留在某块屏的工作区内，不能只看左上角。
+  // 旧实现只判左上角在不在屏内，于是「左上角还在屏内、人已经拖到屏幕外」能一路拖出去
+  // —— 这就是「拖拽时才越界」的原因。
+  // 规则（dsh-pet 的 clampPointToRegion 语义）：
+  //   1) 窗口完全落在某块屏工作区内 → 原样放行（允许跨屏自由拖动）
+  //   2) 否则逐块屏夹取，选离目标最近的那块，保证窗口整体可见
+  const ds = screen.getAllDisplays ? screen.getAllDisplays() : [screen.getPrimaryDisplay()]
+  const areas = ds.map((d) => d.workArea)
+  // 目标左上角落到每块屏里的合法位置（窗口整体不出界）
+  let bestX = Math.round(x)
+  let bestY = Math.round(y)
+  let bestD = Infinity
+  for (const a of areas) {
+    const cx = Math.round(Math.min(Math.max(x, a.x), a.x + Math.max(0, a.width - w)))
+    const cy = Math.round(Math.min(Math.max(y, a.y), a.y + Math.max(0, a.height - h)))
+    // 已经完全落在该屏内：直接用，不用再比
+    if (cx === Math.round(x) && cy === Math.round(y)) { bestX = cx; bestY = cy; bestD = 0; break }
+    // 窗口与这块屏有交集、纵向没出界、**且确实有邻屏接壤** → 允许跨缝。
+    // 只有一块屏时绝不能走这条（overlapsX 恒真，横向就完全不受限了）。
+    const overlapsX = x + w > a.x && x < a.x + a.width
+    const touchesNeighbor = areas.some((o) => o !== a &&
+      (Math.abs(o.x - (a.x + a.width)) <= 1 || Math.abs(a.x - (o.x + o.width)) <= 1))
+    if (touchesNeighbor && overlapsX && cy === Math.round(y)) { bestX = Math.round(x); bestY = cy; bestD = 0; break }
+    // 否则记下「夹完离目标多远」，取最近的那块
+    const dx = x - cx
+    const dy = y - cy
+    const d2 = dx * dx + dy * dy
+    if (d2 < bestD) { bestD = d2; bestX = cx; bestY = cy }
+  }
+  const nx = bestX
+  const ny = bestY
+=======
   const [w, h] = winSizeDip()
   const d = virtualDesktopBounds()
   // 夹进虚拟桌面：窗口整体留在屏幕可及范围里（松手后甩抛/落地再把身体精确夹回工作区）
   const nx = Math.round(Math.min(Math.max(x, d.x), d.x + d.w - w))
   const ny = Math.round(Math.min(Math.max(y, d.y), d.y + d.h - h))
+>>>>>>> origin/main
   // 丢弃重复坐标：渲染页已按帧合并，但同一位置仍可能连发（对齐后指针抖动等）——重复就不必再动窗口
   // lastMove 由 setWinPos 统一维护（抛掷/行为移动之后也不会变成陈数据）
   if (lastMove && lastMove.x === nx && lastMove.y === ny) return
   setWinPos(nx, ny)
+  // 拖拽中也要把自己的位置报给 broker：别的宠物飞行时要用我的实时位置做碰撞
+  updatePetState(PET_ID, { x: nx, y: ny, vx: 0, vy: 0, size: w, bottomPad: 0 })
 })
 
 // ---------- 主进程权威拖拽（2026-11-07 新通道 pet:drag-start/move/end；pet:move 保留向后兼容）----------
@@ -1834,22 +2339,219 @@ ipcMain.on('pet:throw', (_e, { vx, vy }) => {
   startThrow(Number(vx) || 0, Number(vy) || 0)
 })
 ipcMain.on('pet:throw-stop', () => stopThrow())
+// ---------- 多桌宠碰撞 broker ----------
+/** 窗口上报自己的实时位置/速度（飞行中 ~30ms 一次，静止时由 pet:move 顺带报）。
+ *  dsh-pet 的 report-flight：broker 汇总后广播，别的窗口据此判断「我撞到它了没」。 */
+ipcMain.on('pet:flight', (e, payload) => {
+  const w = BrowserWindow.fromWebContents(e.sender)
+  if (!w || w.isDestroyed()) return
+  const id = petIdOfWin(w)
+  if (!id) return
+  const s = payload || {}
+  const nums = [s.x, s.y, s.vx, s.vy, s.size, s.bottomPad].map(Number)
+  if (!nums.every(Number.isFinite)) return
+  updatePetState(id, { x: nums[0], y: nums[1], vx: nums[2], vy: nums[3], size: nums[4], bottomPad: nums[5] })
+})
+/** 碰撞结果转发：飞行方算完动量，把被撞方的新初速转发给它，让它自己 startThrow。
+ *  注意通道名用 pet:collide-hit，不能复用 pet:hit（那个是渲染页→主进程的命中上报，方向相反）。 */
+ipcMain.on('pet:collide', (e, payload) => {
+  const targetId = String((payload && payload.targetId) || '')
+  const vx = Number(payload && payload.vx)
+  const vy = Number(payload && payload.vy)
+  if (!targetId || !Number.isFinite(vx) || !Number.isFinite(vy)) return
+  const rec = petRegistry.get(targetId)
+  if (rec && rec.win && !rec.win.isDestroyed()) {
+    try { rec.win.webContents.send('pet:collide-hit', { vx, vy }) } catch {}
+  }
+})
+/** 窗口 → petId 反查。 */
+function petIdOfWin(w) {
+  for (const [id, rec] of petRegistry) if (rec.win === w) return id
+  return ''
+}
+// ---------- 悬停热键 / 拖图 ----------
+/** 悬停时按键（dsh-pet 的 onHotkey）：只在光标停在人物身上时才由渲染页发出。
+ *  sleep-toggle 走插件的睡眠状态机；chat/todo 走各自开关；hear 按住说话。 */
+ipcMain.on('pet:hotkey', (_e, action) => {
+  const a = String(action || '')
+  try {
+    if (a === 'sleep-toggle') {
+      // 睡眠状态机在 sleep 模块里，桌宠这边只负责把意图发过去
+      const h = readHost()
+      if (!h) return
+      fetch(`${h.baseUrl}${h.api}/sleep/toggle`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+        .catch(() => {})
+      return
+    }
+    if (a === 'chat-toggle') { toggleChat(); return }
+    if (a === 'todo-toggle') { sayLocal('待办面板还没接上呢'); return }
+    if (a === 'hear-start') { sayLocal('按住说话还没接上呢'); return }
+    if (a === 'hear-stop') return
+  } catch (e) { appendDebugLog({ kind: 'hotkey-error', action: a, msg: String(e && e.message || e) }) }
+})
+/** 拖图到桌宠身上：把图片路径记下来并打开对话框（dsh-pet 的 showChatFromMenu(file)）。
+ *  当前对话框还不支持挂图，所以先落地一个提示 + 打开对话框。 */
+ipcMain.on('pet:drop-image', (_e, filePath) => {
+  const p = String(filePath || '')
+  appendDebugLog({ kind: 'drop-image', path: p })
+  try {
+    if (chatCfg.enabled && !chatWinAlive()) toggleChat()
+    sayLocal('图收到啦（挂图发送还没接上）')
+  } catch {}
+})
 // 反应层①点击桌宠：渲染页单击（位移 <6px）上报 → 撒娇动画（渲染页 click 池已播）+ 追鼠标（带冷却）
 // 2026-11-01：追鼠标被禁用时只保留渲染页自己的点击动画，不再追/抓鼠标。
 // 1.0.14：petClickChase 开关（面板六键，默认关）也拦这条——关 = 点了只播点击动画，不扑鼠标。
 ipcMain.on('pet:click', () => { if (clickChaseEnabled() && behaviorActionEnabled('chase_cursor')) react('click', () => handleBehavior({ action: 'chase_cursor' }), { note: '主人点了桌宠' }) })
 // 渲染页命中检测：true=鼠标在宠物/气泡上（恢复窗口交互），false=在透明区（放行点击）
+let ignoreNow = true          // 当前是否穿透（镜像，避免与渲染页通道失步）
+let hitBusy = false           // 渲染页正在用鼠标（拖拽中）：绝不因位置判定改穿透
+let offBodyMs = 0             // 光标停在窗口余量区的连续时长
+function setWindowIgnore(ignore) {
+  if (!win || win.isDestroyed()) return
+  try { win.setIgnoreMouseEvents(ignore, { forward: true }) } catch { return }
+  ignoreNow = ignore
+}
 ipcMain.on('pet:hit', (_e, hit) => {
   if (!win || win.isDestroyed()) return
-  try { win.setIgnoreMouseEvents(!hit, { forward: true }) } catch {}
+  setWindowIgnore(!hit)
 })
+// 拖拽租约：渲染页按下时说 busy=true，松开说 false。
+// 拖拽期间宠物滞后于光标，按位置判定会断掉正在用的 pointermove/pointerup（拖到一半突然不动）。
+ipcMain.on('pet:busy', (_e, busy) => { hitBusy = busy === true })
+/** 控件矩形（dsh-pet 的 inputRegions）：菜单/对话框这类浮层长在窗口余量区，
+ *  光标离开身体就穿透、点不到。busy 期间按这些矩形判定「这里也算可交互」。 */
+let inputRegions = { dragging: false, rects: [] }
+ipcMain.on('pet:input-regions', (_e, input) => {
+  const rects = Array.isArray(input && input.rects)
+    ? input.rects.filter((r) => r && [r.x, r.y, r.width, r.height].every(Number.isFinite) && r.width > 0 && r.height > 0)
+    : []
+  inputRegions = { dragging: !!(input && input.dragging), rects }
+})
+// 诊断通道：渲染页把拖拽链路各环节状态打过来，落盘到 debug-crop.log
+ipcMain.on('pet:diag', (_e, payload) => {
+  try { appendDebugLog({ kind: 'diag', tag: payload && payload.tag, data: payload && payload.data }) } catch {}
+})
+// ---------- 光标轮询兜底（从 dsh-pet 的 pointer-target.ts / windows.js 搬来）----------
+// 为什么必须有这条：窗口默认整窗穿透，常规链路只有 Electron 的 forward 鼠标钩子一个入口，
+// 而**该钩子在 Windows 上会静默失效**——失效后渲染页收不到任何 mousemove，
+// 表现出「桌宠点不动、拖不动、右键没反应」，而面板一切正常，极难查。
+// 这里由主进程自己每 60ms 取一次光标位置做判定，不依赖渲染页上报。
+const POINTER_POLL_MS = 60
+const OFF_BODY_RELEASE_MS = 400
+/** 宠物**身体**在屏幕上的矩形（不是整个窗口）：窗口还包含气泡和四周透明余量，
+ *  照窗口判定会让整个 280 宽的区域都吃鼠标，挡住身后一切。 */
+function bodyScreenRect() {
+  if (!win || win.isDestroyed()) return null
+  try {
+    const [wx, wy] = win.getPosition()
+    const [w, h] = win.getSize()
+    const body = bodyBox(w, h)
+    return {
+      left: wx + body.offsetX,
+      top: wy + body.offsetY,
+      right: wx + body.offsetX + body.width,
+      bottom: wy + body.offsetY + body.height,
+      // 气泡也算可交互（点气泡不等于点人，但至少不能穿透）
+      bubbleTop: wy,
+      bubbleLeft: wx,
+      bubbleRight: wx + w,
+      bubbleBottom: wy + Math.max(0, body.offsetY),
+    }
+  } catch { return null }
+}
+let pointerTimer = null
+let sizeWatchTick = 0
+function startPointerFallback() {
+  if (pointerTimer) return
+  pointerTimer = setInterval(() => {
+    // 尺寸巡检（每 ~1.2s 一次，不必每 60ms）：窗口被任何来源撑大都要拉回来。
+    // resize 事件是主路径，这里是兜底 —— 有些撑大走的是 setContentSize / 外部 DPI 变更，
+    // resize 事件会到，但可能来不及在下一帧落地前纠正。
+    if (++sizeWatchTick >= 20) { sizeWatchTick = 0; enforceWindowSize('watchdog') }
+    // 兜底 try：轮询里任何一次异常都会让穿透状态永久卡死。
+    // 之前这里写成 P.pointerZone 而 P 根本没定义，ReferenceError 每 60ms 抛一次，
+    // setWindowIgnore(false) 永远执行不到 —— 表现就是「桌宠完全拖不动、也点不动」。
+    try {
+    if (!win || win.isDestroyed()) return
+    // 拖拽租约（busy）期间：
+    //   · 正在拖（inputRegions.dragging）→ 整窗可交互，绝不能把正在拖的手断掉
+    //   · 只是菜单/对话框开着 → 只有光标在登记的控件矩形上才保持可交互，矩形外继续穿透
+    if (hitBusy) {
+      if (inputRegions.dragging || !inputRegions.rects.length) {
+        if (ignoreNow) setWindowIgnore(false)
+        return
+      }
+      let inControl = false
+      try {
+        const b = win.getBounds()
+        const cp = screen.getCursorScreenPoint()
+        inControl = inputRegions.rects.some((r) =>
+          cp.x >= b.x + r.x && cp.x < b.x + r.x + r.width &&
+          cp.y >= b.y + r.y && cp.y < b.y + r.y + r.height)
+      } catch {}
+      const want = !inControl
+      if (want !== ignoreNow) setWindowIgnore(want)
+      return
+    }
+    let p = null
+    try { p = screen.getCursorScreenPoint() } catch { return }
+    let bounds = null
+    try { bounds = win.getBounds() } catch { return }
+    if (!bounds || bounds.width < 8 || bounds.height < 8) return
+    const zone = physics.pointerZone(bounds, p, bodyScreenRect())
+    const body = bodyScreenRect()
+    // 气泡区域也当身体（可点）；否则气泡弹出时点气泡会穿透到桌面，看起来像“卡住”
+    let inBubble = false
+    if (body) inBubble = p.x >= body.bubbleLeft && p.x < body.bubbleRight && p.y >= body.bubbleTop && p.y < body.bubbleBottom
+    const effZone = inBubble ? 'body' : zone
+    if (effZone === 'margin') offBodyMs += POINTER_POLL_MS
+    else offBodyMs = 0
+    const next = effZone === 'body' ? false
+      : effZone === 'outside' ? true
+        : (offBodyMs >= OFF_BODY_RELEASE_MS ? true : ignoreNow)
+    if (next !== ignoreNow) setWindowIgnore(next)
+    } catch (e) {
+      appendDebugLog({ kind: 'pointer-poll-error', msg: String(e && e.message || e) })
+    }
+  }, POINTER_POLL_MS)
+  pointerTimer.unref?.()
+}
+function stopPointerFallback() {
+  if (pointerTimer) { clearInterval(pointerTimer); pointerTimer = null }
+}
 // 窗口贴合内容（修「空白区域过大」）：窗口本来固定 430 高，气泡区 166px 平时全透明却真占着屏幕。
-// 现在渲染页按内容上报基础高度（气泡收起=264，气泡弹出=264+12+气泡实高+8，上限 430），
+// 现在渲染页按内容上报基础高度（气泡收起=REST_H=324，气泡弹出=324+12+气泡实高+8），
 // 主进程乘当前倍率后改窗高，**底边不动**（窗口向上长/向下缩，桌宠位置视觉不变）。
 // 渲染页报的是缩放前的 CSS px（zoomFactor 只缩内容），这里统一乘 curScale 换算成真实窗口像素。
 /** 按当前 fitBaseH/curScale 调整窗高（底边钉住）。force=true 供拖拽/飞行收尾后补贴。 */
 function applyFitWindow(force) {
   if (!win || win.isDestroyed()) return
+<<<<<<< HEAD
+  // 上限要真的装得下最大气泡：REST_H(324) + 12 + 气泡上限(154) + 8 = 498，比 BASE_H(430) 大。
+  // 按 430 夹会让最后一行被切，气泡一出一收就是"忽大忽小"，所以这里取两者的较大值。
+  const H_MAX_BASE = Math.max(BASE_H, REST_H + 12 + 154 + 8)
+  fitBaseH = Math.min(H_MAX_BASE, Math.max(REST_H, Math.round(Number(baseH)) || REST_H))
+  const minH = Math.round(REST_H * curScale)  // 气泡收起：16(底距)+300(舞台)+8(顶距)
+  const maxH = Math.round(H_MAX_BASE * curScale) // 兜底上限：6 行长文本也放得下
+  const h = Math.min(maxH, Math.max(minH, Math.round(fitBaseH * curScale)))
+  const { w: ew } = expectedWinSize()
+  const [w, oldH] = win.getSize()
+  // 宽度也必须守：宽度被撑大时人物在窗口里的横向位置同样错位。
+  // 但高度差要用容差判：Windows 150% 下 setSize 会读回 ±2px，按严格相等会变成
+  // 「每帧都判成变了 → 每帧 setSize → 窗口永远在抖」。只在**真的需要变**时才动。
+  if (Math.abs(h - oldH) <= 1 && Math.abs(w - ew) <= SIZE_TOLERANCE) return
+  try {
+    const [, y] = win.getPosition()
+    resizingSelf = true
+    try {
+      win.setResizable(true) // 创建时是 resizable:false，编程改尺寸前临时放开
+      win.setSize(ew, h)
+    } finally { resizingSelf = false }
+    // 上沿出生点：钉住**顶边**（人物贴着屏幕上沿不动），气泡在人物下方往下长；
+    // 下沿出生点：钉住底边（原行为，人不动，气泡往上长）。
+    const ny = isTopCorner() ? y : y + oldH - h
+=======
   if (!force && (drag || thrower)) return // 拖拽/飞行中跳过（原因见 pet:fit 注释）
   const minH = Math.round(REST_H * curScale)  // 气泡收起：16(底距)+240(舞台)+8(顶距)
   const maxH = Math.round(BASE_H * curScale)   // 兜底上限：6 行长文本也放得下
@@ -1860,10 +2562,12 @@ function applyFitWindow(force) {
     const [, y] = win.getPosition()
     setSizeDip(w, h)
     const ny = y + oldH - h // 高度差全补在 y 上 = 底边钉住
+>>>>>>> origin/main
     win.setPosition(win.getPosition()[0], ny)
     // 窗口位置变了，移动基线也要跟上：不然拖拽去重拿陈基线会把第一帧当「重复坐标」吞掉
     lastMove = { x: win.getPosition()[0], y: ny }
     win.setResizable(false)
+    invalidateThrowSpace() // 高度变了，边界要按新窗口高重算
   } catch {}
 }
 ipcMain.on('pet:fit', (_e, baseH) => {
@@ -1879,6 +2583,42 @@ ipcMain.handle('pet:screen', () => {
   const area = screen.getDisplayNearestPoint({ x: x + w / 2, y: y + h / 2 }).workArea
   return { W: area.width, H: area.height, x, y, areaX: area.x, areaY: area.y, size: w }
 })
+// 诊断：让渲染页把「人物包围盒 vs 舞台」的真实数据吐回来（查「动画被切掉」用）。
+// 由主进程的 pollLoop 收到 /debug/crop 指令后调用，返回给插件侧。
+async function debugCrop() {
+  if (!win || win.isDestroyed()) return null
+  try {
+    const info = await win.webContents.executeJavaScript('window.__cropInfo ? window.__cropInfo() : null')
+    const names = await win.webContents.executeJavaScript('window.__playAnimInfo ? window.__playAnimInfo() : null')
+    const hits = await win.webContents.executeJavaScript('window.__hitStats || null')
+    const flick = await win.webContents.executeJavaScript('window.__flickInfo ? window.__flickInfo() : null')
+    const idleLoop = await win.webContents.executeJavaScript('window.__idleLoopInfo ? window.__idleLoopInfo() : null')
+    return {
+      crop: info, play: names, hits, flick, idleLoop,
+      winSize: win.getSize(),
+      winPos: win.getPosition(),
+      // 主进程内部状态：排查「窗口被撑大 / 点不动」时看这几个数对不对
+      internal: {
+        BASE_W, REST_H, fitBaseH, curScale,
+        expectW: Math.round(BASE_W * curScale),
+        expectH: Math.round(fitBaseH * curScale),
+        ignoreMouse: win.__ignoreMouse === true,
+        lastMove,
+        resizable: (() => { try { return win.isResizable() } catch { return null } })(),
+        zoom: (() => { try { return win.webContents.getZoomFactor() } catch { return null } })(),
+      },
+    }
+  } catch (e) { return { error: String(e && e.message || e) } }
+}
+/** 诊断：在窗口内某点做命中检测（判断「点不中她」是 DOM 命中问题还是窗口位置问题）。 */
+async function debugProbe(x, y) {
+  if (!win || win.isDestroyed()) return null
+  try { return await win.webContents.executeJavaScript(`window.__probeHit ? window.__probeHit(${Number(x) || 0}, ${Number(y) || 0}) : null`) } catch (e) { return { error: String(e && e.message || e) } }
+}
+async function debugMeasure(name) {
+  if (!win || win.isDestroyed()) return null
+  try { return await win.webContents.executeJavaScript(`window.__measureAnim ? window.__measureAnim(${JSON.stringify(String(name))}) : null`) } catch (e) { return { error: String(e && e.message || e) } }
+}
 
 // ---------- 右键菜单（仿 dsh-pet 的菜单树：工具项 + 「动作」分类级联，动画显示原名） ----------
 /** 读形象包配置、原名映射与素材文件表：直接读盘（packs 就在 host.json 旁边），不依赖插件版本。
@@ -1912,20 +2652,61 @@ async function playAnimById(id) {
   } finally { playRetryPending = false }
   return win && !win.isDestroyed() ? run() : false
 }
-/** 回到初始位置：停掉飞行，回主屏右下角（仿 dsh-pet 的 home）。 */
+/** 出生点：面板「初始位置」选的角落 + 两个边距（pack.position，服务端 /config 下发）。
+ *  dsh-pet 有这张表，搬过来时服务端发了、客户端却一直没读——所以以前怎么改都还是右下角。
+ *  缺字段/坏值一律回落右下角 24/16，与旧行为完全一致。
+ *  算出窗口左上角该在哪（按当前尺寸，工作区优先当前所在屏，屏幕都拔了就用主屏）。 */
+function homePos() {
+  if (!win || win.isDestroyed()) return null
+  const [w, h] = win.getSize()
+  let area = null
+  try {
+    const [wx, wy] = win.getPosition()
+    area = screen.getDisplayNearestPoint({ x: wx + w / 2, y: wy + h / 2 }).workArea
+  } catch { area = null }
+  if (!area) area = screen.getPrimaryDisplay().workArea
+  const p = (pack && pack.position) || {}
+  const corner = CORNERS[p.corner] ? p.corner : 'bottom-right'
+  const mx = Math.max(0, Math.min(2000, Number(p.marginX)))
+  const my = Math.max(0, Math.min(2000, Number(p.marginY)))
+  const marginX = Number.isFinite(mx) ? mx : 24
+  const marginY = Number.isFinite(my) ? my : 16
+  const right = corner.endsWith('right')
+  const bottom = corner.startsWith('bottom')
+  // 边距按**窗口整体**量（不是人物脚底）：窗口 = 可见区域的全部，它的边就是屏幕上的边。
+  // 把 CSS #stage 的 16px 留白掺进来会让窗口底部伸进任务栏 —— 那正是「越过屏幕底」的来源。
+  // 人物脚底自然停在窗口底上方 16px，这是「站在地面上」的正常留白，不需要补偿。
+  const x = right ? area.x + area.width - w - marginX : area.x + marginX
+  const y = bottom ? area.y + area.height - h - marginY : area.y + marginY
+  return {
+    x: Math.round(Math.min(Math.max(x, area.x), area.x + Math.max(0, area.width - w))),
+    y: Math.round(Math.min(Math.max(y, area.y), area.y + Math.max(0, area.height - h))),
+  }
+}
+/** 回到初始位置：停掉飞行，回面板设定的出生点（仿 dsh-pet 的 home）。 */
 function goHome() {
   if (!win || win.isDestroyed()) return
   stopThrow()
+<<<<<<< HEAD
+  const p = homePos()
+  if (p) setWinPos(p.x, p.y)
+=======
   const [w, h] = winSizeDip()
   const area = screen.getPrimaryDisplay().workArea
   setWinPos(area.x + area.width - w - 24, area.y + area.height - h - 16)
+>>>>>>> origin/main
 }
 // 手动碎碎念文案池（真正的碎碎念由插件按面板里的间隔/文案池生成，这里只是插件不可达时的兜底）
 const WHISPERS = ['在吗在吗？', '戳戳你～', '今天也要加油鸭！', '（盯着你看）', '摸鱼一时爽～', '想你啦！']
+/** 直接在气泡里说一句（不走插件）。热键提示、拖图提示等本地反馈都用它。 */
+function sayLocal(text) {
+  try {
+    win?.webContents.executeJavaScript(`window.__whisper && window.__whisper(${JSON.stringify(String(text || ''))})`).catch(() => {})
+  } catch {}
+}
 /** 碎碎念：先请插件走自己的碎碎念流程（/whisper：会带碎碎念动画 + 现想一句）；
  *  插件不可达/没这接口时才退回「本地文案 + 本地气泡」。专注模式下插件会拒绝——那就安静。 */
 function whisper() {
-  const sayLocal = (text) => win?.webContents.executeJavaScript(`window.__whisper && window.__whisper(${JSON.stringify(text)})`).catch(() => {})
   const h = readHost()
   if (!h) return sayLocal(WHISPERS[Math.floor(Math.random() * WHISPERS.length)])
   fetch(`${h.baseUrl}${h.api}/whisper`, {
@@ -2023,14 +2804,65 @@ ipcMain.on('pet:menu', () => {
     { label: '收起气泡', click: hideBubble },
     ...(balanceEnabled ? [{ label: '查看余额', click: showBalance }] : []), // /config 的 balanceEnabled 控制显隐（缺省 true）
     { type: 'separator' },
+    // 睡 / 醒：睡眠状态机在 sleep 模块，这里只把意图发过去
+    { label: '叫她睡觉 / 叫醒', click: () => toggleSleepFromMenu() },
+    // 显示位置：直接挪到对应角落（dsh-pet 的 setPetDisplay）
+    {
+      label: '换个位置',
+      submenu: [
+        { label: '右下角', click: () => moveToCorner('bottom-right') },
+        { label: '左下角', click: () => moveToCorner('bottom-left') },
+        { label: '右上角', click: () => moveToCorner('top-right') },
+        { label: '左上角', click: () => moveToCorner('top-left') },
+      ],
+    },
+    { type: 'separator' },
     { label: '打开面板', click: openPanel },
     { label: focusOn ? '关闭专注模式' : '开启专注模式', click: () => { focusOn = !focusOn; apiPost('/focus', { enabled: focusOn, source: 'pet-menu' }) } },
     { label: '隐藏桌宠', click: () => win?.hide() },
     { type: 'separator' },
-    { label: '退出桌宠', click: () => { running = false; app.quit() } },
+    // 明确的「我不干了」：先告诉插件记下来（下次 DSH 启动不再自动拉起），再退
+    { label: '退出桌宠', click: () => quitByUser('menu') },
   ])
   menu.popup({ window: win })
 })
+/** 菜单「叫她睡觉 / 叫醒」：把意图发给插件，由 sleep 模块的状态机决定实际动作。 */
+function toggleSleepFromMenu() {
+  const h = readHost()
+  if (!h) return sayLocal('插件没连上，先开 DSH 吧')
+  fetch(`${h.baseUrl}${h.api}/sleep/toggle`, {
+    method: 'POST',
+    headers: { 'x-pet-token': h.token, 'content-type': 'application/json' },
+    body: JSON.stringify({ source: 'pet-menu' }),
+  }).then((r) => r.json()).then((d) => {
+    if (d && d.ok === false) sayLocal(String(d.message || '睡眠模块没开'))
+  }).catch(() => sayLocal('叫不动她…'))
+}
+/** 菜单「换个位置」：直接挪到指定角落（用面板配的边距）。 */
+function moveToCorner(corner) {
+  if (!win || win.isDestroyed()) return
+  stopThrow()
+  const [w, h] = win.getSize()
+  let area = null
+  try {
+    const [wx, wy] = win.getPosition()
+    area = screen.getDisplayNearestPoint({ x: wx + w / 2, y: wy + h / 2 }).workArea
+  } catch { area = null }
+  if (!area) area = screen.getPrimaryDisplay().workArea
+  const p = (pack && pack.position) || {}
+  const mx = Number.isFinite(Number(p.marginX)) ? Number(p.marginX) : 24
+  const my = Number.isFinite(Number(p.marginY)) ? Number(p.marginY) : 16
+  const right = String(corner).endsWith('right')
+  const bottom = String(corner).startsWith('bottom')
+  const x = right ? area.x + area.width - w - mx : area.x + mx
+  const y = bottom ? area.y + area.height - h - my : area.y + my
+  setWinPos(
+    Math.round(Math.min(Math.max(x, area.x), area.x + Math.max(0, area.width - w))),
+    Math.round(Math.min(Math.max(y, area.y), area.y + Math.max(0, area.height - h))),
+  )
+  // 上沿/下沿布局要跟着翻（气泡往哪边长）
+  pushCornerToRenderer()
+}
 
 // ---------- 对话框（petChat：主人找她聊的小窗；设计稿 docs/PET-CHAT-DESIGN.md） ----------
 // 独立 BrowserWindow（pet 主窗是点击穿透的，这个要可交互）：小尺寸、无边框，锚定人物旁、出屏钳制。
@@ -2441,17 +3273,45 @@ async function houseCommandWhenReady(cmd, { timeoutMs = 8000 } = {}) {
 // ---------- 窗口 / 托盘 ----------
 function createWindow() {
   win = new BrowserWindow({
-    // 窗口 280×430：16(底距) + 240(1:1 素材) + 12(缝) + 154(气泡) + 8(顶距)
-    width: 280, height: 430,
+    // 初始高度先按「气泡收起」的 REST_H（324）；气泡一弹出，pet:fit 会按实高往上长到 498。
+    // 宽 280 = 20(左距) + 240(舞台) + 20(右距)
+    width: 280, height: REST_H,
     transparent: true, frame: false, hasShadow: false,
     alwaysOnTop: true, skipTaskbar: true, resizable: false,
     webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, 'preload.js') },
   })
   win.setAlwaysOnTop(true, 'screen-saver')
-  // 透明区域放行鼠标点击（不然 280×430 的窗口会挡住身后的一切）；
-  // 渲染页检测到悬停在宠物/气泡上时发 pet:hit=true 恢复交互，离开再放行。
+  // 透明区域放行鼠标点击（不然窗口会挡住身后的一切）。
+  // 两条通道并存：渲染页悬停上报 + 主进程光标轮询兜底（forward 钩子在 Windows 上会静默失效）。
+  ignoreNow = true
   try { win.setIgnoreMouseEvents(true, { forward: true }) } catch {}
   win.loadFile(path.join(__dirname, 'index.html'))
+<<<<<<< HEAD
+  // 渲染页的 JS 报错不会进 stderr：接住它并落盘，否则「整个脚本没跑起来」只能靠猜。
+  win.webContents.on('console-message', (_e, level, message, line, source) => {
+    if (level >= 2) appendDebugLog({ kind: 'console', level, message: String(message).slice(0, 500), line, source: String(source || '').slice(-60) })
+  })
+  win.webContents.on('render-process-gone', (_e, details) => appendDebugLog({ kind: 'renderer-gone', details }))
+  win.webContents.on('preload-error', (_e, p, err) => appendDebugLog({ kind: 'preload-error', p, err: String(err && err.message || err) }))
+  win.once('ready-to-show', () => { clampWindowToArea(); pushPackToRenderer(); startPointerFallback() })
+  win.on('show', () => { clampWindowToArea(); stopThrow(); startPointerFallback() }) // 重新显示时确保回到屏幕内、且没有残留的飞行循环
+  win.on('hide', () => { stopThrow(); stopPointerFallback() })
+  win.on('closed', () => { stopThrow(); stopPointerFallback(); win = null; dropPetState(PET_ID) })
+  // 诊断 + 守卫：谁在改窗口尺寸。
+  // 期望尺寸是 252×346（scale 0.9），实测会被撑到 2081×1008，人物因此沉到任务栏下面。
+  win.on('resize', () => {
+    if (!win || win.isDestroyed()) return
+    try {
+      const [w, h] = win.getSize()
+      const { w: ew, h: eh } = expectedWinSize()
+      // 容差内视为正常（Windows 150% 下读回会差 ±2px），不刷日志也不纠正
+      if (Math.abs(w - ew) <= SIZE_TOLERANCE && Math.abs(h - eh) <= SIZE_TOLERANCE) return
+      appendDebugLog({ kind: 'win-resize', size: [w, h], expect: [ew, eh], fitBaseH, curScale, resizable: win.isResizable(), self: resizingSelf })
+      enforceWindowSize('resize-event')
+    } catch {}
+  })
+  registerPetWindow(PET_ID, win)
+=======
   // ---------- 白屏自愈（2026-11-07）：渲染进程崩溃 / 主框架加载失败后窗口会留着一块白板没人救，
   // 自动重载救回；防崩循环靠「冷却 + 次数上限」，两条路各有一套，互不影响。 ----------
   let lastReloadAt = 0          // 渲染进程崩溃重载的冷却戳（10s 内只救一次）
@@ -2481,6 +3341,7 @@ function createWindow() {
   win.on('show', () => { clampWindowToArea(); stopThrow() }) // 重新显示时确保回到屏幕内、且没有残留的飞行循环
   win.on('hide', () => { stopThrow(); stopDrag() }) // 隐藏/关窗时拖拽循环也要停：stopDrag 不依赖 win，先清再置 null 都安全
   win.on('closed', () => { stopThrow(); stopDrag(); win = null })
+>>>>>>> origin/main
 }
 
 function applyTrayMenu() {
@@ -2511,7 +3372,17 @@ function createTray() {
       'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAEUlEQVR42mNk+M9Qz4AFMGETAG1hCQeukhTbAAAAAElFTkSuQmCC', 'base64'))
     tray = new Tray(img)
     tray.setToolTip('Aurabot 桌宠')
+<<<<<<< HEAD
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: '显示 / 隐藏', click: () => (win ? (win.isVisible() ? win.hide() : win.show()) : createWindow()) },
+      ...(chatCfg.enabled ? [{ label: chatWinAlive() ? '关闭对话框' : '打开对话框', click: toggleChat }] : []),
+      { label: '收起气泡', click: hideBubble },
+      { type: 'separator' },
+      { label: '退出桌宠', click: () => quitByUser('tray') },
+    ]))
+=======
     applyTrayMenu()
+>>>>>>> origin/main
   } catch (e) { console.error('托盘创建失败（不影响气泡）：', e.message) }
 }
 
@@ -2536,7 +3407,13 @@ app.whenReady().then(() => {
   createTray()
   refreshConfig()
   pollLoop()
+  // 注意：不要在这里用 process.ppid 做父子探活。
+  // 实测（2026-11-04）：Electron 被 spawn 出来后 ppid 并不可靠（中间可能隔了一层，
+  // 也可能指向已经退出的启动器），process.kill(ppid, 0) 会立刻误判"父进程已退出"而自杀。
+  // 孤儿问题交给 pollLoop 里的「连续 N 次连不上插件就自退」——那个判据是真实业务信号，不会误杀。
 })
+// 父进程（DSH）守护：插件是被 DSH spawn 出来的，DSH 一关，父 pid 就变成孤儿（Windows 上不会回收）。
+// 插件自己在 will-quit 里也会尝试杀 Electron，但 DSH 被强关 / 崩溃时那条路径走不到，所以要自检。
 app.on('window-all-closed', () => {}) // 关窗不退出，从托盘退
 // 退出前一定放开鼠标裁剪区 + 收掉助手进程：ClipCursor 是系统级状态，带不走就成「用户鼠标被锁死」的事故
 app.on('will-quit', () => { try { releaseCursorClip(); stopCursorHelper(); globalShortcut.unregisterAll() } catch {} })

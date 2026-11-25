@@ -2,12 +2,20 @@
   "id": "pet",
   "name": "桌宠",
   "version": "1.1.0",
+<<<<<<< HEAD
+  "description": "把大肥鱼请到桌面上：会冒气泡、做小动作，你在干活时也陪着你。可调物理手感、初始位置、气泡字体、语音播报，睡着会说梦话。",
+=======
   "description": "把大肥鱼请到桌面上：会冒气泡、做小动作，你在干活时也陪着她，还能用全局热键语音对讲（按一下开听、再按一下发送，ASR→对话→语音合成外放）。",
+>>>>>>> origin/main
   "category": "desktop",
   "tags": [
     "桌宠"
   ],
+<<<<<<< HEAD
+  "author": "风止 / Aurabot",
+=======
   "author": "RookieApe-tao",
+>>>>>>> origin/main
   "license": "MIT",
   "api": 1,
   "minPluginVersion": "1.2.0",

@@ -1250,7 +1250,14 @@ test('启动桌宠：分离进程 + 清 ELECTRON_RUN_AS_NODE；心跳活着提�
     assert.equal(calls.length, 1)
     const c = calls[0]
     assert.equal(c.cmd, exe, '启动的是 app/node_modules/electron 里的 electron.exe')
-    assert.deepEqual(c.args, ['main.js'])
+    // 受限身份（无交互桌面 / 非管理员）下 Electron 直接起会崩，这三个参数是必需的：
+    // --no-sandbox 不崩、--disable-gpu 不刷错误、--user-data-dir 指到模块自己的 userdata。
+    assert.equal(c.args[0], 'main.js')
+    assert.ok(c.args.includes('--no-sandbox'), '带 --no-sandbox（受限身份下否则启动即崩）')
+    assert.ok(c.args.includes('--disable-gpu'), '带 --disable-gpu（GPU 缓存建不出来时刷错误）')
+    const udir = c.args.find((a) => a.startsWith('--user-data-dir='))
+    assert.ok(udir, '带 --user-data-dir（默认 AppData\\Roaming\\Electron 在受限身份下建不了 Network 子目录）')
+    assert.ok(udir.endsWith('userdata'), `user-data-dir 指向模块自己的 userdata：${udir}`)
     assert.equal(c.opts.cwd, appDir)
     assert.equal(c.opts.detached, true, '分离进程（插件重启不带走桌宠）')
     assert.equal(c.opts.env.ELECTRON_RUN_AS_NODE, undefined, '子进程环境必须清掉 ELECTRON_RUN_AS_NODE')
@@ -1691,7 +1698,7 @@ test('碎碎念：自己想一句时走后台回合（工作区能看到思考�
   const r = await env.exports.whisperNow({ force: true }) // force：干活中默认会推后，这里要验的是「想」的内容
   assert.equal(r.ok, true, JSON.stringify(r))
   assert.equal(env.thinkCalls.length, 1, '应该走一次后台系统回合（而不是 api.ask 一次性问答）')
-  assert.equal(env.thinkCalls[0].title, '桌宠 · 碎碎念（自己的回合）', '工作区里那条会话的标题')
+  assert.equal(env.thinkCalls[0].title, '桌宠', '工作区里那条会话的标题（v1.1.0 起四个回合共用一个会话，标题统一为「桌宠」）')
   assert.equal(env.thinkCalls[0].noTools, true)
   const prompt = env.thinkCalls[0].prompt
   assert.match(prompt, /冰美式/, '记忆要进提示词（结合记忆碎碎念）')
@@ -1736,7 +1743,7 @@ test('碎碎念：间隔最小 1 分钟、最大 9999 分钟、每天最多 9999
   assert.equal(w.maxMinutes, 9999)
   assert.equal(w.maxPerDay, 9999)
   assert.equal(w.thinking, false)
-  assert.equal(w.turnTitle, '桌宠 · 碎碎念（自己的回合）')
+  assert.equal(w.turnTitle, '桌宠', 'v1.1.0 起碎碎念/行为/聊天/对话框共用一个会话，标题统一为「桌宠」')
   // 排程确实按 1~9999 分钟抽（不会因为下限被夹高而不动）
   const st = { day: new Date().toDateString(), count: 0, nextAt: 0, recent: [] }
   writeFileSync(env.api.dataDir('whisper.json'), JSON.stringify({ ...st }))
@@ -1815,8 +1822,8 @@ test('对话框：管线——独立回合 key=petChat、走私聊主人记忆�
   assert.ok(r.json.messageId, 'chat 事件与 POST 响应共用 messageId（客户端去重）')
 
   const tc = env.thinkCalls.at(-1)
-  assert.equal(tc.key, 'petChat', '独立后台回合 key=petChat（不抢碎碎念/行为会话）')
-  assert.equal(tc.title, '桌宠 · 对话框（主人找她聊）')
+  assert.equal(tc.key, 'pet', 'v1.1.0 起对话框与碎碎念共用后台会话 key=pet（工作区只留一个「桌宠」窗口）')
+  assert.equal(tc.title, '桌宠', '会话标题统一（回合种类在 prompt 里区分，不再各开一条会话）')
   assert.equal(tc.noTools, true)
   assert.ok(tc.prompt.includes('主人在对话框里找你说话'), '框定语句换成「主人找她聊」')
   assert.ok(!tc.prompt.includes('没有人跟你说话'), '不再用碎碎念的自言自语框定')

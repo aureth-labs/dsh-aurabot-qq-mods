@@ -77,6 +77,20 @@ export default {
     chatBehaviorMaxPerDay: 20,         // 聊天联动每日上限
     petScale: 1,                       // 人物大小倍率（0.5~2.0，1 = 原始 240px；客户端按窗口宽等比缩放）
     petReleaseLand: true,              // 松手后落地：开 = 按甩出速度抛出去并落回屏幕底部（原行为）；关 = 松手停在哪就在哪
+<<<<<<< HEAD
+    petAutoStart: true,                // 随 DSH 自动启动（首次默认开：装上就有「开 DSH 她就在」的体验）
+    // 物理（拖拽抛掷手感，从 dsh-pet 搬来，面板可调）
+    physicsGravity: 1400,              // 重力 px/s²
+    physicsRestitution: 0.78,          // 碰边弹性 0~1
+    physicsGroundFriction: 2.5,        // 地面摩擦 /s
+    physicsCeilingBounce: true,        // 顶部反弹
+    physicsThrowPower: 1,              // 总力度倍率 0.1~3
+    physicsPetCollision: true,         // 多只桌宠互撞（单只时无影响；照 dsh-pet 的 collidePet）
+    // 初始位置（从 dsh-pet 的 position 搬来）
+    petCorner: 'bottom-right',         // 初始角落
+    petMarginX: 24,                    // 水平边距 px
+    petMarginY: 16,                    // 垂直边距 px
+=======
     // 甩抛物理（1.0.14，面板 PR #284 六键中的两键）：客户端把服务端下发的 physics 叠在素材包默认之上
     petGravity: 1400,                  // 下落加速度 px/s²（200~4000；1400 = dsh-pet 原版手感）
     petRestitution: 0.78,              // 落地反弹保留速度比例（0.3~0.95；0.78 = Q 弹不疯跳）
@@ -84,6 +98,7 @@ export default {
     petShowBalance: true,              // 右键菜单「查看余额」：开才显示菜单项
     petClickChase: false,              // 点击扑上来抓鼠标（默认关；关 = 点了只播点击动画不追）
     petTeaseChase: false,              // 晃鼠标勾引追（默认关；关 = 晃鼠标不扑）
+>>>>>>> origin/main
     // 对话框（主人找她聊的小窗，与碎碎念/聊天联动是三码事；永不发 QQ）
     petChatEnabled: false,             // 总开关：默认关（仿行为大脑，面板手动打开）
     petChatHotkey: 'Alt+P',            // 全局快捷键（单键 toggle）；留空 = 不启用；被占用保持关闭
@@ -104,6 +119,22 @@ export default {
     // 才相信 X-Forwarded-For 的**最后一跳**作为真实来源。留空 = 从不相信任何转发头（最安全）。
     // 反代部署时填反代自己的地址，如 127.0.0.1（本机 nginx）或 172.17.0.1（容器网关）。
     trustedProxy: '',
+<<<<<<< HEAD
+    // 以下四项从 dsh-pet 搬来
+    clickSound: true,      // 点桌宠响一声（素材 app/sound/click-duck.wav）
+    memeBubble: true,      // 允许碎碎念带梗图（[图:名字]）
+    dreamTalk: true,       // 睡着时说梦话
+    customFont: true,      // 用素材里的自定义字体
+    fontFamily: 'candy',   // 字体种类（dsh-pet 的 7 种预设）
+    fontSize: 21,          // 气泡字号 px
+    fontFollowPet: true,   // 字号随人物大小缩放
+    // 语音播报（从 dsh-pet 搬来）：总开关 + 三个细分开关 + 音量
+    voiceEnabled: false,        // 总开关：不打开则下面三项一律不念
+    voiceVolume: 1,             // 播放音量 0~1（只改响度，不重新合成，不额外花 TTS）
+    voiceWhisperEnabled: false, // 碎碎念要不要念出来
+    voiceChatEnabled: false,    // 对话框回复要不要念出来
+    voiceTodoEnabled: false,    // 待办提醒要不要念出来
+=======
     // 语音对讲（1.2.0，替代 1.1.2 打电话）：全局热键 toggle 触发，单轮 ASR→think→TTS→可选 RVC，协议见 /voice/talk
     callEngine: 'native',                  // native = 插件自带合成（edge 锁定，失败退 Windows 语音）；sovits = 本地 GPT-SoVITS；voice = 「语音」页接管（豆包，用户自选才碰）
     sovitsUrl: 'http://127.0.0.1:9880',    // GPT-SoVITS 服务地址（callEngine=sovits 时用；参考音频沿用「语音」页的 gptsovits 配置）
@@ -115,6 +146,7 @@ export default {
     callAsrUrl: 'http://127.0.0.1:8000',   // 备选耳朵：本地 faster-whisper（POST /v1/audio/transcriptions）
     callMicDeviceId: '',                   // 对讲麦克风（客户端上报后存这里；空 = 系统默认）
     callSpeakerDeviceId: '',               // 对讲扬声器（客户端上报后存这里；空 = 系统默认）
+>>>>>>> origin/main
   },
   settings: [
     { key: 'carrier', label: '主动搭话载体', type: 'select', options: [{ value: 'qq', label: 'QQ 私聊' }, { value: 'pet', label: '桌宠气泡' }], hint: 'pet 时桌宠不在线会按下面的开关回落到 QQ；两边永不双发' },
@@ -151,6 +183,42 @@ export default {
     { key: 'chatBehaviorMaxPerDay', label: '聊天联动每日上限', type: 'number', min: 0, max: 9999 },
     { key: 'petScale', label: '人物大小（倍）', type: 'number', min: 0.5, max: 2, hint: '桌宠整体缩放倍率：0.5 = 一半大，2 = 两倍大，1 = 原始大小。面板「桌宠」卡的大小滑条改的也是这一项' },
     { key: 'petReleaseLand', label: '松手后落地', type: 'switch', hint: '拖动松手后按甩出速度抛出去、落回屏幕底部（带 Q 弹挤压）；关掉则松手停在哪就在哪，不抛也不落' },
+<<<<<<< HEAD
+    { key: 'petAutoStart', label: '随 DSH 自动启动', type: 'switch', hint: '开：DSH 起来她就自己出来，DSH 关掉她就一起收掉（点「停止桌宠」后，下次启动不会自己出来，直到你再点启动）。关：完全手动，只有点「启动桌宠」才出来' },
+    // ---- 物理手感（从 dsh-pet 的 physics 段搬来，以前写死在包配置里、面板改不了） ----
+    { key: 'physicsGravity', label: '重力', type: 'number', min: 100, max: 6000, step: 50, hint: '越大落得越快、越"重"。默认 1400' },
+    { key: 'physicsRestitution', label: '弹性', type: 'number', min: 0, max: 1, step: 0.02, hint: '碰地面/侧壁的反弹系数。0 = 不弹，1 = 完全不损失。默认 0.78' },
+    { key: 'physicsGroundFriction', label: '地面摩擦', type: 'number', min: 0, max: 20, step: 0.5, hint: '落地后水平速度衰减快慢。默认 2.5' },
+    { key: 'physicsCeilingBounce', label: '顶部反弹', type: 'switch', hint: '往上抛撞到屏幕顶部要不要弹；关掉就贴住顶不动' },
+    { key: 'physicsThrowPower', label: '总力度', type: 'number', min: 0.1, max: 3, step: 0.1, hint: '抛掷总倍率，同时放大弹簧与初速。默认 1' },
+    { key: 'physicsPetCollision', label: '桌宠互撞', type: 'switch', hint: '同时开多只桌宠时，甩出去会互相撞开（动量守恒，质量按体型算）。只有一只时没影响' },
+    // ---- 初始位置（从 dsh-pet 的 position 搬来） ----
+    { key: 'petCorner', label: '初始位置', type: 'select', options: [{ value: 'bottom-right', label: '右下角' }, { value: 'bottom-left', label: '左下角' }, { value: 'top-right', label: '右上角' }, { value: 'top-left', label: '左上角' }], hint: '启动时和「回到初始位置」把她放到哪个角' },
+    { key: 'petMarginX', label: '水平边距（px）', type: 'number', min: 0, max: 2000, step: 2, hint: '离屏幕左右边缘多远。默认 24' },
+    { key: 'petMarginY', label: '垂直边距（px）', type: 'number', min: 0, max: 2000, step: 2, hint: '离屏幕上下边缘多远。默认 16' },
+    // ---- 以下四项从 dsh-pet（MIT License）搬来 ----
+    { key: 'clickSound', label: '点击音效', type: 'switch', hint: '点一下桌宠响一声（素材 app/sound/click-duck.wav；100ms 内连点只响一次）' },
+    { key: 'memeBubble', label: '碎碎念配梗图', type: 'switch', hint: '允许她在气泡末尾用 [图:名字] 配一张梗图；图放在 app/memes 里，没有图就不配' },
+    { key: 'dreamTalk', label: '说梦话', type: 'switch', hint: '睡觉模块睡着时，隔一阵在气泡里嘟囔一句梦话（不发 QQ、不播动画）' },
+    { key: 'customFont', label: '气泡用自定义字体', type: 'switch', hint: '用 app/fonts 里的字体（默认上首软糖体）显示气泡文字' },
+    { key: 'fontFamily', label: '字体', type: 'select', options: [
+      { value: 'candy', label: '软糖体（内置）' },
+      { value: 'yahei', label: '微软雅黑 / 苹方' },
+      { value: 'youyuan', label: '幼圆' },
+      { value: 'kaiti', label: '楷体' },
+      { value: 'simsun', label: '宋体' },
+      { value: 'comic', label: '漫画体' },
+      { value: 'system', label: '系统默认' },
+    ], hint: '软糖体是随包带的；其余是系统字体，机器上没装时自动回退' },
+    { key: 'fontSize', label: '字号（px）', type: 'number', min: 4, max: 200, step: 1, hint: '只影响气泡和悬浮提示，默认 21' },
+    { key: 'fontFollowPet', label: '字号随人物大小缩放', type: 'switch', hint: '开 = 桌宠调大时字跟着大（默认）；关 = 恒为上面那个字号' },
+    // ---- 语音播报（从 dsh-pet 搬来）：总开关 + 三个细分 + 音量 ----
+    { key: 'voiceEnabled', label: '语音播报总开关', type: 'switch', hint: '关着的话下面三个细分开关一律不生效（不会突然冒出声）' },
+    { key: 'voiceVolume', label: '播放音量', type: 'number', min: 0, max: 1, step: 0.05, hint: '0 = 静音，1 = 满音量。只改响度，不重新合成，不额外花 TTS' },
+    { key: 'voiceWhisperEnabled', label: '碎碎念念出来', type: 'switch', hint: '周期碎碎念要不要出声（受总开关约束）。气泡和动画照常' },
+    { key: 'voiceChatEnabled', label: '对话回复念出来', type: 'switch', hint: '桌宠对话框的回复要不要出声（受总开关约束）' },
+    { key: 'voiceTodoEnabled', label: '待办播报念出来', type: 'switch', hint: '待办/提醒推送要不要出声（受总开关约束）' },
+=======
     // 甩抛物理与互动开关（1.0.14，与面板 PR #284 六键同步：宿主白名单已登记，这里补模块侧声明与下发）
     { key: 'petGravity', label: '下落加速度', type: 'number', min: 200, max: 4000, hint: '甩抛后往下掉的加速度（px/s²）。默认 1400（原版手感）；调小飘得慢（月球感），调大掉得快更利落' },
     { key: 'petRestitution', label: '落地反弹系数', type: 'number', min: 0.3, max: 0.95, hint: '落地时保留多少速度反弹（0~1 取小数）。默认 0.78（Q 弹）；调小像砸在地上，调大接近 0.95 会停不下来地跳' },
@@ -158,6 +226,7 @@ export default {
     { key: 'petShowBalance', label: '右键「查看余额」', type: 'switch', hint: '开 = 桌宠右键菜单显示「查看余额」菜单项（点了向插件查询 DeepSeek 账户余额，气泡展示）。默认开；关 = 菜单里不出现这一项' },
     { key: 'petClickChase', label: '点击扑鼠标', type: 'switch', hint: '点击桌宠时扑上来抓鼠标（带冷却）。默认关：关 = 只播点击动画，不追鼠标' },
     { key: 'petTeaseChase', label: '晃鼠标勾引追', type: 'switch', hint: '在桌宠旁边快速晃鼠标时她可能扑上来追（带冷却）。默认关：关 = 晃鼠标不触发追逐' },
+>>>>>>> origin/main
     // 对话框（桌宠旁的小窗聊天：快捷键/右键菜单唤出，按碎碎念同款人格+记忆+当下状态回答，永不发 QQ）
     { key: 'petChatEnabled', label: '对话框', type: 'switch', hint: '开桌宠旁的对话小窗：快捷键或右键菜单唤出，只聊在小窗/气泡里，绝不发 QQ' },
     { key: 'petChatHotkey', label: '对话框快捷键', type: 'text', hint: '全局快捷键，按一次开、再按一次关（如 Alt+P）。留空 = 不启用；被别的程序占用时注册失败，桌宠会气泡提醒一次、功能保持关闭，此处的当前注册状态看「状态」卡' },
@@ -197,6 +266,11 @@ export default {
     const hostFile = () => api.dataDir('host.json')
     const tokenFile = () => api.dataDir('host-token')
     const focusFile = () => api.dataDir('focus.json')
+    // 桌宠「想不想开着」的意图标记（方案 B：跟着 DSH 自动启停）。
+    // 只有面板上的明确动作会写它：点「启动」→ true，点「停止」/托盘退出 → false。
+    // 客户端自己崩溃/孤儿自退**不经过模块**，所以不会把这个标记改掉——
+    // 这正是「你手动关掉的」和「它意外死了」能区分开的原因。
+    const wantedFile = () => api.dataDir('pet-wanted.json')
 
     const readJson = (file, fallback = null) => {
       try {
@@ -578,6 +652,23 @@ export default {
       return api.settings().petReleaseLand !== false
     }
 
+<<<<<<< HEAD
+    /** 随 DSH 自动启动：读不到当开（默认体验：开 DSH 她就在）。 */
+    function petAutoStart() {
+      return api.settings().petAutoStart !== false
+    }
+    /** 读「她想不想开着」。文件不存在 = 还没表态过，按「想」处理（首次装上就该出来）。 */
+    function petWanted() {
+      const w = readJson(wantedFile(), null)
+      if (!w || typeof w !== 'object') return { wanted: true, at: 0, by: 'default' }
+      return { wanted: w.wanted !== false, at: Number(w.at) || 0, by: String(w.by || '') }
+    }
+    /** 记「她想不想开着」。只由面板明确动作调用（启动/停止/托盘退出）。 */
+    function setPetWanted(wanted, by) {
+      const data = { wanted: wanted === true, at: Date.now(), by: String(by || '').slice(0, 32) }
+      try { writeJsonAtomic(wantedFile(), data) } catch (error) { api.log.warn('写 pet-wanted.json 失败：', String(error?.message || error)) }
+      return data
+=======
     // ---------- 甩抛物理与互动开关（1.0.14，面板 PR #284 六键的服务端口径） ----------
     /** 甩抛物理参数：从设置读 gravity/restitution，坏值回落 defaults 口径（gravity 1400 / restitution 0.78）。
      *  客户端把它叠在素材包 physics 默认之上（设置优先于素材包默认），见 pet-client/main.js 的 pet:throw。 */
@@ -606,6 +697,7 @@ export default {
     /** 晃鼠标勾引追开关：`=== true` 口径，同上。 */
     function petTeaseChase() {
       return api.settings().petTeaseChase === true
+>>>>>>> origin/main
     }
 
     // ---------- pet pack（换形象，仿 dsh-pet 目录约定；运行数据只写数据目录） ----------
@@ -633,6 +725,22 @@ export default {
       }
       return out
     }
+    /** 把面板设置里的物理项归一化成客户端 physics 段（与 dsh-pet 的 PhysicsParams 同口径）。
+     *  面板「物理手感」卡和 /config 下发共用这一份，避免两处口径分叉。 */
+    function physicsFromSettings(s) {
+      const numOr = (v, d, lo, hi) => {
+        const n = Number(v)
+        return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d
+      }
+      return {
+        gravity: numOr(s.physicsGravity, 1400, 100, 6000),
+        restitution: numOr(s.physicsRestitution, 0.78, 0, 1),
+        groundFriction: numOr(s.physicsGroundFriction, 2.5, 0, 20),
+        ceilingBounce: s.physicsCeilingBounce !== false,
+        throwPower: numOr(s.physicsThrowPower, 1, 0.1, 3),
+        petCollision: s.physicsPetCollision !== false,
+      }
+    }
     /** 归一化一个包的配置：动画池（idle/speak/click）+ 权重 + 事件映射 + 物理参数；缺失回落默认。
      *  池里写「动画名」（不带 .webm 扩展名，仿 dsh-pet 约定），只保留目录里真实存在的。 */
     function normalizePackConfig(name, raw, anims) {
@@ -641,8 +749,28 @@ export default {
       const poolOf = (k) => (Array.isArray(pools[k]) ? pools[k].filter((n) => names.includes(String(n))) : [])
       const weights = { idle: 60, speak: 25, click: 15, ...((raw && typeof raw.weights === 'object') ? raw.weights : {}) }
       const events = { proactive: 'speak', focus: '', ...((raw && typeof raw.events === 'object') ? raw.events : {}) }
-      const physics = { gravity: 1400, restitution: 0.78, groundFriction: 2.5, ceilingBounce: true, throwPower: 1, ...((raw && typeof raw.physics === 'object') ? raw.physics : {}) }
-      return { name, animations: { idle: poolOf('idle'), speak: poolOf('speak'), click: poolOf('click') }, weights, events, physics }
+      // 物理：面板设置优先（主人可调），没设过就用素材包里的，再没有就用内置默认。
+      // 客户端 main.js 是 { ...DEFAULT_PHYSICS, ...pack.physics }，所以这里发什么它就吃什么。
+      const s = api.settings()
+      const packPhysics = (raw && typeof raw.physics === 'object') ? raw.physics : {}
+      const fromSettings = physicsFromSettings(s)
+      const physics = {}
+      for (const k of Object.keys(fromSettings)) {
+        // 面板明确设过的键用面板值；没设过的键让素材包的同名项顶上（再没有就沿用内置默认）
+        const touched = s[`physics${k[0].toUpperCase()}${k.slice(1)}`] !== undefined
+        physics[k] = (touched || packPhysics[k] === undefined) ? fromSettings[k] : packPhysics[k]
+      }
+      return { name, animations: { idle: poolOf('idle'), speak: poolOf('speak'), click: poolOf('click') }, weights, events, physics, position: petPosition() }
+    }
+
+    /** 桌宠初始位置（从 dsh-pet 的 position 搬来）：客户端按它回到角落 / 贴边距。 */
+    function petPosition() {
+      const s = api.settings()
+      return {
+        corner: String(s.petCorner || 'bottom-right'),
+        marginX: Math.max(0, Math.min(2000, Number(s.petMarginX) || 0) || 24),
+        marginY: Math.max(0, Math.min(2000, Number(s.petMarginY) || 0) || 16),
+      }
     }
 
     // ---------- 干活状态 / 碎碎念的动画映射（默认按 dsh-pet 的中文命名约定识别，可被包配置覆盖） ----------
@@ -668,6 +796,15 @@ export default {
       const hit = names.find((n) => n.toLowerCase() === lower)
       return hit || ''
     }
+    /** 解析一个档位槽位：字符串（固定一段）或数组（档内多候选，客户端轮换用）。
+     *  照 dsh-pet 的 EventSlot 语义——数组槽位才会轮换，单候选就续播同一段。 */
+    function resolveAnimSlot(raw, names, manifest) {
+      if (Array.isArray(raw)) {
+        const out = raw.map((n) => resolveAnimId(n, names, manifest)).filter(Boolean)
+        return out.length ? out : ''
+      }
+      return resolveAnimId(raw, names, manifest)
+    }
     /** 按关键词找第一个命中的素材 id：**先认 manifest 里的中文原名，再认文件名本身**。
      *  （真实 default 包的素材文件名是 anim-001.webm 这类 ASCII 名，「工作状态-思考冒泡」只在
      *   manifest 的原名映射里——只按文件名匹配会全部落空。） */
@@ -690,7 +827,10 @@ export default {
       const custom = (ev.workStatus && typeof ev.workStatus === 'object') ? ev.workStatus : {}
       const workStatus = {}
       for (const st of WORK_STATES) {
-        workStatus[st] = resolveAnimId(custom[st], names, manifest) || findByName(names, WORK_HINTS[st] || [], manifest)
+        // 槽位支持数组（档内多候选轮换）：先按配置解析，再按关键词兜底找一段
+        const slot = resolveAnimSlot(custom[st], names, manifest)
+        if (Array.isArray(slot) && slot.length) workStatus[st] = slot
+        else workStatus[st] = (typeof slot === 'string' && slot) || findByName(names, WORK_HINTS[st] || [], manifest)
       }
       const customWhisper = Array.isArray(ev.whisper) ? ev.whisper : []
       const whisper = customWhisper.map((n) => resolveAnimId(n, names, manifest)).filter(Boolean)
@@ -727,7 +867,52 @@ export default {
         view.labels = labels
       }
       animMapOf(view, raw, (pack.anims || []).map((f) => String(f).replace(/\.webm$/i, '')), manifest)
+      // 梗图清单（从 dsh-pet 搬来）：客户端要的是「名字 → 带 token 的地址」，和 anims 同一套拼法。
+      // 只给名字和描述，图本身走 /pic/memes/<名字>.png。
+      view.memes = memeCatalog(name)
+      // 点击音效（从 dsh-pet 搬来）：app/sound/click-duck.wav 在就下发文件名，客户端据此拼地址
+      try {
+        if (api.settings().clickSound !== false) {
+          const snd = api.dataDir('app', 'sound', 'click-duck.wav')
+          if (existsSync(snd)) view.clickSound = 'click-duck.wav'
+        }
+      } catch {}
+      // 自定义字体（从 dsh-pet 搬来）：app/fonts 下第一个 ttf/otf
+      try {
+        if (api.settings().customFont !== false) {
+          const fonts = readdirSync(api.dataDir('app', 'fonts')).filter((n) => /\.(ttf|otf|woff2?)$/i.test(n))
+          if (fonts.length) view.font = fonts[0]
+        }
+      } catch {}
+      // 字体种类 / 字号（dsh-pet 的 FONT_PRESETS）：客户端据此拼 CSS
+      view.fontStyle = {
+        family: String(api.settings().fontFamily || 'candy'),
+        size: Math.max(4, Math.min(200, Number(api.settings().fontSize) || 21)),
+        followPet: api.settings().fontFollowPet !== false,
+      }
+      // 出生点在上沿（左上/右上）：客户端要把气泡翻到人物下方往下长，否则气泡顶出屏幕
+      view.atTop = String(petPosition().corner || '').startsWith('top')
       return view
+    }
+
+    /**
+     * 梗图素材目录：数据目录 app/memes 下的 png。
+     * 名字 = 文件名去扩展名（与 dsh-pet 的 memes 配置键一致），描述存在 app/memes/descriptions.json，
+     * 没有描述文件时用名字本身当描述（名字就是梗，模型基本猜得出来）。
+     */
+    function memeCatalog() {
+      try {
+        const dir = api.dataDir('app', 'memes')
+        const files = readdirSync(dir).filter((n) => /\.png$/i.test(n) && !n.startsWith('.'))
+        let desc = {}
+        try { desc = JSON.parse(readFileSync(join(dir, 'descriptions.json'), 'utf8')) || {} } catch {}
+        return files.map((n) => {
+          const name = n.replace(/\.png$/i, '')
+          return { name, desc: String(desc[name] || name) }
+        })
+      } catch {
+        return []
+      }
     }
 
     // ---------- 动作点播回执（P2：客户端播完 /playback 上报，留最近 50 条） ----------
@@ -844,7 +1029,15 @@ export default {
       if (!force && focusOn()) return { ok: false, reason: 'focus' } // 专注模式：不发也不回落
       const on = online()
       if (on.online) {
-        const mode = modality === 'voice' || (!modality && s.modality === 'voice') ? 'voice' : 'text'
+        // 语音开关（从 dsh-pet 搬来）：总开关 + 按 purpose 分三个细分。
+        // 以前只有 modality 一个维度，没法「气泡照出、只有碎碎念不出声」。
+        const voiceOn = s.voiceEnabled === true
+        const byPurpose = purpose === 'whisper' ? s.voiceWhisperEnabled === true
+          : purpose === 'todo' ? s.voiceTodoEnabled === true
+            : purpose === 'chat' ? s.voiceChatEnabled === true
+              : false
+        const wantVoice = voiceOn && byPurpose
+        const mode = (wantVoice || modality === 'voice' || (!modality && s.modality === 'voice' && !purpose)) ? 'voice' : 'text'
         let audio = null
         let voiceError = ''
         if (mode === 'voice') {
@@ -859,6 +1052,7 @@ export default {
           text: t.slice(0, 600),
           modality: mode,
           audio,
+          voiceVolume: Math.max(0, Math.min(1, Number(s.voiceVolume ?? 1))),
           voiceError: audio ? '' : voiceError,
           mood: moodNow(),
           emotion: String(emotion || '').slice(0, 20),
@@ -1001,6 +1195,21 @@ export default {
       const dest = api.dataDir('app')
       const files = [...CLIENT_FILES, ...CLIENT_OPTIONAL]
       const copied = []
+      // 素材目录（梗图 / 音效）：整体递归复制，不走 CLIENT_FILES 的平铺清单
+      const ASSET_DIRS = ['memes', 'sound']
+      const copyTree = (from, to, base) => {
+        let list = []
+        try { list = readdirSync(from, { withFileTypes: true }) } catch { return }
+        for (const e of list) {
+          const f = join(from, e.name)
+          if (e.isDirectory()) { copyTree(f, join(to, e.name), base); continue }
+          try {
+            mkdirSync(to, { recursive: true })
+            copyFileSync(f, join(to, e.name))
+            copied.push(`${base}/${e.name}`)
+          } catch {}
+        }
+      }
       try {
         mkdirSync(dest, { recursive: true })
         for (const f of files) {
@@ -1008,6 +1217,10 @@ export default {
           if (!existsSync(from)) continue
           copyFileSync(from, join(dest, f))
           copied.push(f)
+        }
+        for (const d of ASSET_DIRS) {
+          const from = join(src, d)
+          if (existsSync(from)) copyTree(from, join(dest, d), d)
         }
         // 生成凭据：下次 status 对账时用它判断「app/ 是哪个版本的模板生成的」
         const tpl = clientTemplate()
@@ -1637,6 +1850,18 @@ export default {
       }
     }
 
+<<<<<<< HEAD
+    /** 启动桌宠。
+     *  opts.by：谁发起的（'panel' 面板按钮 / 'autostart' DSH 启动时自动拉起）。
+     *  只有**人点的**启动才写「想开着」标记；自动拉起不写，否则「意外死亡」会被洗成「主人想开」。 */
+    function launch(opts = {}) {
+      const by = String(opts.by || 'panel')
+      if (online().online) {
+        // 已经在跑：仍然确认一次意图（面板点启动 = 明确要开着）
+        if (by === 'panel') setPetWanted(true, 'panel-launch')
+        return { ok: true, alreadyRunning: true, message: '桌宠已经在跑了（心跳正常），不用重复启动' }
+      }
+=======
     function launchFailure(reason) {
       const message = `桌宠启动失败：${String(reason).slice(0, 240)}`
       api.log.warn(message)
@@ -1648,6 +1873,7 @@ export default {
       if (online().online) return { ok: true, alreadyRunning: true, message: '桌宠已经在跑了（心跳正常），不用重复启动' }
       const running = recordedPid()
       if (running) return { ok: true, alreadyRunning: true, pid: running.pid, message: '桌宠进程已在运行，尚未收到心跳' }
+>>>>>>> origin/main
       const exe = electronExe()
       if (!existsSync(exe)) return launchFailure('Electron 还没安装：先点「安装 Electron」')
       if (!existsSync(join(appDir(), 'main.js'))) return launchFailure('app/main.js 不见了：先点「下载 / 生成客户端」')
@@ -1655,7 +1881,26 @@ export default {
       let child
       try {
         // 分离进程启动；env 必须去掉 ELECTRON_RUN_AS_NODE（见 cleanElectronEnv）
+<<<<<<< HEAD
+        // 参数说明（2026-11-04 实测补，否则「点了启动没反应」）：
+        //   --no-sandbox      受限身份下不带它，Electron 启动瞬间崩（退出码 0x80000003，无任何输出）
+        //   --disable-gpu     GPU 缓存目录建不出来时刷一片错误，关掉更稳
+        //   --user-data-dir   默认的 AppData\Roaming\Electron 在受限身份下建不了 Network 子目录
+        //                     （拒绝访问 0x5），指到 pet 自己的数据目录里就正常
+        const udir = api.dataDir('userdata')
+        try { mkdirSync(udir, { recursive: true }) } catch {}
+        const child = spawnFn(exe, ['main.js', '--no-sandbox', '--disable-gpu', `--user-data-dir=${udir}`], { cwd: appDir(), env: cleanElectronEnv(), detached: true, stdio: 'ignore', windowsHide: true })
+        child.on?.('error', (error) => api.log.warn('桌宠启动失败：', error.message)) // 没人听就是未捕获异常，会带走 DSH
+        child.unref?.()
+        electronProc = { pid: child.pid, startedAt: Date.now() }
+        try { writeJsonAtomic(procFile(), electronProc) } catch (e) { api.log.debug(`进程文件写入失败：${e.message}`) }
+        // 只有人点的启动才记「想开着」；自动拉起/崩溃自愈都不改意图
+        if (by === 'panel') setPetWanted(true, 'panel-launch')
+        api.log.info(`桌宠已启动（pid ${child.pid}${by === 'autostart' ? '，随 DSH 自动' : ''}）`)
+        return { ok: true, pid: child.pid, message: `桌宠已启动（pid ${child.pid}），等它连上就有心跳了` }
+=======
         child = spawnFn(exe, ['main.js'], { cwd: appDir(), env: cleanElectronEnv(), detached: true, stdio: 'ignore', windowsHide: true })
+>>>>>>> origin/main
       } catch (error) {
         return launchFailure(error?.message || error)
       }
@@ -1696,27 +1941,51 @@ export default {
       return electronStartup
     }
 
-    function stop() {
+    /** 停止桌宠。opts.by：'panel' 面板按钮 / 'dispose' 插件卸载（DSH 退出）。
+     *  只有**人点的**停止才记「不想开着」；DSH 退出时顺手收掉不算主人的意愿——
+     *  否则每次关 DSH 都会把她标成「不想开」，下次启动就永远不自动出来了。 */
+    function stop(opts = {}) {
+      const by = String(opts.by || 'panel')
+      if (by === 'panel') setPetWanted(false, 'panel-stop')
       const p = recordedPid()
       if (!p) return { ok: false, message: '没有正在运行的桌宠进程记录' }
       try { killFn(p.pid) } catch (error) {
+<<<<<<< HEAD
+        // ESRCH = 进程本来就不在了：清理记录、按已停止处理，别让面板卡在「停不掉」
+        if (String(error?.code) === 'ESRCH') {
+          electronProc = null
+          try { unlinkSync(procFile()) } catch {}
+          presence.clear()
+=======
         // ESRCH = 进程在检查后退出：清理记录、按已停止处理。
         if (error?.code === 'ESRCH') {
           forgetProcess(p)
+>>>>>>> origin/main
           return { ok: true, pid: p.pid, message: `桌宠进程（pid ${p.pid}）已经不在了，清掉了记录` }
         }
         return { ok: false, pid: p.pid, message: '停止失败：' + String(error?.message || error).slice(0, 120) }
       }
+<<<<<<< HEAD
+      electronProc = null
+      try { unlinkSync(procFile()) } catch {}
+      // 关键：停止后必须立刻清掉心跳，否则 60 秒内再点「启动」会被 launch() 开头的
+      // 「online().online → alreadyRunning」直接拦回去——面板提示「已启动」但窗口根本不出来。
+      // presence 是纯内存表，进程既然被杀了，里面的时间戳就是陈的，清掉不会误伤。
+      presence.clear()
+      api.log.info(`桌宠已停止（pid ${p.pid}${by === 'dispose' ? '，随 DSH 退出' : ''}）`)
+      return { ok: killed, pid: p.pid, message: killed ? `已停止桌宠（pid ${p.pid}）` : '停止指令没有确认成功，看看进程还在不在' }
+=======
       forgetProcess(p)
       api.log.info(`桌宠已停止（pid ${p.pid}）`)
       return { ok: true, pid: p.pid, message: `已停止桌宠（pid ${p.pid}）` }
+>>>>>>> origin/main
     }
 
     // ---------- pet pack 与素材路由（P1/P4）：packs 目录只读给客户端，404 绝不回落别的包 ----------
     // 注意：模块 route 是「全路径精确匹配」（mods.handle 不做前缀匹配），所以素材按
     //   /asset/<包名>/<文件名> 一条条注册；ensureAssetRoutes() 在启动和每次客户端拉配置时刷新
     //   （新放了素材/新换了包，客户端下一次 /config 就能把路由补齐）。
-    const MIME = { '.webm': 'video/webm', '.png': 'image/png', '.json': 'application/json; charset=utf-8' }
+    const MIME = { '.webm': 'video/webm', '.png': 'image/png', '.json': 'application/json; charset=utf-8', '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.ttf': 'font/ttf', '.otf': 'font/otf', '.woff': 'font/woff', '.woff2': 'font/woff2' }
     const registeredAssets = new Set()
     function serveAsset(res, pack, file) {
       const dir = animsDirOf(pack)
@@ -1755,9 +2024,55 @@ export default {
             }
           }
         }
+        ensureExtraAssetRoutes()
       } catch (error) { api.log.warn('注册素材路由失败：', String(error?.message || error)) }
     }
 
+<<<<<<< HEAD
+    // ---------- 梗图 / 点击音效的静态路由（从 dsh-pet 搬来的素材） ----------
+    // 素材放在数据目录 app/memes 和 app/sound 下，客户端用 /pic/memes/<名字>.png、/sound/<名字>.wav 拉。
+    // 和上面的 pack 素材一样是「全路径精确匹配」，所以启动时扫一遍目录逐个注册。
+    const registeredExtra = new Set()
+    function ensureExtraAssetRoutes() {
+      const appDir = api.dataDir('app')
+      const groups = [
+        { dir: 'memes', url: '/pic/memes', mime: 'image/png' },
+        { dir: 'sound', url: '/sound', mime: null }, // 按扩展名查 MIME
+        { dir: 'fonts', url: '/fonts', mime: null }, // 自定义字体
+      ]
+      for (const g of groups) {
+        let names = []
+        try { names = readdirSync(join(appDir, g.dir)).filter((n) => n && !n.startsWith('.')) } catch { continue }
+        for (const n of names) {
+          const key = `${g.url}/${n}`
+          const keyEnc = `${g.url}/${encodeURIComponent(n)}`
+          if (registeredExtra.has(key)) continue
+          registeredExtra.add(key)
+          const handler = (req, res) => {
+            if (!guard(req, res, { queryTokenOk: true }).ok) return
+            learnHost(req)
+            const full = join(appDir, g.dir, n)
+            let buf = null
+            try { buf = readFileSync(full) } catch {}
+            if (!buf) return api.core.http.send(res, 404, { ok: false, message: '素材不存在' })
+            const ext = n.toLowerCase().slice(n.lastIndexOf('.'))
+            try {
+              res.statusCode = 200
+              res.setHeader?.('content-type', g.mime || MIME[ext] || 'application/octet-stream')
+              res.setHeader?.('cache-control', 'private, max-age=3600')
+              res.setHeader?.('content-length', String(buf.length))
+              res.end?.(buf)
+            } catch {}
+          }
+          for (const k of new Set([key, keyEnc])) {
+            if (registeredAssets.has(k)) continue
+            registeredAssets.add(k)
+            api.route(k, handler)
+          }
+        }
+      }
+    }
+=======
     // ================= 小屋（复式场景窗） =================
     // 移植自 zizic04/dsh-pet-home（MIT）；小屋素材 CC BY-NC-SA 4.0 禁止商用，本机自用。
     // 目录即数据（与 packs 同款思路）：manifest.json + 全部图片平铺在 dataDir('house')，
@@ -1837,6 +2152,7 @@ export default {
       }
       return api.core.http.send(res, 200, { ok: true, state: readJson(houseStateFile(), {}) })
     })
+>>>>>>> origin/main
 
     // ================= 干活状态（DSH 会话事件 → 动画 / 结束提醒） =================
     // 订阅在 host.js（ctx.on('session/event') 已经有一条订阅了），转发到这里：
@@ -1844,7 +2160,10 @@ export default {
     // 纯监听、不调模型；状态无变化不重复 emit（防刷屏）。档位与 dsh-pet 一致：
     //   thinking（思考中）/ working（干活中）/ result（出结果）/ waiting（等你确认）/ success / error
     const WORK_TTL_TERMINAL = 60_000   // 完成/出错只展示 60 秒，过期自然回空闲
-    const WORK_TTL_ACTIVE = 10 * MIN_MS // 中途静默 10 分钟（回合被打断没收到 turn/end）也不许卡在干活
+    // 中途静默多久算「这轮已经没了」。原来是 10 分钟——期间客户端会一直循环重播干活动画，
+    // 视觉上就是卡住+闪。DSH 正常干活时 tool/call 很密（几秒一次），3 分钟没有新事件
+    // 基本可以判定回合已断（重启/被打断丢了 turn/end），所以收到 3 分钟。
+    const WORK_TTL_ACTIVE = 3 * MIN_MS
     const WORK_PRIORITY = { waiting: 60, error: 50, working: 40, thinking: 30, result: 25, success: 20 }
     const workMap = new Map() // sessionId → { state, task, at, seq }
     let workSeq = 0
@@ -1866,6 +2185,20 @@ export default {
       // 只在「档位」变化时推事件：任务文案变了（todo/write）不需要客户端重播动画
       if (stateChanged) emit('work', { ...workSnap, label: WORK_STATE_LABEL[workSnap.state] || '', text: workEndText(workSnap), bubble: workSettings().bubble, notify: workSettings().notify })
       return workSnap
+    }
+    // 定时自愈：workMap 的 TTL 只在「有事件进来」时才会被检查。
+    // DSH 静默（回合被打断 / 重启丢了 turn/end）时快照会永远停在 working，
+    // 客户端就一直循环重播干活动画——看起来既像「卡住」又像「一直在闪」。
+    // 这里每 30 秒主动清一次过期档位，空闲了就把快照推回 null（客户端收到会回 idle）。
+    function workSweep() {
+      if (!workMap.size) return
+      const now = Date.now()
+      let dropped = false
+      for (const [sid, e] of workMap) {
+        const ttl = e.state === 'success' || e.state === 'error' ? WORK_TTL_TERMINAL : WORK_TTL_ACTIVE
+        if (now - e.at > ttl) { workMap.delete(sid); dropped = true }
+      }
+      if (dropped) workSnapshot()
     }
     function workSettings() {
       const s = api.settings()
@@ -1928,7 +2261,12 @@ export default {
       '安静得能听见风扇转…', '（对着屏幕碎碎念）', '偷偷伸个懒腰～', '嗯…今天天气不错。',
     ]
     const WHISPER_AFTER_PROACTIVE_MS = 20 * MIN_MS // 刚弹过主动气泡：碎碎念让位，别连着说（间隔调得很短时按最短间隔算）
-    const WHISPER_TURN_TITLE = '桌宠 · 碎碎念（自己的回合）' // 工作区里那条会话的标题（和「主动搭话（目的回合）」并列，但两码事）
+    // 四个回合共用一个后台会话、一个标题：工作区里只有一条「QQ · 桌宠」。
+    // （原来是「桌宠 · 碎碎念（自己的回合）」这类长标题，每类回合还各开一条会话）
+    const WHISPER_TURN_TITLE = '桌宠'
+    // 桌宠自己的几个回合（碎碎念 / 行为大脑 / 聊天联动 / 对话框）共用一个后台会话，
+    // 工作区里只留一个「桌宠」窗口，不再每类回合各开一条。
+    const PET_SESSION_KEY = 'pet'
     const whisperFile = () => api.dataDir('whisper.json')
     let whisperBusy = false // 正在工作区里"想"这一句（后台系统回合不允许并发）
     function whisperSettings() {
@@ -2070,12 +2408,14 @@ export default {
       const mem = memoryLines()
       const hh = new Date().getHours()
       const part = hh < 6 ? '凌晨' : hh < 11 ? '上午' : hh < 14 ? '中午' : hh < 18 ? '下午' : hh < 23 ? '晚上' : '深夜'
+      const memes = memeCatalogBlock()
       return [
         '（这一轮没有人跟你说话。你在自己的桌面角落自言自语，不是在回复消息，也不是主动搭话找人聊天。）',
         persona ? `【你的人格设定】\n${String(persona).slice(0, 1200)}` : '',
         '【你是一只待在主人电脑桌面角落的小桌宠（大肥鱼）】',
         mem.length ? `【你记得的事】\n${mem.map((t) => '- ' + t).join('\n')}` : '【你记得的事】（记忆库还很空）',
         `【现在】\n${busy}\n时段：${part}。心情：${moodNow()}。${weatherLine()}`,
+        memes,
         st.recent.length ? `【你最近已经嘟囔过】\n${st.recent.slice(-3).map((x) => '「' + x + '」').join('、')}（不要重复这些话）` : '',
         [
           '【怎么写这一句】',
@@ -2083,19 +2423,32 @@ export default {
           '2) 可以轻轻想起上面某件你记得的事——一句带过，像忽然想起来，不要复述整件事、不要汇报；',
           '3) 不提问、不叫主人、不像通知或总结、不解释、不加引号、不加名字前缀；',
           '4) 这一轮不能用任何工具，直接输出那句话。实在不想说就整段只输出 [沉默]。',
-        ].join('\n'),
+          memes ? '5) 想配张图就在整句最后加上 [图:图片名]（名字严格从上面清单里挑，一个字都不能改）；不配就不加。' : '',
+        ].filter(Boolean).join('\n'),
       ].filter(Boolean).join('\n')
+    }
+    /** 梗图清单渲染成提示词一段；没有梗图返回空串。 */
+    function memeCatalogBlock() {
+      try {
+        if (api.settings().memeBubble === false) return ''
+        const list = memeCatalog()
+        if (!list.length) return ''
+        const lines = list.slice(0, 30).map((m) => `- ${m.name}：${m.desc}`)
+        return ['【你能配的梗图】', ...lines].join('\n')
+      } catch {
+        return ''
+      }
     }
     /**
      * 让她自己想一句。走「主动搭话」同款的后台系统回合（hub.runSystemTurn，noTools）：
-     * 工作区里会出现一条「桌宠 · 碎碎念（自己的回合）」的会话，能当场看到她怎么想的
+     * 工作区里那条「QQ · 桌宠」的会话里能看到她怎么想的（和碎碎念 / 行为大脑 / 对话框共用一个会话）
      * ——机制一样，但这条跟目的机制无关：不选目的、不算次数、不投递 QQ。
      */
     async function askWhisper(w, st) {
       const prompt = whisperPrompt(w, st)
       try {
         if (typeof api.think === 'function') {
-          return cleanWhisper(await api.think(prompt, { title: WHISPER_TURN_TITLE, timeoutMs: 120_000, noTools: true }))
+          return cleanWhisper(await api.think(prompt, { title: WHISPER_TURN_TITLE, timeoutMs: 120_000, noTools: true, key: PET_SESSION_KEY }))
         }
         if (typeof api.ask === 'function') { // 老宿主没有 api.think：退回单次问答（工作区看不到思考）
           return cleanWhisper(await api.ask({ text: prompt, maxTokens: 200, temperature: 0.95 }))
@@ -2155,6 +2508,86 @@ export default {
     async function whisperTick() {
       try { await whisperOnce() } catch (error) { api.log.warn('碎碎念出错：', String(error?.message || error)) }
     }
+
+    // ================= 说梦话（从 dsh-pet 搬来） =================
+    // 睡觉模块正在睡的时候，隔一阵子在气泡里嘟囔一句梦话（不打字、不发 QQ、不播动画）。
+    // 睡着判定问 sleep 模块要：sleptAt 有值且还没到醒来的点。
+    const DREAM_TALK_MIN_MS = 8 * MIN_MS
+    const DREAM_TALK_MAX_MS = 25 * MIN_MS
+    let dreamTalkBusy = false
+    function sleepStateOf() {
+      try {
+        const s = api.use('sleep')
+        if (!s || typeof s.state !== 'function') return null
+        const st = s.state() || {}
+        const now = Date.now()
+        if (!st.sleptAt) return null
+        if (st.wokeAt && now >= st.wokeAt) return null
+        return st
+      } catch {
+        return null
+      }
+    }
+    function dreamTalkFile() { return api.dataDir('dream-talk.json') }
+    function loadDreamTalk() {
+      try { return JSON.parse(readFileSync(dreamTalkFile(), 'utf8')) || {} } catch { return {} }
+    }
+    function saveDreamTalk(v) {
+      try { writeFileSync(dreamTalkFile(), JSON.stringify(v, null, 2), 'utf8') } catch {}
+    }
+    function dreamTalkPrompt(st) {
+      let persona = ''
+      try { persona = api.core?.personas?.current?.() || '' } catch {}
+      const frag = Array.isArray(st.frags) && st.frags.length ? st.frags.slice(0, 5).join('\n') : ''
+      return [
+        '（你在睡觉，正在做梦。这一轮没人在叫你，你只是在梦里嘟囔一句梦话。）',
+        persona ? `【你的人格设定】\n${String(persona).slice(0, 600)}` : '',
+        frag ? `【梦里的碎片】\n${frag}` : '',
+        [
+          '【要求】',
+          '1) 只输出一句 15 字以内的梦话，含含糊糊、断断续续，像没睡醒；',
+          '2) 可以只有半句、可以叫一个名字、可以说一个画面，不要完整句子；',
+          '3) 不加引号、不加名字前缀、不解释、不提「梦」「睡觉」这些词；',
+          '4) 实在没得说就整段只输出 [沉默]。',
+        ].join('\n'),
+      ].filter(Boolean).join('\n')
+    }
+    async function dreamTalkTick() {
+      if (dreamTalkBusy) return
+      if (api.settings().dreamTalk === false) return
+      const st = sleepStateOf()
+      if (!st) return
+      const cfg = loadDreamTalk()
+      if (cfg.nextAt && Date.now() < cfg.nextAt) return
+      dreamTalkBusy = true
+      try {
+        let text = ''
+        try {
+          if (typeof api.think === 'function') {
+            text = cleanWhisper(await api.think(dreamTalkPrompt(st), { title: PET_SESSION_KEY === 'pet' ? '桌宠' : '桌宠', timeoutMs: 90_000, noTools: true, key: PET_SESSION_KEY }))
+          } else if (typeof api.ask === 'function') {
+            text = cleanWhisper(await api.ask({ text: dreamTalkPrompt(st), maxTokens: 120, temperature: 0.95 }))
+          }
+        } catch (error) {
+          api.log.debug?.('说梦话失败：', String(error?.message || error))
+        }
+        const gap = DREAM_TALK_MIN_MS + Math.floor(Math.random() * (DREAM_TALK_MAX_MS - DREAM_TALK_MIN_MS))
+        const next = loadDreamTalk()
+        next.nextAt = Date.now() + gap
+        if (text && !/^\[沉默\]$/.test(text)) {
+          next.lastText = text
+          next.lastAt = Date.now()
+          saveDreamTalk(next)
+          try { dispatch({ text, modality: 'text', purpose: 'dreamTalk', force: true }) } catch (error) {
+            api.log.debug?.('梦话投递失败：', String(error?.message || error))
+          }
+        } else {
+          saveDreamTalk(next)
+        }
+      } finally {
+        dreamTalkBusy = false
+      }
+    }
     function whisperStatus() {
       const w = whisperSettings()
       const st = loadWhisper()
@@ -2208,7 +2641,7 @@ export default {
       '（自己转了个圈，没盯住鼠标）', '（趴下打了个盹）', '（尾巴甩了甩）',
       '（伸了个懒腰）', '（盯着鼠标发了一会儿呆）', '（原地踱了两步）',
     ]
-    const BEHAVIOR_TURN_TITLE = '桌宠 · 行为大脑（自己的回合）'
+    const BEHAVIOR_TURN_TITLE = '桌宠'
     const behaviorFile = () => api.dataDir('behavior.json')
     // 客户端定时上报的「桌面环境·窗口清单」（2026-10-30）：窗口只有客户端能枚举（它已经有 PowerShell 桥），
     // 服务端不重复造一套；过期（10 分钟没更新）就当没读到，绝不让 AI 拿着十分钟前的窗口名去点名。
@@ -2353,7 +2786,7 @@ export default {
     async function askBehavior(b, st) {
       const prompt = behaviorPrompt(b, st)
       try {
-        if (typeof api.think === 'function') return await api.think(prompt, { title: BEHAVIOR_TURN_TITLE, timeoutMs: 120_000, noTools: true, key: 'behavior' })
+        if (typeof api.think === 'function') return await api.think(prompt, { title: BEHAVIOR_TURN_TITLE, timeoutMs: 120_000, noTools: true, key: PET_SESSION_KEY })
         if (typeof api.ask === 'function') return await api.ask({ text: prompt, maxTokens: 200, temperature: 0.7 })
         return ''
       } catch (error) {
@@ -2596,7 +3029,7 @@ export default {
     //   3. 独立开关 / 独立冷却 / 独立每日上限 / 独立状态文件（chat-behavior.json），与定时行为大脑互不知晓。
     //   4. 决策走独立 key 的后台回合（key:'chatBehavior'），不与碎碎念/行为大脑抢同一条会话。
     const CHAT_ACTIONS = new Set(['chase_cursor', 'wander', 'idle_anim', 'say'])
-    const CHAT_TURN_TITLE = '桌宠 · 聊天联动（主人在聊天）'
+    const CHAT_TURN_TITLE = '桌宠'
     const chatFile = () => api.dataDir('chat-behavior.json')
     let chatBusy = false // 决策回合进行中：不允许并发（仿 behaviorBusy）
     function chatSettings() {
@@ -2700,7 +3133,7 @@ export default {
       let raw = ''
       chatBusy = true
       try {
-        if (typeof api.think === 'function') raw = await api.think(chatPrompt(msg), { title: CHAT_TURN_TITLE, timeoutMs: 60_000, noTools: true, key: 'chatBehavior' })
+        if (typeof api.think === 'function') raw = await api.think(chatPrompt(msg), { title: CHAT_TURN_TITLE, timeoutMs: 60_000, noTools: true, key: PET_SESSION_KEY })
         else if (typeof api.ask === 'function') raw = await api.ask({ text: chatPrompt(msg), maxTokens: 120, temperature: 0.7 })
       } catch (error) {
         api.log.debug?.('聊天联动决策失败（忽略）：', String(error?.message || error))
@@ -2735,7 +3168,7 @@ export default {
     // 主动找她说话，她按「主人私聊」同款语义回答（人格 + 记忆 + 当下状态）。铁律：**永不发 QQ**。
     // 回合归属：独立后台回合 key='petChat'（与碎碎念/behavior/chatBehavior 并列，工作区单独成条、
     // 不抢会话）；并发锁独立命名 petChatBusy，上一句没答完就拒收新句。
-    const PETCHAT_TURN_TITLE = '桌宠 · 对话框（主人找她聊）'
+    const PETCHAT_TURN_TITLE = '桌宠'
     const CHAT_HISTORY_LIMIT_PROMPT = 8   // prompt 里附的「最近聊过」条数（多轮上下文兜底，不赌 hub 行为）
     const chatHistFile = () => api.dataDir('chat/history.jsonl')
     let petChatBusy = false               // 一轮回答要几十秒：上一句还没答完就拒收新句（仿 whisperBusy）
@@ -2949,7 +3382,7 @@ export default {
         try {
           const prompt = petChatPrompt(text, prevText)
           if (typeof api.think === 'function') {
-            raw = await api.think(prompt, { title: PETCHAT_TURN_TITLE, timeoutMs: 120_000, noTools: true, key: 'petChat' })
+            raw = await api.think(prompt, { title: PETCHAT_TURN_TITLE, timeoutMs: 120_000, noTools: true, key: PET_SESSION_KEY })
           } else if (typeof api.ask === 'function') { // 老宿主没有 api.think：退回单次问答（工作区看不到思考）
             raw = await api.ask({ text: prompt, maxTokens: 300, temperature: 0.8 })
           }
@@ -3721,6 +4154,30 @@ export default {
       emit('pack', { pack: name })
       api.core.http.send(res, 200, { ok: true, pack: packView() })
     })
+    // 出生点（角落 + 边距）：模块自己落盘。
+    // 注意面板**不能**直接打这条 /position：模块路由全部过 guard()，要 pet 的 bearer 令牌，
+    // 而令牌在数据目录里、浏览器拿不到。面板走核心的 /panel/pet/position（host.js 代理到这个 setPosition）。
+    function setPosition(body) {
+      const b = body && typeof body === 'object' ? body : {}
+      const patch = {}
+      const corner = String(b.corner || '')
+      if (['bottom-right', 'bottom-left', 'top-right', 'top-left'].includes(corner)) patch.petCorner = corner
+      // 入参既接受面板的短名（marginX/marginY），也接受设置里的全名（petMarginX/petMarginY）
+      for (const [out, hi] of [['petMarginX', 2000], ['petMarginY', 2000]]) {
+        const raw = b[out] != null ? b[out] : b[out === 'petMarginX' ? 'marginX' : 'marginY']
+        if (raw != null && Number.isFinite(Number(raw))) patch[out] = Math.min(hi, Math.max(0, Math.round(Number(raw))))
+      }
+      if (!Object.keys(patch).length) return { ok: false, message: '没有可保存的字段' }
+      api.saveSettings(patch)
+      emit('config', { position: petPosition() }) // 客户端下一轮 /config 就能拿到新角落并挪过去
+      return { ok: true, position: petPosition() }
+    }
+    api.route('/position', async (req, res) => {
+      if (!guard(req, res).ok) return
+      if (req.method !== 'POST') return api.core.http.send(res, 200, { ok: true, position: petPosition() })
+      const r = setPosition(await api.core.http.body(req))
+      api.core.http.send(res, r.ok ? 200 : 400, r)
+    })
     // ---------- 默认素材包（手动重下）：POST /packs/fetch-default，body 留空 {} 即可 ----------
     // force=true：包已在也重新下载（换镜像地址后点这个）。自动落位走启动后 5 秒 + every 兜底轮询。
     api.route('/packs/fetch-default', async (req, res) => {
@@ -3728,6 +4185,64 @@ export default {
       const r = await ensureDefaultPack(true)
       ensureAssetRoutes()
       api.core.http.send(res, r.ok ? 200 : 502, r)
+    })
+    // ---------- 诊断：动画有没有被舞台切掉（debugCrop / debugMeasure） ----------
+    // 用途：量「人物包围盒 vs 240×240 舞台」的真实比例，判断某些动画是不是超出框被裁。
+    // 流程：POST /debug/crop（或 /debug/measure）→ emit 事件给客户端 → 客户端回 /debug/report → 这里等结果。
+    const debugWaiters = new Map() // id → { resolve, timer }
+    let debugSeq = 0
+    function debugAsk(type, payload = {}, timeoutMs = 35_000) {
+      const id = `dbg${++debugSeq}`
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => { debugWaiters.delete(id); resolve({ ok: false, message: '客户端没回话（没在线或渲染页没 ready）' }) }, timeoutMs) // 超时要比客户端 pollLoop（25s）长：8 秒会卡在「事件已排队、客户端还没轮到」的中间，正是之前测不到数据的真正原因
+        timer.unref?.()
+        debugWaiters.set(id, { resolve, timer })
+        // 注意：**不能**把 id 直接塞进 payload。emit() 是 `{ id: ++seq, ...payload }`，
+        // payload 里的 id 会覆盖队列序号 id，而客户端按 `e.id > since` 过滤——
+        // 字符串 id 和数字比较永远为 false，事件会被静默丢掉（排查过一次，别再踩）。
+        emit(type, { ...payload, askId: id })
+      })
+    }
+    api.route('/debug/report', async (req, res) => {
+      if (!guard(req, res).ok) return
+      const body = await api.core.http.body(req)
+      const id = String(body.id || '')
+      const w = debugWaiters.get(id)
+      if (w) {
+        debugWaiters.delete(id)
+        try { clearTimeout(w.timer) } catch {}
+        w.resolve({ ok: true, kind: body.kind, result: body.result })
+      }
+      api.core.http.send(res, 200, { ok: true })
+    })
+    api.route('/debug/crop', async (req, res) => {
+      if (!guard(req, res).ok) return
+      if (!online().online) return api.core.http.send(res, 200, { ok: false, message: '桌宠没在线，先启动她' })
+      api.core.http.send(res, 200, await debugAsk('debugCrop'))
+    })
+    api.route('/debug/measure', async (req, res) => {
+      if (!guard(req, res).ok) return
+      if (!online().online) return api.core.http.send(res, 200, { ok: false, message: '桌宠没在线，先启动她' })
+      const body = await api.core.http.body(req)
+      api.core.http.send(res, 200, await debugAsk('debugMeasure', { anim: String(body.anim || '') }))
+    })
+    // 命中探测：给窗口内坐标，回报命中的 DOM 元素（查「点不中/拖不动」是 DOM 还是坐标问题）
+    api.route('/debug/probe', async (req, res) => {
+      if (!guard(req, res).ok) return
+      if (!online().online) return api.core.http.send(res, 200, { ok: false, message: '桌宠没在线，先启动她' })
+      const body = await api.core.http.body(req)
+      api.core.http.send(res, 200, await debugAsk('debugProbe', { x: Number(body.x) || 0, y: Number(body.y) || 0 }))
+    })
+    // ---------- 客户端主动「我不干了」（托盘点退出、右键点退出） ----------
+    // 这是**主人的明确意图**（他就是不想让她开着），所以要记进 pet-wanted，
+    // 下次 DSH 启动不会自动冒出来。跟「崩溃/连不上自退」区分开：那条路客户端直接 app.quit()，
+    // 根本不会来打这个接口，意图标记保持原样，下次照样自动拉起。
+    api.route('/intent/quit', async (req, res) => {
+      if (!guard(req, res).ok) return
+      setPetWanted(false, 'client-quit')
+      try { const p = recordedPid(); if (p) { electronProc = null; try { unlinkSync(procFile()) } catch {} } } catch {}
+      api.log.info('桌宠从客户端退出（托盘/右键），已记下「不想开着」：下次 DSH 启动不会自动拉起')
+      api.core.http.send(res, 200, { ok: true })
     })
     // ---------- 动画播放回执（P2）：客户端播完点播动画后 POST {playbackId,status} ----------
     // 行为动作扩展：status 允许 played / failed / refused（被安全闸拦），可带 reason/action 字段。
@@ -3928,7 +4443,11 @@ export default {
     const offHostTimer = api.every(120_000, () => { writeHostFile(true); ensureAssetRoutes(); ensureHouseRoutes() }, '刷新 host.json 与素材路由')
     // 碎碎念：60s 心跳里只做「读一次状态文件 + 纯逻辑判断」，重活都别放进 tick
     const offWhisper = api.every(60_000, () => whisperTick(), '碎碎念')
+    // 说梦话：睡着时才有动作，醒着直接 return（一次读文件，很轻）
+    const offDreamTalk = api.every(60_000, () => dreamTalkTick(), '说梦话')
     const offBehavior = api.every(60_000, () => behaviorTick(), '行为大脑')
+    // 干活状态自愈：DSH 静默时把过期档位清掉，别让客户端一直循环播「干活中」（表现为卡住 + 闪）
+    const offWorkSweep = api.every(30_000, () => { try { workSweep() } catch {} }, '干活状态自愈')
     // 聊天联动：只读观察 activity 事件（宿主广播，只看不拦）；旧宿主/fake api 没有 on 时静默跳过
     if (typeof api.on === 'function') {
       api.on('activity', (msg) => { try { chatBehaviorFire(msg) } catch (e) { api.log.debug(`聊天联动处理 activity 失败：${e.message}`) } })
@@ -3941,8 +4460,43 @@ export default {
     // 天气低频刷新（≥30 分钟一次；城市没配时函数内部直接跳过）。测试环境不打真网络，靠手动调 weatherFetchOnce
     const offWeather = api.every(WEATHER_TTL_MS, () => { weatherFetchOnce().catch(() => {}) }, '天气低频刷新')
     if (!api.__petTestHooks) setTimeout(() => { weatherFetchOnce().catch(() => {}) }, 3_000).unref?.()
-    api.onDispose(() => { offHostTimer(); offWhisper(); offBehavior(); offIconSweep(); offChatSweep(); offWeather(); waiters.clear(); presence.clear(); workMap.clear() })
+    api.onDispose(() => {
+      offHostTimer(); offWhisper(); offDreamTalk(); offBehavior(); offIconSweep(); offChatSweep(); offWeather(); offWorkSweep()
+      waiters.clear(); presence.clear(); workMap.clear()
+      // 插件卸载（DSH 正常退出 / 模块重载）时把桌宠一起收掉，别让它变成留在屏幕上的孤儿。
+      // 客户端自己也有父进程守护（DSH 崩溃/强关那条路径），两重保险。
+      // by:'dispose' —— 这是「跟着 DSH 走」，不是主人说不要了，所以不动 pet-wanted 标记。
+      try {
+        const p = recordedPid()
+        if (p && Number.isInteger(p.pid) && p.pid > 0) {
+          try { stop({ by: 'dispose' }) } catch {}
+        }
+      } catch {}
+    })
     api.log.info(`桌宠模块就绪：host.json 在 ${hostFile()}（端口由宿主注入，Host 头学习保留作漂移纠正）`)
+
+    // ---------- 随 DSH 自动启动（方案 B） ----------
+    // 判据三条全中才拉起：
+    //   ① 面板开关「随 DSH 自动启动」是开的（petAutoStart，默认开）；
+    //   ② 她「想开着」（pet-wanted.json：上次是点启动留下的 true，或从没表态过）。
+    //      —— 你点过「停止」这里就是 false，重启 DSH 不会再自己冒出来，尊重你的意图。
+    //   ③ 现在没有已经在跑的（onDispose 已经把上次那个收掉了，正常不会撞上）。
+    // 延迟 4 秒：等宿主把端口注入完、host.json 写成真实 baseUrl，否则客户端起来读不到可连的地址。
+    // 失败只记日志、不抛——自动拉起是锦上添花，绝不能因此影响插件启动。
+    if (!api.__petTestHooks) {
+      setTimeout(() => {
+        try {
+          if (!petAutoStart()) { api.log.info('桌宠自动启动：面板开关是关的，跳过'); return }
+          const w = petWanted()
+          if (!w.wanted) { api.log.info(`桌宠自动启动：上次是手动停止（${w.by || '未知'}），尊重意图不拉起`); return }
+          if (online().online) { api.log.info('桌宠自动启动：已经在跑了，跳过'); return }
+          const r = launch({ by: 'autostart' })
+          if (!r.ok) api.log.warn(`桌宠自动启动没成功：${r.message}`)
+        } catch (error) {
+          api.log.warn('桌宠自动启动出错（不影响插件）：', String(error?.message || error))
+        }
+      }, 4_000).unref?.()
+    }
 
     return {
       dispatch,
@@ -3962,6 +4516,13 @@ export default {
       electronInstall,                       // 面板经 /panel/pet/electron-install 调（npmmirror 镜像装 Electron）
       launch,                                // 面板经 /panel/pet/launch 调（分离进程启动 electron.exe main.js）
       stop,                                  // 面板经 /panel/pet/stop 调（杀记录的 pid）
+      setPosition,                           // 面板经 /panel/pet/position 调（出生点：角落 + 边距）
+      setAutoStart: (on) => {
+        // 面板「随 DSH 自动启动」开关：关掉时顺便把她「想开着」的意图留原样，
+        // 只决定「下次 DSH 启动要不要自己拉起」，不影响当前已经开着的那只。
+        api.saveSettings({ petAutoStart: on === true })
+        return { ok: true, autoStart: petAutoStart() }
+      },
       packs: listPacks,
       activePack,
       packView,
@@ -4008,15 +4569,33 @@ export default {
       balance: fetchBalance,                 // 测试钩子：余额查询（可配 petHooks.fetchBalance；默认诚实降级回 ok:false）
       onSessionEvent,                        // host.js 把 ctx.on('session/event') 转发进来
       workStatus: () => ({ ...workSnapshot(), label: WORK_STATE_LABEL[workSnap.state] || '', text: workEndText(workSnap) }),
+      // 诊断：workMap 里每个会话的档位与「多久没更新了」，用来判断是不是真有活在干
+      workDebug: () => {
+        const now = Date.now()
+        return {
+          snap: { ...workSnap },
+          sessions: [...workMap.entries()].map(([sid, e]) => ({ sid: sid.slice(0, 40), state: e.state, task: e.task, ageSec: Math.round((now - e.at) / 1000) })),
+          ttlActiveSec: WORK_TTL_ACTIVE / 1000,
+        }
+      },
       status: () => {
         const s = api.settings()
         const w = workSettings()
         return {
           ...online(), focus: focusOn(), scale: petScale(), releaseLand: petReleaseLand(), carrier: s.carrier, modality: s.modality, bootId, seq,
+<<<<<<< HEAD
+          // 出生点（面板「初始位置」三件套）：内建模块的 settings 不渲染表单，面板只能从 status 读当前值
+          position: petPosition(),
+          // 物理手感：面板「物理手感」卡从这里读当前值（内建模块的 settings 不渲染表单）
+          physics: physicsFromSettings(s),
+          // 随 DSH 自动启停：autoStart 是面板开关，wanted 是她「想不想开着」（点停止后就是 false）
+          autoStart: petAutoStart(), wanted: petWanted(),
+=======
           // 甩抛物理与互动开关（1.0.14）：面板守卫 pet.physics / pet.animRate / pet.balanceEnabled /
           // pet.clickChase / pet.teaseChase 看的就是这份（host.js /panel/pet/status 用 use('pet').status()）
           physics: petPhysics(), animRate: petAnimRate(),
           balanceEnabled: petShowBalance(), clickChase: petClickChase(), teaseChase: petTeaseChase(),
+>>>>>>> origin/main
           pack: activePack(), playbackCount: playbacks.length,
           // 素材包概况：面板「素材包」卡用它显示状态（内建模块的 settings 不渲染表单，只能走 status + /panel/pet/*）
           packInfo: (() => {
@@ -4060,3 +4639,4 @@ export default {
     }
   },
 }
+

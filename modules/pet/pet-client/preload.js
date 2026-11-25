@@ -26,10 +26,45 @@ contextBridge.exposeInMainWorld('petBridge', {
   fitWindow: (baseH) => ipcRenderer.send('pet:fit', Number(baseH) || 0),
   /** 命中检测上报：true=悬停在宠物/气泡上（窗口恢复交互），false=在透明区（点击穿透）。 */
   setHit: (hit) => ipcRenderer.send('pet:hit', Boolean(hit)),
+  /** 拖拽租约上报：true=正在拖（主进程在此期间绝不改穿透），false=松手了。
+   *  不加这条的话，光标轮询兜底会在拖拽中途按位置判定把窗口翻成穿透，
+   *  导致 pointermove/pointerup 断掉——表现就是「拖到一半突然不动了」。 */
+  setBusy: (busy) => ipcRenderer.send('pet:busy', Boolean(busy)),
   /** 右键菜单：渲染页 contextmenu → 主进程弹原生菜单（仿 dsh-pet 的右键菜单）。 */
   showMenu: () => ipcRenderer.send('pet:menu'),
   /** 反应层①点击桌宠上报：渲染页单击（非拖拽）时调用，主进程触发「撒娇+追鼠标」。 */
   reportClick: () => ipcRenderer.send('pet:click'),
   /** 主动连上插件问一次配置/状态（菜单项「换个动作」等需要确认在线时用，可选）。 */
   ping: () => ipcRenderer.send('pet:ping'),
+  /** 诊断：把渲染页里的拖拽链路状态写到主进程日志（查「拖不动」用）。 */
+  diag: (tag, data) => ipcRenderer.send('pet:diag', { tag: String(tag), data }),
+
+  // ---------- 多桌宠碰撞（dsh-pet 的 broker 协议）----------
+  /** 上报自己的实时位置/速度：主进程汇总后广播给所有窗口，别的窗口据此做碰撞检测。
+   *  单位是**屏幕物理像素**（与 broker 一致），渲染页负责 ×scale。 */
+  reportFlight: (state) => ipcRenderer.send('pet:flight', state),
+  /** 告诉主进程「我撞到了 targetId，它的新初速是 vx/vy」：主进程转发给被撞方窗口。 */
+  reportCollide: (targetId, vx, vy) => ipcRenderer.send('pet:collide', { targetId, vx, vy }),
+  /** 订阅其它宠物的实时状态：{ petId: {x,y,vx,vy,size,bottomPad} }。 */
+  onFlightStates: (cb) => {
+    if (typeof cb !== 'function') return () => {}
+    const h = (_e, states) => { try { cb(states) } catch {} }
+    ipcRenderer.on('pet:flight-states', h)
+    return () => ipcRenderer.removeListener('pet:flight-states', h)
+  },
+  /** 订阅「我被别的宠物撞了」：主进程把动量结果推过来，自己 startThrow 接住。 */
+  onCollideHit: (cb) => {
+    if (typeof cb !== 'function') return () => {}
+    const h = (_e, v) => { try { cb(v) } catch {} }
+    ipcRenderer.on('pet:collide-hit', h)
+    return () => ipcRenderer.removeListener('pet:collide-hit', h)
+  },
+  /** 悬停热键：sleep-toggle / chat-toggle / todo-toggle / hear-start / hear-stop。 */
+  hotkey: (action) => ipcRenderer.send('pet:hotkey', String(action)),
+  /** 拖图到桌宠身上：把图片路径交给主进程（打开对话框并挂成待发送图）。 */
+  dropImage: (filePath) => ipcRenderer.send('pet:drop-image', String(filePath || '')),
+  /** 控件矩形上报（dsh-pet 的 syncInputRegions）：菜单/对话框这类浮层平时长在
+   *  窗口的透明余量区里，光标离开身体就会穿透，导致点不到。把它们的矩形报给主进程，
+   *  主进程在 busy 期间按矩形判定「这里也算可交互」。 */
+  setInputRegions: (input) => ipcRenderer.send('pet:input-regions', input || { dragging: false, rects: [] }),
 })
