@@ -5,7 +5,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, mkdtempSync, existsSync, readdirSync } from 'node:fs'
+import { readFileSync, mkdtempSync, existsSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -120,7 +120,9 @@ test('setup 注册关键路由与设置项', () => {
     assert.ok(routes[p], `缺路由 ${p}`)
   }
   const keys = mod.default.settings.map((s) => s.key)
-  for (const k of ['adminPin', 'perception', 'roomAssetUrl']) assert.ok(keys.includes(k), `缺设置 ${k}`)
+  for (const k of ['perception', 'roomAssetUrl']) assert.ok(keys.includes(k), `缺设置 ${k}`)
+  // adminPin 已移除：前端密码只挡按钮、服务端 /api/room/* 无校验，属无实际保护的机制
+  assert.ok(!keys.includes('adminPin'), 'adminPin 设置项应已移除')
 })
 
 test('health：没素材时 ready=false', async () => {
@@ -153,6 +155,64 @@ test('下载落位：假 fetchZip → assets 目录有视频，anims 列表可�
   assert.equal(h.assets.count, 2)
 })
 
+test('Windows 风格 zip（反斜杠路径）也能正确落位到 assets/，页面按名字能取到', async () => {
+  const zip = buildZip([
+    { name: 'room3d-assets\\待机呼吸休闲.webm', data: Buffer.from('fake-idle') },
+    { name: 'room3d-assets\\螃蟹走路.webm', data: Buffer.from('fake-walk') },
+  ])
+  const { api, routes, dataDir } = makeApi({
+    settings: { roomAssetUrl: 'https://example.com/room3d-assets.zip' },
+    hooks: { skipAutoAssets: true, fetchZip: async () => zipRes(zip) },
+  })
+  mod.default.setup(api)
+  const r = await routes['/api/room/fetch-assets']({ method: 'POST' })
+  assert.equal(r.ok, true)
+  assert.equal(r.count, 2)
+  // 关键：文件名里不能残留反斜杠，否则页面请求 /assets/待机呼吸休闲.webm 会 404，只剩影子
+  assert.ok(existsSync(join(dataDir, 'assets', '待机呼吸休闲.webm')))
+  assert.ok(existsSync(join(dataDir, 'assets', '螃蟹走路.webm')))
+  assert.ok(!readdirSync(join(dataDir, 'assets')).some((n) => n.includes('\\')), '不能留下带反斜杠的文件名')
+  assert.ok(routes['/assets/待机呼吸休闲.webm'], '页面请求的素材路由已按正常文件名注册')
+  const h = await routes['/health']()
+  assert.equal(h.assets.ready, true)
+})
+
+test('旧版错误落位的反斜杠素材名在启动时自动修正，不用重新下载', async () => {
+  const { api, routes, dataDir } = makeApi({ hooks: { skipAutoAssets: true } })
+  mkdirSync(join(dataDir, 'assets'), { recursive: true })
+  writeFileSync(join(dataDir, 'assets', 'room3d-assets\\待机呼吸休闲.webm'), 'old-idle')
+  mod.default.setup(api)
+  assert.ok(existsSync(join(dataDir, 'assets', '待机呼吸休闲.webm')), '启动时应把旧文件名改正')
+  assert.ok(!readdirSync(join(dataDir, 'assets')).some((n) => n.includes('\\')))
+  assert.ok(routes['/assets/待机呼吸休闲.webm'], '修正后素材路由要跟着注册')
+})
+
+test('下载失败时 /health 暴露 lastError 和镜像/重试提示', async () => {
+  const { api, routes } = makeApi({
+    settings: { roomAssetUrl: 'https://example.com/room3d-assets.zip' },
+    hooks: { skipAutoAssets: true, fetchZip: async () => { throw new Error('模拟网络失败') } },
+  })
+  mod.default.setup(api)
+  const r = await routes['/api/room/fetch-assets']({ method: 'POST' })
+  assert.equal(r.ok, false)
+  assert.match(String(r.message), /素材包下载失败.*模拟网络失败/)
+  const h = await routes['/health']()
+  assert.equal(h.assets.ready, false)
+  assert.match(String(h.assets.lastError), /模拟网络失败/)
+  assert.match(String(h.assets.hint), /镜像|重新下载/)
+})
+
+test('面板提供素材状态与重新下载按钮，页面有素材加载失败提示', () => {
+  const panel = readFileSync(join(MOD, 'panel.js'), 'utf8')
+  assert.match(panel, /health/)
+  assert.match(panel, /fetch-assets/)
+  assert.match(panel, /重新下载素材/)
+  const page = readFileSync(join(MOD, 'lib', 'index3d.html'), 'utf8')
+  assert.match(page, /assetWarn/)
+  assert.match(page, /addEventListener\('error'/)
+  assert.match(page, /动作素材加载失败/)
+})
+
 test('明文 http 下载地址被拒绝', async () => {
   const { api, routes, logs } = makeApi({
     settings: { roomAssetUrl: 'http://example.com/room3d-assets.zip' },
@@ -177,16 +237,22 @@ test('prompt 注入：把位置事实加在用户消息最前，问到房间时�
   assert.ok(!out2[0].text.includes('光线'), '没问到就只给位置事实')
 })
 
-test('page：管理密码按设置填进去，不印占位符', async () => {
-  const { api, routes } = makeApi({ settings: { adminPin: '1234' }, hooks: { skipAutoAssets: true } })
+test('page：原样返回页面，不再注入任何密码占位符', async () => {
+  // 从前这里会校验「设置里的 adminPin 被填进页面」。那套前端密码已移除：
+  // 它只挡按钮，服务端 /api/room/* 的写接口没有任何校验，留着只会误导人。
+  const { api, routes } = makeApi({ settings: {}, hooks: { skipAutoAssets: true } })
   mod.default.setup(api)
   let sent = null
   const res = {}
   api.core.http.send = (_res, code, body) => { sent = { code, body: String(body) } }
   await routes['/page']({}, res)
   assert.equal(sent.code, 200)
-  assert.ok(!sent.body.includes('__ROOM_ADMIN_PIN__'))
-  assert.ok(sent.body.includes('1234'))
+  assert.ok(!sent.body.includes('__ROOM_ADMIN_PIN__'), '不应再有占位符')
+  // 注释里会提到 ADMIN_PIN 作为历史说明，所以只查代码特征，不查裸字符串
+  assert.ok(!/const\s+ADMIN_PIN\s*=/.test(sent.body), '页面里不应再有 ADMIN_PIN 常量声明')
+  assert.ok(!sent.body.includes('pin-input'), '页面里不应再有密码输入框')
+  assert.ok(!/function\s+adminModal/.test(sent.body), '页面里不应再有密码弹窗')
+  assert.ok(!/sessionStorage\.setItem\(\s*'room_admin'/.test(sent.body), '页面里不应再写解锁状态')
 })
 
 // ---------- 素材包解压的安全契约（zip-slip / 符号链接 / 明文 http） ----------
@@ -280,4 +346,11 @@ test('工具：系统会话不给工具；go_room_spot 非主人调用被拒，�
   assert.equal(state.xiaoyu.spot, 'balcony')
   const empty = await tools.go_room_spot.execute({ spot: '  ' })
   assert.equal(empty.ok, false, '空 spot 不写盘')
+})
+
+test('猫咪起名使用页面内输入框，不依赖 window.prompt', () => {
+  const page = readFileSync(join(MOD, 'lib', 'index3d.html'), 'utf8')
+  assert.match(page, /function askCatName/)
+  assert.match(page, /cat-name-input/)
+  assert.ok(!/\bprompt\s*\(/.test(page.replace(/^\s*\/\/.*$/gm, '')), '页面不能再调用 window.prompt')
 })

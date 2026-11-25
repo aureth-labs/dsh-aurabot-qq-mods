@@ -1,0 +1,11 @@
+{
+  "name": "aurabot-module-companion-bond",
+  "version": "1.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node lib/build.mjs",
+    "build:native": "node lib/build.mjs --native-only",
+    "test": "node --test test/*.test.mjs"
+  }
+}

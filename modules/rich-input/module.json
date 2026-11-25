@@ -1,0 +1,14 @@
+{
+  "id": "rich-input",
+  "name": "看得见的东西",
+  "version": "1.6.0",
+  "description": "把 [图片] 变成真正交给模型的图片（看不了图就用看图模型转汉字、不行再换回退模型）；把 [合并转发] 展开成 {昵称(QQ):内容;…}",
+  "category": "tool",
+  "tags": ["看图", "合并转发", "图片", "视觉"],
+  "author": "kmizmal",
+  "license": "CC-BY-NC-SA-4.0",
+  "api": 1,
+  "minPluginVersion": "1.2.1",
+  "requires": [],
+  "capabilities": ["plugin-internals"]
+}

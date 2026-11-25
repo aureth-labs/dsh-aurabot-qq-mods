@@ -1,0 +1,14 @@
+{
+  "id": "roast-mode2",
+  "name": "毒舌模式2",
+  "version": "1.4.0",
+  "description": "三档分级毒舌模式（傲娇嘴硬/损友毒舌/狂暴模式）：3档贴吧狂暴风短句连击，针对当前消息现编，模型失败回落双句狂暴语料",
+  "category": "social",
+  "tags": ["毒舌", "吐槽", "互动", "损友", "分级"],
+  "author": "winston-hoo",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["filesystem", "process", "plugin-internals"]
+}

@@ -1,0 +1,14 @@
+{
+  "id": "token-budget",
+  "name": "预算管家",
+  "version": "1.2.0",
+  "description": "省 token：注入内容预算封顶、本地向量只带最相关的 16 条记忆、估算记账、日超预算自动熔断",
+  "category": "manage",
+  "tags": ["省token", "预算", "熔断", "记忆"],
+  "author": "RookieApe-tao",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["filesystem", "plugin-config", "plugin-internals", "network"]
+}
