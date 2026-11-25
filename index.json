@@ -883,6 +883,37 @@
       "publishedAt": "2026-11-07T14:19:28.212Z"
     },
     {
+      "id": "fish-draw-prompt",
+      "name": "生图提示词（三步走）",
+      "version": "1.0.1",
+      "description": "给「角色自己画图」这类场景用的提示词源代码：一份代码拼出用途 + 三步走 + 元素清单 + 关键特征，多个生图入口共用，改一处四处同步。",
+      "category": "creative",
+      "tags": [
+        "生图",
+        "提示词",
+        "三步走",
+        "参考图"
+      ],
+      "platforms": [
+        "qq"
+      ],
+      "author": "xdr531955724",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [],
+      "replacesBuiltin": false,
+      "homepage": "https://github.com/xdr531955724/dsh-aurabot-fish-draw-prompt",
+      "tag": "fish-draw-prompt-v1.0.1",
+      "file": "fish-draw-prompt-v1.0.1.zip",
+      "path": "fish-draw-prompt-v1.0.1/fish-draw-prompt-v1.0.1.zip",
+      "size": 11878,
+      "sha256": "b94a6ef019363b89a33874ea75acac5b1f47ad3fc48b41b6d4a0c5a149b5c342",
+      "commit": "7d365c9cc4316f77271c27750f3e319cf4590dae",
+      "publishedAt": "2026-11-25T12:24:42.990Z"
+    },
+    {
       "id": "github-assistant",
       "name": "GitHub 助手",
       "version": "1.0.0",
@@ -2900,5 +2931,5 @@
       "reason": "作者主动撤回。"
     }
   ],
-  "generatedAt": "2026-11-25T12:06:28.597Z"
+  "generatedAt": "2026-11-25T12:24:42.990Z"
 }
