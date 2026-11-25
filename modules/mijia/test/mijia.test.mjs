@@ -262,8 +262,8 @@ describe('设备列表与 miot 指令（新网关）', () => {
     const { cloud, calls } = await loggedInCloud(routes, dataDir)
     const items = await cloud.deviceList()
     assert.deepEqual(items, [
-      { did: '111', name: '客厅灯', model: 'yeelink.light.lamp1', isOnline: true, roomId: null, roomName: '客厅' },
-      { did: '222', name: '卧室插座', model: 'chuangmi.plug.m1', isOnline: false, roomId: null, roomName: '我的家·未分配' },
+      { did: '111', name: '客厅灯', model: 'yeelink.light.lamp1', isOnline: true, roomId: null, roomName: '客厅', homeId: '1', homeName: '我的家' },
+      { did: '222', name: '卧室插座', model: 'chuangmi.plug.m1', isOnline: false, roomId: null, roomName: '我的家·未分配', homeId: '1', homeName: '我的家' },
     ])
     const n = calls.length
     await cloud.deviceList() // 缓存生效：不再发请求
@@ -281,6 +281,137 @@ describe('设备列表与 miot 指令（新网关）', () => {
     assert.match(devCall.init.headers.Cookie, /serviceToken=st-123/)
     assert.match(devCall.init.headers.Cookie, /PassportDeviceId=/)
     assert.equal(devCall.init.headers['miot-encrypt-algorithm'], 'ENCRYPT-RC4')
+  })
+
+  test('共享家庭用 home.uid 作 home_owner（共享家庭的房主不是自己）', async () => {
+    const dataDir = await tmpDataDir()
+    const homes = {
+      code: 0,
+      result: { homelist: [
+        { id: '1', uid: 10086, name: '我的家', roomlist: [{ id: 'r1', name: '客厅', dids: [111] }] },
+        { id: '2', uid: 555, name: '朋友家', shareflag: 1, roomlist: [{ id: 'r2', name: '书房', dids: [333] }] },
+      ] },
+    }
+    // 设备接口按 home_owner 回不同设备：只有房主 uid 才对得上
+    const deviceRoute = {
+      prefix: API_PREFIX + '/home/home_device_list',
+      body: (n, init) => {
+        const req = decodeApiBody(init)
+        if (Number(req.home_owner) === 555) {
+          return { code: 0, result: { device_info: [{ did: 333, name: '书房台灯', model: 'yeelink.light.lamp1', isOnline: 1 }], has_more: false } }
+        }
+        if (Number(req.home_owner) === 10086) {
+          return { code: 0, result: { device_info: [{ did: 111, name: '客厅灯', model: 'yeelink.light.lamp1', isOnline: 1 }], has_more: false } }
+        }
+        return { code: -1, message: 'no permit' }
+      },
+    }
+    const { cloud, calls } = await loggedInCloud([
+      ...qrRoutes(),
+      { prefix: API_PREFIX + '/v2/homeroom/gethome_merged', body: homes },
+      deviceRoute,
+    ], dataDir)
+    const items = await cloud.deviceList(true)
+    assert.deepEqual(items.map((d) => d.did), ['111', '333'])
+    const owners = calls
+      .filter((c) => c.url === API_PREFIX + '/home/home_device_list')
+      .map((c) => Number(decodeApiBody(c.init).home_owner))
+    assert.deepEqual(owners.sort((a, b) => a - b), [555, 10086], 'home_owner 应取各家庭的 uid')
+  })
+
+  test('单个家庭无权限不影响其它家庭：跳过并记日志，列表照常返回', async () => {
+    const dataDir = await tmpDataDir()
+    const homes = {
+      code: 0,
+      result: { homelist: [
+        { id: '2', uid: 555, name: '朋友家', shareflag: 1, roomlist: [{ id: 'r2', name: '书房', dids: [333] }] },
+        { id: '1', uid: 10086, name: '我的家', roomlist: [{ id: 'r1', name: '客厅', dids: [111] }] },
+      ] },
+    }
+    const deviceRoute = {
+      prefix: API_PREFIX + '/home/home_device_list',
+      body: (n, init) => {
+        const req = decodeApiBody(init)
+        if (Number(req.home_owner) === 555) return { code: -1, message: 'no permit' }
+        return { code: 0, result: { device_info: [{ did: 111, name: '客厅灯', model: 'yeelink.light.lamp1', isOnline: 1 }], has_more: false } }
+      },
+    }
+    const logs = []
+    const fetchImpl = fakeFetch([
+      ...qrRoutes(),
+      { prefix: API_PREFIX + '/v2/homeroom/gethome_merged', body: homes },
+      deviceRoute,
+    ])
+    const cloud = createMiCloud({ dataDir, fetchImpl, timeoutMs: 5000, log: (m) => logs.push(m) })
+    await cloud.qrStart()
+    await cloud.qrPoll()
+    const items = await cloud.deviceList(true)
+    assert.deepEqual(items.map((d) => d.did), ['111'], '无权家庭跳过，自家的设备仍要出来')
+    assert.ok(logs.some((m) => /朋友家/.test(m) && /no permit/.test(m)), '应记录被跳过的家庭')
+  })
+
+  test('homesList 列出家庭并标出共享的（房主不是自己）', async () => {
+    const dataDir = await tmpDataDir()
+    const homes = {
+      code: 0,
+      result: { homelist: [
+        { id: '1', uid: 10086, name: '我的家', roomlist: [{ id: 'r1', name: '客厅', dids: [111] }] },
+        { id: '2', uid: 555, name: '朋友家', shareflag: 1, roomlist: [{ id: 'r2', name: '书房', dids: [333] }] },
+      ] },
+    }
+    const { cloud, calls } = await loggedInCloud([
+      ...qrRoutes(),
+      { prefix: API_PREFIX + '/v2/homeroom/gethome_merged', body: homes },
+    ], dataDir)
+    const list = await cloud.homesList(true)
+    assert.deepEqual(list, [
+      { id: '1', name: '我的家', uid: 10086, shared: false, roomCount: 1 },
+      { id: '2', name: '朋友家', uid: 555, shared: true, roomCount: 1 },
+    ])
+    // 带缓存：再取不重复打云端
+    const n = calls.length
+    await cloud.homesList()
+    assert.equal(calls.length, n)
+  })
+
+  test('deviceList 可按家庭筛选：传 id、名称子串都只返回该家设备', async () => {
+    const dataDir = await tmpDataDir()
+    const homes = {
+      code: 0,
+      result: { homelist: [
+        { id: '1', uid: 10086, name: '我的家', roomlist: [{ id: 'r1', name: '客厅', dids: [111] }] },
+        { id: '2', uid: 555, name: '朋友家', shareflag: 1, roomlist: [{ id: 'r2', name: '书房', dids: [333] }] },
+      ] },
+    }
+    const deviceRoute = {
+      prefix: API_PREFIX + '/home/home_device_list',
+      body: (n, init) => {
+        const req = decodeApiBody(init)
+        if (Number(req.home_owner) === 555) {
+          return { code: 0, result: { device_info: [{ did: 333, name: '书房台灯', model: 'yeelink.light.lamp1', isOnline: 1 }], has_more: false } }
+        }
+        return { code: 0, result: { device_info: [
+          { did: 111, name: '客厅灯', model: 'yeelink.light.lamp1', isOnline: 1 },
+          { did: 112, name: '客厅插座', model: 'chuangmi.plug.m1', isOnline: 1 },
+        ], has_more: false } }
+      },
+    }
+    const { cloud } = await loggedInCloud([
+      ...qrRoutes(),
+      { prefix: API_PREFIX + '/v2/homeroom/gethome_merged', body: homes },
+      deviceRoute,
+    ], dataDir)
+    const all = await cloud.deviceList(true)
+    assert.equal(all.length, 3, '不传 home 就是全部家庭')
+    // 按家庭 id 筛
+    const byId = await cloud.deviceList(false, 60000, { home: '2' })
+    assert.deepEqual(byId.map((d) => d.did), ['333'])
+    // 按家庭名称子串筛（走缓存，不再打云端）
+    const byName = await cloud.deviceList(false, 60000, { home: '我的家' })
+    assert.deepEqual(byName.map((d) => d.did), ['111', '112'])
+    // 不存在的家庭：返回空，不报错
+    const none = await cloud.deviceList(false, 60000, { home: '不存在' })
+    assert.deepEqual(none, [])
   })
 
   test('setOnOff 按规格库找到 siid/piid 并经加密通道下发 prop/set', async () => {
@@ -533,7 +664,10 @@ describe('设备列表与 miot 指令（新网关）', () => {
     await cloud.setOnOff(dev, true)
     const t0 = Date.now()
     await cloud.setOnOff(dev, false)
-    assert.ok(Date.now() - t0 >= 1200, '第二次指令应被节流到至少 1.2 秒后')
+    // setTimeout 只有 1~2ms 的计时精度，实测间隔会落在 1198~1199ms，用 1200 卡死
+    // 会在 CI 上随机红。留 20ms 容差，节流本身还是 CMD_GAP_MS=1200。
+    const gap = Date.now() - t0
+    assert.ok(gap >= 1200 - 20, '第二次指令应被节流到至少 1.2 秒后，实际 ' + gap + 'ms')
   })
 })
 

@@ -1,4 +1,4 @@
-﻿// 桌宠模块（内置模块，id='pet'；注册在 src/modules/index.js 的 BUILTINS，全新安装即有）
+// 桌宠模块（内置模块，id='pet'；注册在 src/modules/index.js 的 BUILTINS，全新安装即有）
 //
 // ⚠ 来源与许可（别误当成自研）：桌宠的客户端形态（Electron 透明置顶窗 + 长轮询 + 气泡）、拖拽物理、
 // pet pack 目录约定、以及工作状态六档 / 碎碎念动画的命名约定，都移植自 dsh-pet
@@ -25,6 +25,7 @@ import { join, dirname, sep, basename, extname } from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto'
 import { createRequire } from 'node:module'
+import { homedir } from 'node:os'
 import { deflateRawSync, inflateRawSync } from 'node:zlib'
 
 const ONLINE_TTL = 60_000        // 心跳超时：60 秒内没轮询过 /events 就算离线
@@ -35,14 +36,14 @@ const MIN_MS = 60_000            // 一分钟（碎碎念间隔/静默窗口都�
 export default {
   id: 'pet',
   name: '桌宠',
-  version: '1.0.13',
+  version: '1.1.0',
   api: 1,
-  description: '把大肥鱼请到桌面上：会冒气泡、做小动作，你在干活时也陪着你。',
+  description: '把大肥鱼请到桌面上：会冒气泡、做小动作，你在干活时也陪着她，还能用全局热键语音对讲（按一下开听、再按一下发送，ASR→对话→语音合成外放）。',
 
   defaults: {
     carrier: 'qq', modality: 'text', petFallbackToQQ: true, pack: 'default',
     // 默认素材包下载地址（「大肥鱼」形象包不进插件仓库，从素材仓库拉；网络不佳可换成任意镜像直链）
-    petPackUrl: 'https://github.com/accomplish07zrh-eng/dsh-aurabot-qq-mods/archive/refs/heads/main.zip',
+    petPackUrl: 'https://github.com/aureth-labs/dsh-aurabot-qq-mods/archive/refs/heads/main.zip',
     // Electron 下载镜像（末尾带 /；留空 = 用内置默认）。npm 与 zip 直装两条路都读它
     electronMirror: 'https://npmmirror.com/mirrors/electron/',
     // 碎碎念（桌宠自己的气泡流，与「主动搭话」完全独立：载体选 QQ 时她也会在桌面上自己嘟囔）
@@ -76,6 +77,13 @@ export default {
     chatBehaviorMaxPerDay: 20,         // 聊天联动每日上限
     petScale: 1,                       // 人物大小倍率（0.5~2.0，1 = 原始 240px；客户端按窗口宽等比缩放）
     petReleaseLand: true,              // 松手后落地：开 = 按甩出速度抛出去并落回屏幕底部（原行为）；关 = 松手停在哪就在哪
+    // 甩抛物理（1.0.14，面板 PR #284 六键中的两键）：客户端把服务端下发的 physics 叠在素材包默认之上
+    petGravity: 1400,                  // 下落加速度 px/s²（200~4000；1400 = dsh-pet 原版手感）
+    petRestitution: 0.78,              // 落地反弹保留速度比例（0.3~0.95；0.78 = Q 弹不疯跳）
+    petAnimRate: 1,                    // 动画节奏倍率（0.5~2）：>1 更活泼（空闲轮播间隔 ÷ 它）
+    petShowBalance: true,              // 右键菜单「查看余额」：开才显示菜单项
+    petClickChase: false,              // 点击扑上来抓鼠标（默认关；关 = 点了只播点击动画不追）
+    petTeaseChase: false,              // 晃鼠标勾引追（默认关；关 = 晃鼠标不扑）
     // 对话框（主人找她聊的小窗，与碎碎念/聊天联动是三码事；永不发 QQ）
     petChatEnabled: false,             // 总开关：默认关（仿行为大脑，面板手动打开）
     petChatHotkey: 'Alt+P',            // 全局快捷键（单键 toggle）；留空 = 不启用；被占用保持关闭
@@ -96,12 +104,23 @@ export default {
     // 才相信 X-Forwarded-For 的**最后一跳**作为真实来源。留空 = 从不相信任何转发头（最安全）。
     // 反代部署时填反代自己的地址，如 127.0.0.1（本机 nginx）或 172.17.0.1（容器网关）。
     trustedProxy: '',
+    // 语音对讲（1.2.0，替代 1.1.2 打电话）：全局热键 toggle 触发，单轮 ASR→think→TTS→可选 RVC，协议见 /voice/talk
+    callEngine: 'native',                  // native = 插件自带合成（edge 锁定，失败退 Windows 语音）；sovits = 本地 GPT-SoVITS；voice = 「语音」页接管（豆包，用户自选才碰）
+    sovitsUrl: 'http://127.0.0.1:9880',    // GPT-SoVITS 服务地址（callEngine=sovits 时用；参考音频沿用「语音」页的 gptsovits 配置）
+    callRvc: false,                        // TTS 出稿后用「翻唱」模块的 RVC 音色变声（翻唱没就绪自动降级为不变声）
+    callRvcVoice: '',                      // 翻唱音色名（清单见翻唱模块 status().voices）
+    callTalkMode: 'toggle',                // toggle = 按一下开听、再按一下发送（globalShortcut 只有按下事件，故不用 PTT/VAD）
+    voiceHotkey: 'Alt+Space',              // 语音对讲全局热键（Electron globalShortcut 格式；留空 = 不启用）
+    callMaxChars: 120,                     // 一次对讲最多说多少字（口语要短）
+    callAsrUrl: 'http://127.0.0.1:8000',   // 备选耳朵：本地 faster-whisper（POST /v1/audio/transcriptions）
+    callMicDeviceId: '',                   // 对讲麦克风（客户端上报后存这里；空 = 系统默认）
+    callSpeakerDeviceId: '',               // 对讲扬声器（客户端上报后存这里；空 = 系统默认）
   },
   settings: [
     { key: 'carrier', label: '主动搭话载体', type: 'select', options: [{ value: 'qq', label: 'QQ 私聊' }, { value: 'pet', label: '桌宠气泡' }], hint: 'pet 时桌宠不在线会按下面的开关回落到 QQ；两边永不双发' },
     { key: 'modality', label: '气泡形式', type: 'select', options: [{ value: 'text', label: '文字气泡' }, { value: 'voice', label: '文字 + 语音' }], hint: '语音失败自动降级为纯文字' },
     { key: 'petFallbackToQQ', label: '桌宠离线回落 QQ', type: 'switch' },
-    { key: 'petPackUrl', label: '素材包下载地址', type: 'text', hint: '「大肥鱼」形象包 zip 直链（默认走 GitHub 素材仓库 dsh-aurabot-qq-mods；国内网络可换成 Gitee 等镜像直链）。zip 里素材要放文件夹（如 pet-pack/default-animation/），archive 自带的单层仓库目录会自动剥。装完插件后缺包自动下载，也可在面板手动重下' },
+    { key: 'petPackUrl', label: '素材包下载地址', type: 'text', hint: '「大肥鱼」形象包 zip 直链（默认走 GitHub 素材仓库 dsh-aurabot-qq-mods；国内网络可换成 Gitee 等镜像直链）。zip 里素材要放文件夹（如 pet-pack/default-animation/），archive 自带的单层仓库目录会自动剥。装完插件后缺包自动下载，也可在面板手动重下；zip 里带 pet-home/ 时小屋素材（manifest.json+图片）一并落位到 house/' },
     { key: 'electronMirror', label: 'Electron 下载镜像', type: 'text', hint: '装 Electron 时从哪下（末尾带 /）。默认 npmmirror（国内快）；连不上可换 https://github.com/electron/electron/releases/download/ 等。npm 装失败会自动改用 zip 直装' },
     { key: 'whisperEnabled', label: '碎碎念', type: 'switch', hint: '只出现在桌宠气泡里，不会发到 QQ；载体是 QQ 时照常生效' },
     { key: 'whisperSource', label: '碎碎念内容', type: 'select', options: [{ value: 'model', label: '她自己想一句（工作区看得到思考）' }, { value: 'pool', label: '用现成文案' }] },
@@ -132,6 +151,13 @@ export default {
     { key: 'chatBehaviorMaxPerDay', label: '聊天联动每日上限', type: 'number', min: 0, max: 9999 },
     { key: 'petScale', label: '人物大小（倍）', type: 'number', min: 0.5, max: 2, hint: '桌宠整体缩放倍率：0.5 = 一半大，2 = 两倍大，1 = 原始大小。面板「桌宠」卡的大小滑条改的也是这一项' },
     { key: 'petReleaseLand', label: '松手后落地', type: 'switch', hint: '拖动松手后按甩出速度抛出去、落回屏幕底部（带 Q 弹挤压）；关掉则松手停在哪就在哪，不抛也不落' },
+    // 甩抛物理与互动开关（1.0.14，与面板 PR #284 六键同步：宿主白名单已登记，这里补模块侧声明与下发）
+    { key: 'petGravity', label: '下落加速度', type: 'number', min: 200, max: 4000, hint: '甩抛后往下掉的加速度（px/s²）。默认 1400（原版手感）；调小飘得慢（月球感），调大掉得快更利落' },
+    { key: 'petRestitution', label: '落地反弹系数', type: 'number', min: 0.3, max: 0.95, hint: '落地时保留多少速度反弹（0~1 取小数）。默认 0.78（Q 弹）；调小像砸在地上，调大接近 0.95 会停不下来地跳' },
+    { key: 'petAnimRate', label: '动画节奏倍率', type: 'number', min: 0.5, max: 2, hint: '空闲小动作的节奏快慢：1 = 正常，2 = 间隔减半更活泼，0.5 = 更慵懒。只影响动画间隔，不改变物理与移动速度' },
+    { key: 'petShowBalance', label: '右键「查看余额」', type: 'switch', hint: '开 = 桌宠右键菜单显示「查看余额」菜单项（点了向插件查询 DeepSeek 账户余额，气泡展示）。默认开；关 = 菜单里不出现这一项' },
+    { key: 'petClickChase', label: '点击扑鼠标', type: 'switch', hint: '点击桌宠时扑上来抓鼠标（带冷却）。默认关：关 = 只播点击动画，不追鼠标' },
+    { key: 'petTeaseChase', label: '晃鼠标勾引追', type: 'switch', hint: '在桌宠旁边快速晃鼠标时她可能扑上来追（带冷却）。默认关：关 = 晃鼠标不触发追逐' },
     // 对话框（桌宠旁的小窗聊天：快捷键/右键菜单唤出，按碎碎念同款人格+记忆+当下状态回答，永不发 QQ）
     { key: 'petChatEnabled', label: '对话框', type: 'switch', hint: '开桌宠旁的对话小窗：快捷键或右键菜单唤出，只聊在小窗/气泡里，绝不发 QQ' },
     { key: 'petChatHotkey', label: '对话框快捷键', type: 'text', hint: '全局快捷键，按一次开、再按一次关（如 Alt+P）。留空 = 不启用；被别的程序占用时注册失败，桌宠会气泡提醒一次、功能保持关闭，此处的当前注册状态看「状态」卡' },
@@ -148,6 +174,21 @@ export default {
     { key: 'allowInsecureRemote', label: '允许明文 http 跨机（不推荐）', type: 'switch', hint: '⚠ 仅内网自测：打开后允许 http:// 的非回环地址跨机连接，令牌与气泡内容明文传输，公网上等于把令牌送人。正常部署请用 https 反向代理，别开这个' },
     { key: 'tokenTtlDays', label: '桌宠令牌有效期（天）', type: 'number', min: 0, max: 3650, hint: '0 = 永不过期（默认，老用户零影响）。设了天数后令牌到期即要求重新下发；到期后在面板点「轮换令牌」并重新下载客户端包' },
     { key: 'trustedProxy', label: '可信反向代理地址', type: 'text', hint: '⚠ 只有放在反向代理后面才需要填。填反代自己的地址（如 127.0.0.1 = 本机 nginx，172.17.0.1 = 容器网关），多个用逗号分隔。只有「请求是从这个地址进来的」才会采信 X-Forwarded-For 的最后一跳作为真实来源，用于令牌失败限速与明文判定。留空 = 从不相信任何转发头（最安全）' },
+    // 语音对讲（1.2.0）：全局热键 toggle 触发，服务端 ASR→think→TTS→可选 RVC，永不发 QQ、无通话窗
+    { key: 'voiceHotkey', label: '对讲热键', type: 'text', hint: '全局热键，按一下开始听、再按一下发送（如 Alt+Space）。留空 = 不启用；被别的程序占用时桌宠会气泡提醒一次' },
+    { key: 'callEngine', label: '回答声音（嘴）', type: 'select', options: [
+      { value: 'native', label: '系统原生（默认，edge 合成，失败退 Windows 语音，不依赖豆包）' },
+      { value: 'sovits', label: '本地 GPT-SoVITS（参考音频音色）' },
+      { value: 'voice', label: '「语音」页接管（豆包；你自选接管时才碰）' },
+    ], hint: '只影响对讲里的声音；不改全局语音设置' },
+    { key: 'sovitsUrl', label: 'GPT-SoVITS 地址', type: 'text', hint: '回答声音选「本地 GPT-SoVITS」才用；参考音频沿用「语音」页里的 gptsovits 配置（ref_audio_path / prompt_text）' },
+    { key: 'callRvc', label: '回答变声（RVC）', type: 'switch', hint: 'TTS 出稿后用「翻唱」模块导入的音色再变一次声，说话唱歌同一个声音；翻唱没就绪时自动不变声并在状态里说明' },
+    { key: 'callRvcVoice', label: '回答变声音色', type: 'text', hint: '翻唱模块里导入的音色名（翻唱页能看到清单）；变声开关打开才生效' },
+    { key: 'callTalkMode', label: '对讲方式', type: 'select', options: [{ value: 'toggle', label: '按一下开听、再按一下发送（toggle）' }], hint: '热键只有按下事件，固定 toggle 模式：第一下开始录音、第二下发出去' },
+    { key: 'callMaxChars', label: '一次最多说多少字', type: 'number', min: 20, max: 300, hint: '口语回答别太长，长了反而不像人。默认 120' },
+    { key: 'callAsrUrl', label: '备选识别地址', type: 'text', hint: '优先用 DSH「语音输入」插件识别；它没开或音频不是 WAV 时退回这里（本地 faster-whisper，POST /v1/audio/transcriptions）。默认 http://127.0.0.1:8000；面板会显示识别是否就绪' },
+    { key: 'callMicDeviceId', label: '对讲麦克风', type: 'text', hint: '由客户端「设备选择」上报后存这里；留空 = 系统默认' },
+    { key: 'callSpeakerDeviceId', label: '对讲扬声器', type: 'text', hint: '由客户端「设备选择」上报后存这里；留空 = 系统默认' },
   ],
 
 
@@ -537,6 +578,36 @@ export default {
       return api.settings().petReleaseLand !== false
     }
 
+    // ---------- 甩抛物理与互动开关（1.0.14，面板 PR #284 六键的服务端口径） ----------
+    /** 甩抛物理参数：从设置读 gravity/restitution，坏值回落 defaults 口径（gravity 1400 / restitution 0.78）。
+     *  客户端把它叠在素材包 physics 默认之上（设置优先于素材包默认），见 pet-client/main.js 的 pet:throw。 */
+    function petPhysics() {
+      const def = { gravity: 1400, restitution: 0.78 }
+      const g = Number(api.settings().petGravity)
+      const r = Number(api.settings().petRestitution)
+      return {
+        gravity: Number.isFinite(g) && g > 0 ? Math.min(4000, Math.max(200, g)) : def.gravity,
+        restitution: Number.isFinite(r) && r > 0 ? Math.min(0.95, Math.max(0.3, r)) : def.restitution,
+      }
+    }
+    /** 动画节奏倍率（0.5~2）：坏值回落 1（正常节奏），客户端把空闲轮播间隔除以它。 */
+    function petAnimRate() {
+      const v = Number(api.settings().petAnimRate)
+      return Number.isFinite(v) && v > 0 ? Math.min(2, Math.max(0.5, v)) : 1
+    }
+    /** 右键「查看余额」开关：`!== false` 口径 —— 默认开，只有明确写 false 才关（与 petReleaseLand 同口径）。 */
+    function petShowBalance() {
+      return api.settings().petShowBalance !== false
+    }
+    /** 点击扑鼠标开关：`=== true` 口径 —— 默认关，明确写 true 才开（高危偏好默认关，与 behaviorCloseWindowEnabled 同口径）。 */
+    function petClickChase() {
+      return api.settings().petClickChase === true
+    }
+    /** 晃鼠标勾引追开关：`=== true` 口径，同上。 */
+    function petTeaseChase() {
+      return api.settings().petTeaseChase === true
+    }
+
     // ---------- pet pack（换形象，仿 dsh-pet 目录约定；运行数据只写数据目录） ----------
     // <dataDir>/packs/<名>-config.json + <名>-animation/*.webm；default 包 = default-animation/。
     // 素材版权注意：dsh-pet 形象「大肥鱼」是 CC BY-NC-SA 4.0。素材不进本仓库（50MB+），
@@ -859,7 +930,7 @@ export default {
     // 表现是「行为层整体不生效」而面板一切正常，极难发现。这里拿「模板签名」和「生成时记下的签名」
     // 对账：缺文件 / 内容不符 / 模板比生成物新，一律在 status 里明说，面板据此提示重新生成。
     // 只读对账，绝不自动覆盖用户手改过的 app/（生成走 installClient，由面板按钮触发）。
-    const CLIENT_FILES = ['main.js', 'preload.js', 'index.html', 'physics.js', 'packmeta.js', 'behavior.js', 'chat.html', 'house.html', 'house.js']
+    const CLIENT_FILES = ['main.js', 'preload.js', 'index.html', 'physics.js', 'packmeta.js', 'behavior.js', 'chat.html', 'voice-talk.html', 'voice-talk.js', 'house.html', 'house.js', 'package.json']
     const CLIENT_OPTIONAL = ['README.md'] // 只复制不校验：文档缺失不影响运行
     const CLIENT_STAMP = 'client-stamp.json' // 生成时写进 app/ 的签名凭据
     const fileHash = (p) => {
@@ -961,6 +1032,32 @@ export default {
       }
     }
 
+    /** 反算 app/ 现状的模板签名（算法与 clientTemplate 一致）：与生成凭据里的 sig 相等 = 生成后没被人手改过。 */
+    function installedSig() {
+      const dest = appDir()
+      const files = CLIENT_FILES.map((f) => ({ name: f, hash: fileHash(join(dest, f)) })).filter((f) => f.hash)
+      if (!files.length) return ''
+      return createHash('sha1').update(files.map((f) => `${f.name}:${f.hash}`).join('|')).digest('hex').slice(0, 12)
+    }
+
+    /** 自动重装过期客户端（治「市场升级到新版后，点小屋还是白屏/黑屏」）：
+     *  用户端升级模块只换插件里的模板，数据目录 app/ 这个客户端副本不会跟着更新，
+     *  旧壳没有新修复照样白屏，而很多人不会去看面板提示。这里在模块启动时兜一道：
+     *  只覆盖「生成后没被手改」的 app/（现状签名 == 生成凭据签名）；手改过的一律不动，
+     *  维持只读对账由面板提示。 */
+    function autoRegenClient() {
+      try {
+        const stamp = readJson(join(appDir(), CLIENT_STAMP), null)
+        if (!stamp || typeof stamp.sig !== 'string' || !stamp.sig) return null // 没凭据的老安装：不猜，交给面板
+        const tpl = clientTemplate()
+        if (!tpl.sig || stamp.sig === tpl.sig) return null // 已一致 / 没模板：不动
+        if (installedSig() !== stamp.sig) return null // 被手改过：绝不自动覆盖
+        const r = installClient()
+        if (r?.ok) api.log.info('客户端模板有更新且 app/ 未被手改：已自动重新生成（正在运行的 Electron 重启后生效）')
+        return r
+      } catch (error) { api.log.warn('客户端自动重装失败（不影响使用）：', String(error?.message || error)); return null }
+    }
+
     // ---------- Electron 三键（面板按钮 / HTTP 路由共用）：安装 → 启动 → 停止 ----------
     // 安装走 npmmirror 镜像（真机直连 github release 会 fetch failed）；启动前必须清掉
     // 子进程环境的 ELECTRON_RUN_AS_NODE（宿主环境必带，不清则 Electron 以纯 Node 模式启动即崩）。
@@ -989,7 +1086,11 @@ export default {
     // 测试钩子：测试注入 fake spawn/kill，不打真网络、不真启动 Electron
     const petHooks = api.__petTestHooks || {}
     const spawnFn = petHooks.spawn || nodeSpawn
-    const killFn = petHooks.kill || ((pid) => { process.kill(Number(pid), 'SIGTERM'); return true })
+    const killFn = petHooks.kill || ((pid) => process.kill(pid, 'SIGTERM'))
+    const probePid = petHooks.probePid || ((pid) => process.kill(pid, 0))
+    function processAlive(pid) {
+      try { return probePid(pid) } catch (error) { return error?.code === 'EPERM' }
+    }
     // Electron 宿主保险（真机踩过）：DSH 跑在 Electron 里，**主进程的 fs 带 asar 补丁**——路径里只要出现
     // `.asar`，openSync 就先按「打开 asar 包」处理，去读文件头；读不到直接抛
     // `Invalid package <path>`（Electron 45 实测，堆栈落在 node:electron/js2c/node_init 的 openSync 包装）。
@@ -1010,11 +1111,23 @@ export default {
     }
     const procFile = () => api.dataDir('process.json')
     let electronProc = null // { pid, startedAt }
-    const recordedPid = () => {
-      if (electronProc) return electronProc
-      const p = readJson(procFile(), null)
-      if (p && Number.isInteger(p.pid) && p.pid > 0) electronProc = p
-      return electronProc
+    let electronStartup = null
+    function forgetProcess(proc) {
+      if (electronProc === proc) electronProc = null
+      const saved = readJson(procFile(), null)
+      if (saved?.pid === proc.pid && saved.startedAt === proc.startedAt) {
+        try { unlinkSync(procFile()) } catch {}
+      }
+    }
+    function recordedPid() {
+      const proc = electronProc || readJson(procFile(), null)
+      if (!Number.isSafeInteger(proc?.pid) || proc.pid <= 0) return null
+      if (!processAlive(proc.pid)) {
+        forgetProcess(proc)
+        return null
+      }
+      electronProc = proc
+      return proc
     }
 
     // ---------- zip 直装（无 npm 环境的兜底，自动化优先） ----------
@@ -1265,6 +1378,33 @@ export default {
     }
 
     /**
+     * 小屋素材是否缺失。完整性 = manifest.json 在 + 至少一张底图/manifest 引用的图在盘上。
+     * 只有 manifest、一张图都没有（上次下载中断只落了一半）也算缺 → 走自动补全；
+     * manifest 引用的图全部不在盘上同样算缺。已有文件不会被补全覆盖（见 ensureDefaultPack 落位循环）。
+     */
+    function housePackMissing() {
+      try {
+        const dir = houseDir()
+        if (!existsSync(join(dir, 'manifest.json'))) return true
+        const IMG = /\.(?:jpe?g|png|webm|gif)$/i
+        const files = readdirSync(dir)
+        if (!files.some((f) => IMG.test(f))) return true // manifest 在但一张图都没有：上次中断只落了一半
+        try {
+          // manifest 里引用到的图（底图/姿势帧/patch）至少一张在，全缺也算半截包
+          const refs = []
+          const walk = (v) => {
+            if (typeof v === 'string') { if (IMG.test(v)) refs.push(v) }
+            else if (Array.isArray(v)) v.forEach(walk)
+            else if (v && typeof v === 'object') Object.values(v).forEach(walk)
+          }
+          walk(JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')))
+          if (refs.length && !refs.some((f) => existsSync(join(dir, f)))) return true
+        } catch {} // manifest 解析不了不当缺：落位时原样收下的清单，客户端自己会报
+        return false
+      } catch { return true }
+    }
+
+    /**
      * 在解压暂存目录里找素材包根（含 default-animation/ 的那一层）。找不到返回 null。
      * 素材仓库约定：**素材必须放文件夹里**（不在仓库根目录摊 106 个 webm），文件夹名随意（pet-pack/、default/、大肥鱼/ 都行）。
      * 所以要按层找：包根 = 暂存目录本身 / <仓库名>-<分支>/ / <任意一层文件夹>/ / <仓库名>-<分支>/<任意一层文件夹>/。
@@ -1282,6 +1422,25 @@ export default {
       return null
     }
 
+    /** 在解压暂存目录里找小屋素材根（含 manifest.json 且同层有图片的那一层）。与 findPackRoot 同思路按层找。 */
+    function findHouseRoot(stage) {
+      const isHouseRoot = (dir) => {
+        try {
+          if (!existsSync(join(dir, 'manifest.json'))) return false
+          return readdirSync(dir).some((f) => /\.(?:jpe?g|png|webm|gif)$/i.test(f))
+        } catch { return false }
+      }
+      const subDirs = (dir) => {
+        try { return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => join(dir, e.name)) } catch { return [] }
+      }
+      if (isHouseRoot(stage)) return stage
+      for (const d1 of subDirs(stage)) {
+        if (isHouseRoot(d1)) return d1
+        for (const d2 of subDirs(d1)) if (isHouseRoot(d2)) return d2
+      }
+      return null
+    }
+
     /**
      * 下载并落位 default 素材包。
      * @param {boolean} force true = 包已在也重新下载（面板「重新下载素材包」）；false = 只在缺包时下载
@@ -1289,7 +1448,7 @@ export default {
      */
     async function ensureDefaultPack(force = false) {
       if (packDownloading) return { ok: false, message: '素材包正在下载中，别急' }
-      if (!force && !defaultPackMissing()) return { ok: true, skipped: true, message: 'default 素材包已就位，不用下载' }
+      if (!force && !defaultPackMissing() && !housePackMissing()) return { ok: true, skipped: true, message: '素材包已就位，不用下载' }
       const url = String(api.settings().petPackUrl || '').trim()
       if (!url) return { ok: false, message: '没有配置素材包下载地址（面板「桌宠」页 →「素材包」卡里填）' }
       packDownloading = true
@@ -1300,23 +1459,47 @@ export default {
         mkdirSync(stage, { recursive: true })
         unzipTo(zip, stage)
         const root = findPackRoot(stage)
-        if (!root) throw new Error('zip 里找不到 default-animation/（内容结构不对：素材要放文件夹里，如 pet-pack/default-animation/）')
-        mkdirSync(animsDirOf('default'), { recursive: true })
+        const houseRoot0 = findHouseRoot(stage)
+        if (!root && !houseRoot0) throw new Error('zip 里找不到 default-animation/（内容结构不对：素材要放文件夹里，如 pet-pack/default-animation/）')
         let copied = 0
-        for (const f of readdirSync(join(root, 'default-animation'))) {
-          const src = join(root, 'default-animation', f)
-          try { if (!statSync(src).isFile()) continue } catch { continue }
-          copyFileSync(src, join(animsDirOf('default'), f))
-          copied++
+        if (root) {
+          mkdirSync(animsDirOf('default'), { recursive: true })
+          for (const f of readdirSync(join(root, 'default-animation'))) {
+            const src = join(root, 'default-animation', f)
+            try { if (!statSync(src).isFile()) continue } catch { continue }
+            copyFileSync(src, join(animsDirOf('default'), f))
+            copied++
+          }
+          if (copied === 0) throw new Error('default-animation/ 里没有动画文件（.webm）')
+          for (const f of ['default-config.json', 'default-manifest.json']) {
+            const src = join(root, f)
+            try { if (statSync(src).isFile()) copyFileSync(src, join(packsDir(), f)) } catch {}
+          }
+          api.log.info(`桌宠：素材包已下载落位（${copied} 个动画 → packs/default-animation/）`)
         }
-        if (copied === 0) throw new Error('default-animation/ 里没有动画文件（.webm）')
-        for (const f of ['default-config.json', 'default-manifest.json']) {
-          const src = join(root, f)
-          try { if (statSync(src).isFile()) copyFileSync(src, join(packsDir(), f)) } catch {}
+        // 小屋素材同包搭车：zip 里哪一层有 manifest.json + 图片（pet-home/ 这种层）就整层落位到 house/。
+        // 旧镜像 zip 里没有小屋素材时静默跳过，不算失败——小屋没素材只是「素材未就绪」，不挡形象包。
+        let houseCopied = 0
+        const houseRoot = houseRoot0
+        if (houseRoot) {
+          mkdirSync(houseDir(), { recursive: true })
+          for (const f of readdirSync(houseRoot)) {
+            if (!/^(manifest\.json|.*\.(?:jpe?g|png|webm|gif))$/i.test(f)) continue // 只收清单与图片，README 之类不带
+            const src = join(houseRoot, f)
+            try { if (!statSync(src).isFile()) continue } catch { continue }
+            const dst = join(houseDir(), f)
+            if (!force && existsSync(dst)) continue // 已有文件不动：手改过的/上次已落位的不覆盖不回滚，只补缺的
+            copyFileSync(src, dst)
+            houseCopied++
+          }
+          if (houseCopied) {
+            api.log.info(`桌宠：小屋素材已下载落位（${houseCopied} 个文件 → house/）`)
+            ensureHouseRoutes()
+          }
         }
-        api.log.info(`桌宠：素材包已下载落位（${copied} 个动画 → packs/default-animation/）`)
-        ensureAssetRoutes()
-        return { ok: true, count: copied, message: `素材包下载完成（${copied} 个动画）` }
+        if (copied || houseCopied) { ensureAssetRoutes(); if (houseCopied) ensureHouseRoutes() } // 落位后立刻注册素材路由，不等 120s 兜底
+        const extra = houseCopied ? `，小屋素材 ${houseCopied} 个` : ''
+        return { ok: true, count: copied, houseCount: houseCopied, message: `素材包下载完成（${copied} 个动画${extra}）` }
       } catch (error) {
         const msg = `素材包下载失败：${String(error?.message || error).slice(0, 200)}`
         api.log.warn(msg)
@@ -1333,7 +1516,7 @@ export default {
     if (!api.__petTestHooks) {
       const kick = setTimeout(() => { ensureDefaultPack().catch(() => {}) }, 5_000)
       kick.unref?.()
-      api.every(PACK_CHECK_MS, () => { if (defaultPackMissing()) ensureDefaultPack().catch(() => {}) }, '素材包自动落位')
+      api.every(PACK_CHECK_MS, () => { if (defaultPackMissing() || housePackMissing()) ensureDefaultPack().catch(() => {}) }, '素材包自动落位')
     }
 
     // 官方 electron zip 是「扁平包」：electron.exe / electron 直接在压缩包根目录，没有 dist/ 前缀
@@ -1421,12 +1604,13 @@ export default {
       if (!existsSync(join(appDir(), 'main.js'))) return { ok: false, message: '还没生成客户端：先点「下载 / 生成客户端」' }
       // 有 npm-cli 就走 npm（老行为，保持不变）；没有（DSH 自带运行时/裸机）就走 zip 直装，零环境依赖。
       const cli = npmCli()
-      if (!cli) return electronInstallZip(exe)
+      if (!cli || !existsSync(join(appDir(), 'package.json'))) return electronInstallZip(exe)
       const out = await new Promise((resolve) => {
         let tail = ''
         let child = null
         try {
-          child = spawnFn(process.execPath, [cli, 'install', '-D', 'electron'], {
+          // 保留生成时的 package.json 内容和签名，按指定版本安装。
+          child = spawnFn(process.execPath, [cli, 'install', '--no-save', `electron@${electronZipUrl().ver}`], {
             cwd: appDir(),
             env: { ...process.env, ELECTRON_MIRROR: electronMirror() },
             windowsHide: true,
@@ -1453,43 +1637,79 @@ export default {
       }
     }
 
-    function launch() {
+    function launchFailure(reason) {
+      const message = `桌宠启动失败：${String(reason).slice(0, 240)}`
+      api.log.warn(message)
+      return { ok: false, message }
+    }
+
+    async function launch() {
+      if (electronStartup) return electronStartup
       if (online().online) return { ok: true, alreadyRunning: true, message: '桌宠已经在跑了（心跳正常），不用重复启动' }
+      const running = recordedPid()
+      if (running) return { ok: true, alreadyRunning: true, pid: running.pid, message: '桌宠进程已在运行，尚未收到心跳' }
       const exe = electronExe()
-      if (!existsSync(exe)) return { ok: false, message: 'Electron 还没安装：先点「安装 Electron」' }
-      if (!existsSync(join(appDir(), 'main.js'))) return { ok: false, message: 'app/main.js 不见了：先点「下载 / 生成客户端」' }
+      if (!existsSync(exe)) return launchFailure('Electron 还没安装：先点「安装 Electron」')
+      if (!existsSync(join(appDir(), 'main.js'))) return launchFailure('app/main.js 不见了：先点「下载 / 生成客户端」')
+      if (!existsSync(join(appDir(), 'package.json'))) return launchFailure('app/package.json 不见了：请重新生成客户端')
+      let child
       try {
         // 分离进程启动；env 必须去掉 ELECTRON_RUN_AS_NODE（见 cleanElectronEnv）
-        const child = spawnFn(exe, ['main.js'], { cwd: appDir(), env: cleanElectronEnv(), detached: true, stdio: 'ignore', windowsHide: true })
-        child.on?.('error', (error) => api.log.warn('桌宠启动失败：', error.message)) // 没人听就是未捕获异常，会带走 DSH
-        child.unref?.()
-        electronProc = { pid: child.pid, startedAt: Date.now() }
-        try { writeJsonAtomic(procFile(), electronProc) } catch (e) { api.log.debug(`进程文件写入失败：${e.message}`) }
-        api.log.info(`桌宠已启动（pid ${child.pid}）`)
-        return { ok: true, pid: child.pid, message: `桌宠已启动（pid ${child.pid}），等它连上就有心跳了` }
+        child = spawnFn(exe, ['main.js'], { cwd: appDir(), env: cleanElectronEnv(), detached: true, stdio: 'ignore', windowsHide: true })
       } catch (error) {
-        return { ok: false, message: '启动失败：' + String(error?.message || error).slice(0, 160) }
+        return launchFailure(error?.message || error)
       }
+      const proc = { pid: child.pid, startedAt: Date.now() }
+      electronStartup = new Promise((resolve) => {
+        let starting = true
+        const finish = (result) => {
+          starting = false
+          clearTimeout(timer)
+          resolve(result)
+        }
+        const timer = setTimeout(() => {
+          if (!Number.isSafeInteger(proc.pid) || proc.pid <= 0 || !processAlive(proc.pid)) {
+            finish(launchFailure('Electron 进程未能通过启动后的存活检查'))
+            return
+          }
+          electronProc = proc
+          try { writeJsonAtomic(procFile(), proc) } catch (error) { api.log.debug(`进程文件写入失败：${error.message}`) }
+          api.log.info(`桌宠进程已启动（pid ${proc.pid}）`)
+          finish({ ok: true, pid: proc.pid, message: `桌宠进程已启动（pid ${proc.pid}），等它连上就有心跳了` })
+        }, petHooks.startupGraceMs ?? 3500)
+        child.once('error', (error) => {
+          if (starting) finish(launchFailure(error.message))
+          else api.log.warn(`桌宠进程错误：${error.message}`)
+        })
+        child.once('exit', (code, signal) => {
+          const reason = signal ? `信号 ${signal}` : `退出码 ${code}`
+          if (starting) finish(launchFailure(`Electron 在启动检查期间退出（${reason}）`))
+          else if (electronProc === proc) {
+            forgetProcess(proc)
+            const message = `桌宠进程已退出（${reason}）`
+            if (code === 0) api.log.info(message)
+            else api.log.warn(message)
+          }
+        })
+        child.unref()
+      }).finally(() => { electronStartup = null })
+      return electronStartup
     }
 
     function stop() {
       const p = recordedPid()
       if (!p) return { ok: false, message: '没有正在运行的桌宠进程记录' }
-      let killed = true
       try { killFn(p.pid) } catch (error) {
-        // ESRCH = 进程本来就不在了：清理记录、按已停止处理，别让面板卡在「停不掉」
-        if (String(error?.code) === 'ESRCH') {
-          electronProc = null
-          try { unlinkSync(procFile()) } catch {}
+        // ESRCH = 进程在检查后退出：清理记录、按已停止处理。
+        if (error?.code === 'ESRCH') {
+          forgetProcess(p)
           return { ok: true, pid: p.pid, message: `桌宠进程（pid ${p.pid}）已经不在了，清掉了记录` }
         }
-        killed = false
         return { ok: false, pid: p.pid, message: '停止失败：' + String(error?.message || error).slice(0, 120) }
       }
-      electronProc = null
-      try { unlinkSync(procFile()) } catch {}
+      forgetProcess(p)
       api.log.info(`桌宠已停止（pid ${p.pid}）`)
-      return { ok: killed, pid: p.pid, message: killed ? `已停止桌宠（pid ${p.pid}）` : '停止指令没有确认成功，看看进程还在不在' }
+      return { ok: true, pid: p.pid, message: `已停止桌宠（pid ${p.pid}）` }
     }
 
     // ---------- pet pack 与素材路由（P1/P4）：packs 目录只读给客户端，404 绝不回落别的包 ----------
@@ -2028,6 +2248,10 @@ export default {
           .map((x) => x.trim().toLowerCase())
           .filter((x) => x && ALL_ACTIONS.has(x)),
       )
+      // 抓鼠标默认关（2026-11-07）：petClickChase / petTeaseChase 任一为 false（默认都 false）
+      // 就把 chase_cursor 塞进禁用清单，AI 动作表、反应层（点击/勾引）、聊天联动简报共用这份口径；
+      // 两个都开时不塞，恢复原有扑鼠标行为。与面板手填的禁用清单合并去重（Set 天然去重）。
+      if (!petClickChase() || !petTeaseChase()) disabledSet.add('chase_cursor')
       return {
         enabled: s.behaviorEnabled !== false,
         minMinutes,
@@ -2793,6 +3017,313 @@ export default {
       api.core.http.send(res, 200, { ok: true, windowOpen: petChatStatus().windowOpen })
     })
 
+    // ================= 语音对讲（1.2.0：单轮语音对讲，替代 1.1.2 打电话） =================
+    // 智能音箱式：全局热键 toggle → 说话 → 再按一下发送 → 服务端一轮完成 → 系统音频设备外放。
+    // 无状态机、无会话——每轮独立，POST /voice/talk 一次走完：
+    //   上行 { audio:<base64 wav> }（兼容 audioB64 兜底读一次）
+    //   → 耳朵：优先 DSH「语音输入」插件 s0.transcribe，备选本地 faster-whisper（callAsrUrl）
+    //   → api.think（key:'voiceTalk'，场景行 + 旧事提示 + 桌宠当下状态 + 口语约束）
+    //   → 嘴：callEngine 三档（native=voice/tts.js 锁 edge 失败退 Windows；sovits=本地 GPT-SoVITS；voice=「语音」页接管）
+    //   → 可选 RVC 变声（翻唱模块 convertSpeech；没就绪降级为原声）
+    //   → 返回 { ok, heard, replyText, audioB64, mime, engine, rvcNote?, ms }
+    // 失败返回结构化 { ok:false, error:'asr-not-ready'|'no-audio'|'asr-failed'|'tts-failed', message }（人话）。
+    // 桌宠状态：每轮 emit('voiceTalk', { state:'listening'|'thinking'|'speaking'|'idle' }) 驱动客户端动作/气泡。
+    // 底层 ASR/TTS/RVC/memory hint/think prompt 全部沿用旧通话实现（petHooks 注入点 callAsr/callTts/callRvc 保留）。
+    // 临时音频一律写 api.dataDir('voice-talk-tmp')（模块源码目录禁写运行数据——会被拍快照），用完即删。
+    const VOICE_TALK_TMP_DIR = () => api.dataDir('voice-talk-tmp')
+    const CALL_MAX_AUDIO_BYTES = 16 * 1024 * 1024 // 一段话的上限（base64 后约 21MB，够说十分钟）
+    const CALL_MIME_BY_EXT = { '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.webm': 'audio/webm', '.m4a': 'audio/mp4', '.flac': 'audio/flac', '.aac': 'audio/aac' }
+    const callSettings = () => api.settings() || {}
+    // 桌宠对讲状态提示：客户端据此切「在听 / 在想 / 在说 / 恢复空闲」
+    const emitVoiceTalk = (state) => { try { emit('voiceTalk', { state }) } catch {} }
+
+    // 临时音频目录：启动时 + 每次开写前顺手清掉两小时前的旧文件（关机残留）
+    function sweepCallTmp() {
+      try {
+        const dir = VOICE_TALK_TMP_DIR()
+        if (!existsSync(dir)) return
+        for (const name of readdirSync(dir)) {
+          const p = join(dir, name)
+          try { if (Date.now() - statSync(p).mtimeMs > 2 * 3600_000) unlinkSync(p) } catch {}
+        }
+      } catch {}
+    }
+    sweepCallTmp()
+
+    // ---- 耳朵：优先 DSH「语音输入」插件（s0.resolve + s0.transcribe 路径），
+    //      备选本地 faster-whisper（POST callAsrUrl + /v1/audio/transcriptions，multipart）。
+    //      webm / 非 PCM16 WAV 硬转不了 16k，直接走备选。测试注入 petHooks.callAsr(buf)→text，不打真网络。
+    async function callTranscribe(buf) {
+      if (typeof petHooks.callAsr === 'function') return String((await petHooks.callAsr(buf)) || '').trim()
+      const isRiff = buf.length > 44 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WAVE'
+      let s0 = null
+      try { s0 = api.dsh?.get?.('speechToText') || null } catch {}
+      if (s0 && typeof s0.transcribe === 'function' && typeof s0.resolve === 'function' && isRiff) {
+        try {
+          const wav16k = api.lib('voice/wav.js').toMono16k(buf) // DSH 识别只吃 16k 单声道 PCM16 WAV
+          const spec = s0.resolve({ audio: new Uint8Array(wav16k) })
+          const r = await s0.transcribe(spec, AbortSignal.timeout(120000))
+          const text = typeof r === 'string' ? r : r?.text || r?.transcript || ''
+          const t = String(text || '').trim()
+          if (t) return t
+        } catch (error) {
+          api.log.warn('DSH 语音识别没成，退本地 faster-whisper：', String(error?.message || error))
+        }
+      }
+      // 备选：本地 faster-whisper（multipart）
+      const base = String(callSettings().callAsrUrl || 'http://127.0.0.1:8000').replace(/\/+$/, '')
+      const fd = new FormData()
+      fd.append('file', new Blob([buf]), isRiff ? 'speech.wav' : 'speech.webm')
+      fd.append('language', 'zh')
+      fd.append('response_format', 'json')
+      const r = await fetch(`${base}/v1/audio/transcriptions`, { method: 'POST', body: fd, signal: AbortSignal.timeout(120000) })
+      if (!r.ok) throw new Error(`识别服务返回 ${r.status}：${(await r.text().catch(() => '')).slice(0, 120)}`)
+      const j = await r.json().catch(() => ({}))
+      return String(j.text || j.transcription || '').trim()
+    }
+
+    // ---- 记忆提示：memory 对 system 会话直接跳过，这里自己补——说话前先想起相关旧事（主人视角检索）
+    const callOwnerName = () => {
+      try { return String(api.config().ownerName || '').trim() || '主人' } catch { return '主人' }
+    }
+    async function callMemoryHint(text) {
+      let mem = null
+      try { mem = api.use('memory') } catch { mem = null }
+      if (!mem || typeof mem.recall !== 'function') return ''
+      try {
+        const hits = (await Promise.resolve(mem.recall(text, { limit: 4 }))) || []
+        const lines = hits.map((h) => String((h && (h.it ? h.it.text : h.text)) || '').trim()).filter(Boolean).slice(0, 4)
+        if (!lines.length) return ''
+        api.log.info(`语音对讲里想起 ${lines.length} 条旧事`)
+        return `【想起的旧事】（只是让你心里有数，别照着念出来）\n${lines.join('；')}`
+      } catch { return '' }
+    }
+
+    // ---- 大脑：每轮 think prompt（语音对讲场景 + 旧事提示 + 桌宠此刻状态 + 口语约束）----
+    const callSpoken = (s) => String(s || '')
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/[*_`#>~]/g, '')
+      .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '')
+      .replace(/（[^）]{0,30}）/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    function callStateLine() {
+      // 桌宠独有：她在干嘛（workStatus/state 聚合）+ 心情（moodOf）
+      let busy = '空闲'
+      try {
+        const w = workSnapshot()
+        if (w && w.state) busy = `${WORK_STATE_LABEL[w.state] || w.state}${w.task ? '（' + w.task + '）' : ''}`
+      } catch {}
+      return `【你此刻的状态】正在做的事：${busy}。心情：${moodNow()}。`
+    }
+    async function callThink(text) {
+      const max = Number(callSettings().callMaxChars) || 120
+      const hint = await callMemoryHint(text)
+      const prompt = [
+        '（这是语音对讲：对方是你主人，刚对着麦克风说的这句话被识别成了文字；你要用声音直接回答他，不是打字）',
+        hint,
+        callStateLine(),
+        `他刚说：「${String(text).slice(0, 500)}」`,
+        `现在直接说你要说的话：口语、一到两句、最多 ${max} 字。`,
+        '不要 Markdown、不要括号里的动作旁白、不要 emoji、不要「某某：」这种前缀，只输出你要念出来的话。',
+        '如果识别出来的话明显不通顺，就按你听到的大概意思自然接一句，别追问「你说什么」。',
+      ].filter(Boolean).join('\n')
+      const r = await api.think(prompt, { title: '语音对讲', noTools: true, key: 'voiceTalk', timeoutMs: 120000 })
+      return callSpoken(r)
+    }
+
+    // ---- 嘴：三档引擎（沿用旧通话实现细节）----
+    const callTmpWrite = (buf, ext) => {
+      sweepCallTmp()
+      mkdirSync(VOICE_TALK_TMP_DIR(), { recursive: true })
+      const p = join(VOICE_TALK_TMP_DIR(), `${Date.now()}-${randomBytes(4).toString('hex')}${ext}`)
+      writeFileSync(p, buf)
+      return p
+    }
+    async function callSovits(text) {
+      // 本地 GPT-SoVITS：参考音频方式（ref_audio_path / prompt_text 沿用「语音」页 gptsovits 配置），照抄 voicecall
+      const s = callSettings()
+      const g = (api.config().voice || {}).gptsovits || {}
+      const url = String(s.sovitsUrl || 'http://127.0.0.1:9880').replace(/\/+$/, '')
+      const params = new URLSearchParams({
+        text,
+        text_lang: g.textLang || 'zh',
+        ref_audio_path: g.refAudio || '',
+        prompt_text: g.promptText || '',
+        prompt_lang: g.promptLang || 'zh',
+        media_type: 'wav',
+        streaming_mode: 'true',
+      })
+      const up = await fetch(`${url}/tts?${params}`, { signal: AbortSignal.timeout(60000) })
+      if (!up.ok) throw new Error(`GPT-SoVITS 返回 ${up.status}：${(await up.text().catch(() => '')).slice(0, 120)}`)
+      const buf = Buffer.from(await up.arrayBuffer())
+      if (buf.length < 400) throw new Error('GPT-SoVITS 出来的音频是空的')
+      return { bytes: buf, mime: 'audio/wav', engine: 'sovits' }
+    }
+    async function callSynthesize(text) {
+      const hooks = api.__petTestHooks || {}
+      // 测试注入：不真合成（callTts 钩子与 RVC 钩子二选一：注入 TTS 时直接返回，RVC 走假 TTS 路径）
+      if (typeof hooks.callTts === 'function') return await hooks.callTts(text)
+      const s = callSettings()
+      const engine = ['native', 'sovits', 'voice'].includes(s.callEngine) ? s.callEngine : 'native'
+      let out = null
+      if (engine === 'sovits') {
+        out = await callSovits(text)
+      } else if (engine === 'voice') {
+        // 用户自选接管才碰豆包；voice.speak 失败自己会退 Windows 语音
+        const v = api.has('voice') ? api.use('voice') : null
+        if (!v || typeof v.speak !== 'function') throw new Error('「语音」模块没开着，接管引擎不可用')
+        const r = await v.speak(text)
+        const ext = (String(r.file || '').match(/\.[a-z0-9]+$/i) || ['.mp3'])[0].toLowerCase()
+        out = { bytes: readFileSync(r.file), mime: CALL_MIME_BY_EXT[ext] || 'audio/mpeg', engine: r.engine || 'voice' }
+      } else {
+        // native：插件自带合成，engine 锁 edge（失败自动退 Windows 语音——默认档，不依赖豆包）
+        const tts = api.lib('voice/tts.js')
+        const r = await tts.textToSpeech(text, { engine: 'edge' }, api.log)
+        const ext = (String(r.file || '').match(/\.[a-z0-9]+$/i) || ['.mp3'])[0].toLowerCase()
+        out = { bytes: readFileSync(r.file), mime: CALL_MIME_BY_EXT[ext] || 'audio/mpeg', engine: r.engine || 'edge' }
+      }
+      // 可选 RVC 变声：TTS 出稿后用翻唱模块的音色再变一次；翻唱没就绪降级为不变声，out.rvcNote 说明原因
+      let rvcNote = ''
+      if (s.callRvc && s.callRvcVoice && out) {
+        try {
+          if (typeof hooks.callRvc === 'function') {
+            const b = await hooks.callRvc(out.bytes) // 测试注入
+            if (Buffer.isBuffer(b)) { out = { ...out, bytes: b, engine: out.engine + '+rvc' } }
+          } else {
+            const song = api.has('song') ? api.use('song') : null
+            const st = typeof song?.status === 'function' ? song.status() : null
+            if (!song || typeof song.convertSpeech !== 'function' || !st?.ready) {
+              rvcNote = '翻唱模块没就绪，这一轮没变声（原声）'
+            } else if (!(st.voices || []).includes(s.callRvcVoice)) {
+              rvcNote = `翻唱里没有音色「${s.callRvcVoice}」，这一轮没变声（原声）`
+            } else {
+              const src = callTmpWrite(out.bytes, '.wav')
+              const dst = await song.convertSpeech(src, { voice: String(s.callRvcVoice), pitch: 0, outDir: api.dataDir('voice-talk-rvc') })
+              const useP = dst || src
+              out = { bytes: readFileSync(useP), mime: CALL_MIME_BY_EXT[extname(useP).toLowerCase()] || out.mime, engine: out.engine + '+rvc' }
+              try { unlinkSync(src) } catch {}
+            }
+          }
+        } catch (error) {
+          rvcNote = `变声失败，用原声：${String(error?.message || error).slice(0, 80)}`
+          api.log.warn('语音对讲变声失败，用原声：', String(error?.message || error))
+        }
+      }
+      return { ...out, rvcNote }
+    }
+
+    // ---- 语音对讲路由（模块 route 全路径精确匹配，仓库铁律；逐条注册，不做前缀匹配）----
+    const talkFail = (error, message, extra = {}) => ({ ok: false, error, message, ...extra })
+
+    // ASR 前置探活：本地 faster-whisper GET /health（2s 超时）或 DSH 语音输入 provider 启用。
+    // 未就绪时人话说明，客户端首次触发即提示，不等说完才报错。测试可注入 petHooks.asrProbe 避免真网络。
+    // 最近一次探测结果缓存给同步的 status() 快照用（面板读 status().voiceTalk）。
+    let lastAsrProbe = { ready: false, reason: '识别还没检查过，先拉一次 /voice/talk/config' }
+    async function asrProbe() {
+      if (typeof petHooks.asrProbe === 'function') {
+        const r = await petHooks.asrProbe()
+        if (typeof r === 'boolean') return { ready: r, reason: r ? '' : '语音识别还没配好' }
+        return { ready: Boolean(r?.ready), reason: String(r?.reason || (r?.ready ? '' : '语音识别还没配好')) }
+      }
+      try {
+        const s0 = api.dsh?.get?.('speechToText') || null
+        if (s0 && typeof s0.transcribe === 'function') return { ready: true, reason: '' }
+      } catch {}
+      const base = String(callSettings().callAsrUrl || 'http://127.0.0.1:8000').replace(/\/+$/, '')
+      try {
+        const r = await fetch(`${base}/health`, { method: 'GET', signal: AbortSignal.timeout(2000) })
+        if (r.ok) return { ready: true, reason: '' }
+        return { ready: false, reason: `本地识别 ${base} 返回 ${r.status}，请在面板配 faster-whisper 或开 DSH 语音输入` }
+      } catch {
+        return { ready: false, reason: `本地识别 ${base} 连不上，请在面板配 faster-whisper 或开 DSH 语音输入` }
+      }
+    }
+
+    // 配置快照（客户端首屏拉一次）：talkMode 固定 toggle；asrReady 每次实时探活
+    api.route('/voice/talk/config', async (req, res) => {
+      if (!guard(req, res).ok) return
+      const s = callSettings()
+      const probe = await asrProbe()
+      lastAsrProbe = probe
+      api.core.http.send(res, 200, {
+        ok: true,
+        engine: ['native', 'sovits', 'voice'].includes(s.callEngine) ? s.callEngine : 'native',
+        rvc: Boolean(s.callRvc && s.callRvcVoice),
+        rvcVoice: String(s.callRvcVoice || ''),
+        talkMode: 'toggle',
+        hotkey: String(s.voiceHotkey || 'Alt+Space'),
+        micDeviceId: String(s.callMicDeviceId || ''),
+        speakerDeviceId: String(s.callSpeakerDeviceId || ''),
+        asrReady: probe.ready,
+        asrReason: probe.reason || '',
+      })
+    })
+
+    // 单轮对讲：{ audio:<base64 wav> }（audioB64 仅兜底读一次）→ ASR → think → TTS(+RVC) → 音频。
+    // 无状态机、无会话，一轮走完；状态经 emit('voiceTalk',{state}) 下发客户端。
+    api.route('/voice/talk', async (req, res) => {
+      if (!guard(req, res).ok) return
+      if (req.method !== 'POST') return api.core.http.send(res, 405, talkFail('no-audio', '请用 POST 发送录音'))
+      const t0 = Date.now()
+      const body = await api.core.http.body(req).catch(() => null)
+      // 字段名统一为 audio；audioB64 只是兼容上一版的一次性兜底（上次事故根因：两边字段名对不上）
+      const raw = body?.audio ?? body?.audioB64
+      const b64 = String(raw || '').replace(/^data:[^,]+,/, '')
+      let buf = null
+      try { buf = Buffer.from(b64, 'base64') } catch { buf = null }
+      if (!buf || !buf.length) return api.core.http.send(res, 200, talkFail('no-audio', '没收到声音，请再试一次'))
+      if (buf.length > CALL_MAX_AUDIO_BYTES) return api.core.http.send(res, 200, talkFail('no-audio', '这段录音太长了，说短一点再试'))
+
+      const probe = await asrProbe()
+      lastAsrProbe = probe
+      if (!probe.ready) return api.core.http.send(res, 200, talkFail('asr-not-ready', probe.reason || '语音识别还没配好'))
+
+      const ms = {}
+      emitVoiceTalk('listening')
+      try {
+        // 耳朵
+        const tAsr = Date.now()
+        let text
+        try { text = await callTranscribe(buf) } catch (error) { throw Object.assign(new Error(String(error?.message || error)), { __stage: 'asr' }) }
+        ms.asr = Date.now() - tAsr
+        if (!text) return api.core.http.send(res, 200, talkFail('asr-failed', '没听清，再说一遍？', { heard: '', ms }))
+
+        // 大脑
+        emitVoiceTalk('thinking')
+        const tThink = Date.now()
+        let reply
+        try { reply = await callThink(text) } catch (error) { throw Object.assign(new Error(String(error?.message || error)), { __stage: 'think' }) }
+        ms.think = Date.now() - tThink
+        if (!reply) return api.core.http.send(res, 200, talkFail('think-failed', '她一时没想好怎么答，再说一遍？', { heard: text, ms }))
+
+        // 嘴（可选 RVC）
+        emitVoiceTalk('speaking')
+        const tTts = Date.now()
+        let audio
+        try { audio = await callSynthesize(reply) } catch (error) { throw Object.assign(new Error(String(error?.message || error)), { __stage: 'tts' }) }
+        ms.tts = Date.now() - tTts
+        ms.total = Date.now() - t0
+        const result = {
+          ok: true,
+          heard: text,
+          replyText: reply,
+          audioB64: audio.bytes.toString('base64'),
+          mime: audio.mime,
+          engine: audio.engine,
+          ms,
+        }
+        if (audio.rvcNote) result.rvcNote = audio.rvcNote
+        return api.core.http.send(res, 200, result)
+      } catch (error) {
+        api.log.warn('语音对讲这一轮失败：' + (error.message || error))
+        if (error?.__stage === 'asr') return api.core.http.send(res, 200, talkFail('asr-failed', '没听清或识别失败，再说一遍？', { ms }))
+        return api.core.http.send(res, 200, talkFail('tts-failed', '声音没合成出来，稍后再试', { ms }))
+      } finally {
+        emitVoiceTalk('idle')
+      }
+    })
+
     // ================= 桌面图标隔离区（第二批：drag_icon / hide_icon 的服务端执行层） =================
     // 铁律 2：「删除桌面图标」永远不是真删除——只有 rename 剪切到隔离区 + manifest 记录 + 可一键归还 + 超期自动归还。
     // 铁律 5：文件夹 / 隐藏文件 / 桌面系统图标（回收站、此电脑等 CLSID 命名的 .lnk）绝对不碰，只碰 .lnk/.url/普通文件。
@@ -3057,19 +3588,56 @@ export default {
     }
 
     // ---------- 路由 ----------
+    // ---------- 余额查询（1.0.14，右键「查看余额」的服务端通道） ----------
+    // ⚠ key 获取通道的结论（2026-11-07 调研）：插件 api 面（makeApi）拿不到明文 DeepSeek API key——
+    //   宿主配置里只有 imageGen.apiKey / memory.vector.apiKey（各自用途不同，拿来查余额既不干净也不对）；
+    //   聊天模型的 key 走 DSH 网关（host.js 经 ctx.llm 列 provider/model），插件侧永远只见模型名不见 key。
+    // 所以这条路由按「诚实降级」实现：默认回 { ok:false, message }，客户端气泡显示友好文案，绝不造假数据。
+    // 未来宿主若开放 key 通道，只需在 petHooks.fetchBalance 注入实现（测试同款注入点），路由与客户端不用改。
+    async function fetchBalance() {
+      try {
+        if (typeof petHooks.fetchBalance === 'function') return await petHooks.fetchBalance()
+        return { ok: false, message: '暂无法获取余额：插件拿不到 DeepSeek API key（模型请求走 DSH 网关，不存明文 key）' }
+      } catch (error) {
+        // 绝不把 key 或请求头打进日志/响应：只透出兜底文案
+        return { ok: false, message: '余额查询失败了，过会儿再试试吧' }
+      }
+    }
+    api.route('/balance', async (req, res) => {
+      if (!guard(req, res).ok) return
+      const r = await fetchBalance()
+      api.core.http.send(res, r.ok ? 200 : 502, r)
+    })
     api.route('/events', (req, res) => pollEvents(req, res))
-    api.route('/status', (req, res) => {
+    const petStatusRoute = (req, res) => {
       if (!guard(req, res).ok) return
       learnHost(req)
       const s = api.settings()
       api.core.http.send(res, 200, {
         ok: true, name: 'aurabot-pet', version: api.version,
         online: online(), focus: focusOn(), scale: petScale(), releaseLand: petReleaseLand(), bootId, seq,
+        physics: petPhysics(), animRate: petAnimRate(), balanceEnabled: petShowBalance(),
+        clickChase: petClickChase(), teaseChase: petTeaseChase(), // 面板回显抓鼠标两开关（默认都关）
         carrier: s.carrier, modality: s.modality, fallbackToQQ: s.petFallbackToQQ !== false,
         pack: activePack(), playbackCount: playbacks.length,
         work: { ...workSnapshot(), label: WORK_STATE_LABEL[workSnap.state] || '' }, // 当前她在干什么（思考中/干活中/完成…）
         whisper: { ...whisperStatus() },
         chat: petChatStatus(), // 对话框（快捷键注册状态回显在这）：已注册 / 失败 / 未配置
+        // 语音对讲配置回显（1.2.0）：面板「语音对讲」卡控件的数据源（面板以 voiceTalk 为准，call 保留兼容）。
+        // 直接取 settings，不套规范化，所见即面板原值；asrReady/Reason 取最近一次 /voice/talk/config 探活。
+        voiceTalk: {
+          engine: s.callEngine, rvc: s.callRvc, rvcVoice: s.callRvcVoice,
+          talkMode: 'toggle', hotkey: s.voiceHotkey || 'Alt+Space',
+          maxChars: s.callMaxChars, asrUrl: s.callAsrUrl, sovitsUrl: s.sovitsUrl,
+          micDeviceId: s.callMicDeviceId, speakerDeviceId: s.callSpeakerDeviceId,
+          asrReady: lastAsrProbe.ready, asrReason: lastAsrProbe.reason,
+        },
+        call: {
+          engine: s.callEngine, rvc: s.callRvc, rvcVoice: s.callRvcVoice,
+          talkMode: s.callTalkMode, pttKey: s.callPttKey, vadSilence: s.callVadSilence,
+          maxChars: s.callMaxChars, asrUrl: s.callAsrUrl, sovitsUrl: s.sovitsUrl,
+          micDeviceId: s.callMicDeviceId, speakerDeviceId: s.callSpeakerDeviceId,
+        },
         portReady: portReady(), port: knownPort ? Number(knownPort) : null,
         electronInstalled: existsSync(electronExe()), pid: recordedPid()?.pid || null,
         client: clientStatus(), // 生成物对账：缺 behavior.js 这类「旧壳」在这里现形
@@ -3080,7 +3648,15 @@ export default {
         tokenTtlDays: Number(api.settings().tokenTtlDays) || 0,
         hostFile: hostFile(), clientDir: api.dataDir('app'), serverTime: Date.now(),
       })
-    })
+    }
+    try {
+      api.route('/status', petStatusRoute)
+    } catch (error) {
+      // 本机若别的模块（如改名接管语音的 aura-mimo）已占根 /status，降级到独立路径，
+      // 保证桌宠模块本身能启动；面板/客户端走 status() 导出函数，不依赖这条路由。
+      api.log?.warn?.('桌宠 /status 路由被占用，降级到 /pet/status：' + (error.message || error))
+      api.route('/pet/status', petStatusRoute)
+    }
     api.route('/config', (req, res) => {
       if (!guard(req, res).ok) return
       learnHost(req)
@@ -3097,6 +3673,14 @@ export default {
         scale: petScale(),
         // 松手后落地开关：false = 客户端松手后停在原地（不抛不落）；缺省当 true
         releaseLand: petReleaseLand(),
+        // 甩抛物理（1.0.14）：客户端把它叠在素材包 physics 默认之上，设置优先于素材包默认
+        physics: petPhysics(),
+        // 动画节奏倍率：客户端把空闲轮播间隔 ÷ 它（>1 更活泼）；坏值服务端已回落 1
+        animRate: petAnimRate(),
+        // 互动开关（1.0.14）：「查看余额」菜单显隐 / 点击扑鼠标 / 晃鼠标勾引追（布尔口径在取值函数里统一收口）
+        balanceEnabled: petShowBalance(),
+        clickChase: petClickChase(),
+        teaseChase: petTeaseChase(),
         work: { ...workSnapshot(), label: WORK_STATE_LABEL[workSnap.state] || '' },
         whisper: (({ enabled, source }) => ({ enabled, source }))(whisperStatus()),
         // 行为层：客户端的**反应层**（点击/勾引/摸摸/鼠标闲置）是本地直接演的，不看这一份的话
@@ -3106,6 +3690,16 @@ export default {
         behavior: (() => { const b = behaviorSettings(); return { enabled: b.enabled, idleCursorMinutes: b.idleCursorMinutes, disabledActions: b.disabledActions } })(),
         // 对话框：客户端按这份做快捷键注册 / 关键字关闭 / 失焦收起（配置变更路径，不只启动一次）
         chat: (() => { const c = petChatSettings(); return { enabled: c.enabled, hotkey: c.hotkey, closeKeyword: c.closeKeyword, blurHide: c.blurHide } })(),
+        // 语音对讲（1.2.0）：客户端 refreshConfig 从 voiceTalk 段 + 顶层 voiceHotkey 读热键/引擎/设备，
+        // 与 status().voiceTalk 同口径；talkMode 固定 toggle。无通话窗、无 PTT/VAD 旧字段。
+        voiceTalk: {
+          hotkey: String(s.voiceHotkey || 'Alt+Space'), engine: s.callEngine,
+          rvc: s.callRvc, rvcVoice: s.callRvcVoice,
+          micDeviceId: s.callMicDeviceId, speakerDeviceId: s.callSpeakerDeviceId,
+          talkMode: 'toggle', maxChars: s.callMaxChars,
+          asrUrl: s.callAsrUrl, sovitsUrl: s.sovitsUrl,
+        },
+        voiceHotkey: String(s.voiceHotkey || 'Alt+Space'),
         serverTime: Date.now(),
       })
     })
@@ -3313,9 +3907,9 @@ export default {
       if (!guard(req, res).ok) return
       api.core.http.send(res, 200, await electronInstall())
     })
-    api.route('/launch', (req, res) => {
+    api.route('/launch', async (req, res) => {
       if (!guard(req, res).ok) return
-      api.core.http.send(res, 200, launch())
+      api.core.http.send(res, 200, await launch())
     })
     api.route('/stop', (req, res) => {
       if (!guard(req, res).ok) return
@@ -3324,6 +3918,7 @@ export default {
 
     // ---------- 启动 ----------
     writeHostFile(true)
+    autoRegenClient() // 升级后 app/ 未被手改就自动跟上新模板（治「升级完点小屋还是白屏」）
     ensureAssetRoutes()
     ensureHouseRoutes()
     // 碎碎念排程先落一次盘：面板一打开就能看到「下次约 N 分钟后」，重启也不丢排程
@@ -3401,7 +3996,16 @@ export default {
       petChatStatus,                         // 测试钩子：对话框状态（/status 里的 chat 同函数）
       petChatSweep,                          // 测试钩子：历史过期清理（定时器同函数，可注入 now）
       petChatHistory: chatHistory,           // 测试钩子：读历史（GET /chat/history 同函数）
+      // 语音对讲（1.2.0）：测试钩子（fake 注入走 api.__petTestHooks.callAsr/callTts/callRvc/asrProbe）
+      asrProbe,                              // 测试钩子：探活（可配 petHooks.asrProbe，不打真网络）
+      voiceTalkConfig: () => ({              // 测试钩子：配置快照同 /voice/talk/config，不探活
+        engine: ['native', 'sovits', 'voice'].includes(callSettings().callEngine) ? callSettings().callEngine : 'native',
+        rvc: Boolean(callSettings().callRvc && callSettings().callRvcVoice),
+        rvcVoice: String(callSettings().callRvcVoice || ''),
+        talkMode: 'toggle', hotkey: String(callSettings().voiceHotkey || 'Alt+Space'),
+      }),
       weatherFetchOnce,                      // 测试钩子：天气拉取（可配 petHooks.fetchWeather，不打真网络）
+      balance: fetchBalance,                 // 测试钩子：余额查询（可配 petHooks.fetchBalance；默认诚实降级回 ok:false）
       onSessionEvent,                        // host.js 把 ctx.on('session/event') 转发进来
       workStatus: () => ({ ...workSnapshot(), label: WORK_STATE_LABEL[workSnap.state] || '', text: workEndText(workSnap) }),
       status: () => {
@@ -3409,6 +4013,10 @@ export default {
         const w = workSettings()
         return {
           ...online(), focus: focusOn(), scale: petScale(), releaseLand: petReleaseLand(), carrier: s.carrier, modality: s.modality, bootId, seq,
+          // 甩抛物理与互动开关（1.0.14）：面板守卫 pet.physics / pet.animRate / pet.balanceEnabled /
+          // pet.clickChase / pet.teaseChase 看的就是这份（host.js /panel/pet/status 用 use('pet').status()）
+          physics: petPhysics(), animRate: petAnimRate(),
+          balanceEnabled: petShowBalance(), clickChase: petClickChase(), teaseChase: petTeaseChase(),
           pack: activePack(), playbackCount: playbacks.length,
           // 素材包概况：面板「素材包」卡用它显示状态（内建模块的 settings 不渲染表单，只能走 status + /panel/pet/*）
           packInfo: (() => {
@@ -3428,6 +4036,20 @@ export default {
           workAnimMap: (packView() || {}).workStatus || null, // 面板展示「六档动画能不能对上」
           whisper: whisperStatus(),
           chat: petChatStatus(), // 对话框（快捷键注册状态回显在这）：已注册 / 失败 / 未配置
+          // 语音对讲配置回显（1.2.0）：面板以 voiceTalk 为准（host.js /panel/pet/status 用 use('pet').status()）
+          voiceTalk: {
+            engine: s.callEngine, rvc: s.callRvc, rvcVoice: s.callRvcVoice,
+            talkMode: 'toggle', hotkey: s.voiceHotkey || 'Alt+Space',
+            maxChars: s.callMaxChars, asrUrl: s.callAsrUrl, sovitsUrl: s.sovitsUrl,
+            micDeviceId: s.callMicDeviceId, speakerDeviceId: s.callSpeakerDeviceId,
+            asrReady: lastAsrProbe.ready, asrReason: lastAsrProbe.reason,
+          },
+          call: {
+            engine: s.callEngine, rvc: s.callRvc, rvcVoice: s.callRvcVoice,
+            talkMode: s.callTalkMode, pttKey: s.callPttKey, vadSilence: s.callVadSilence,
+            maxChars: s.callMaxChars, asrUrl: s.callAsrUrl, sovitsUrl: s.sovitsUrl,
+            micDeviceId: s.callMicDeviceId, speakerDeviceId: s.callSpeakerDeviceId,
+          },
           portReady: portReady(), port: knownPort ? Number(knownPort) : null,
           electronInstalled: existsSync(electronExe()), pid: recordedPid()?.pid || null,
           client: clientStatus(), // 面板「桌宠」卡据此提示重新生成（缺文件 = 行为层静默失效）

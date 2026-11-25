@@ -271,6 +271,16 @@ function showFatal(text) {
   tip.textContent = text;
   box.style.display = 'flex';
 }
+/** 重试成功后收掉错误层（showFatal 的逆操作）。 */
+function hideFatal() {
+  const box = document.getElementById('fatal');
+  if (box) box.style.display = 'none';
+}
+/** 收掉默认可见的「加载幕」（#boot）：boot 出结果（成功渲染 / 失败转错误层）时调。 */
+function hideBoot() {
+  const box = document.getElementById('boot');
+  if (box) box.style.display = 'none';
+}
 
 // ---------------------------------------------------------------------------
 // 两个镜头：一楼全景 / 二楼广角。镜头跟着她在哪层
@@ -1237,13 +1247,30 @@ ipcRenderer.on('pet:house:command', (_e, cmd) => {
 // ---------------------------------------------------------------------------
 document.getElementById('hint').textContent = '拖她到家具上就去那儿；拖到窗口外就出门玩。';
 
+// 小屋白屏兜底（2026-11-07）：白屏根因是 BASE 指向的插件此刻不在——模块没开 / 插件重启中 /
+// host.json 端口陈旧 / 插件离线，manifest 拉不到 → 场景永远不渲染，窗口留一块深色空板。
+// 兜底：启动拉 manifest 失败就亮错误层 + 每 3s 重试，最多 20 次（60s）；期间任何一次成功就
+// 收掉错误层正常渲染；重试耗尽改口「连不上，重开试试」并停（不再无限打网络）。
+const BOOT_RETRY_MS = 3000;
+const BOOT_RETRY_MAX = 20;
 async function boot() {
-  try {
-    await loadPoses();
-    sceneReady = true;
-  } catch (e) {
-    console.warn('[pet house] manifest 读取失败：', e && e.message);
-    showFatal('小屋素材还没就绪（面板可查看说明）');
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await loadPoses(); // apiGet 自带不抛语义之外的错误在这里统一接住
+      sceneReady = true;
+      hideBoot(); // 加载完成：先收幕，露出正常场景
+      hideFatal(); // 之前失败亮过错误层的话一并收掉
+      break;
+    } catch (e) {
+      console.warn('[pet house] manifest 读取失败：', e && e.message);
+      hideBoot(); // 第一次失败就收幕换错误层（重试期间错误层显示失败次数）
+      if (attempt >= BOOT_RETRY_MAX) {
+        showFatal('小屋连不上插件，把桌宠关掉重开试试'); // 重试耗尽：改口 + 停，不再打网络
+        break;
+      }
+      showFatal(`小屋暂时连不上插件（可能在插件重启中）——正在重试…（第 ${attempt}/${BOOT_RETRY_MAX} 次）`);
+      await new Promise((r) => setTimeout(r, BOOT_RETRY_MS));
+    }
   }
   mountBackgrounds();
   if (sceneReady) {

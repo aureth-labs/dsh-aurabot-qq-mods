@@ -31,6 +31,19 @@
 - **授权名单**：每行一个 QQ 号
 - **仅私聊可用**：默认开
 - **设备缓存秒数**：默认 300 秒，少敲云端、兼防风控
+- **默认只看哪个家**：空 = 全部家庭；选一个家后，QQ 消息与 AI 工具的默认范围就限定在那一家
+  （面板上的「家庭」下拉是随时可切的临时筛选，不影响这条设置）
+
+## 多个家庭
+
+一个米家账号常常挂着好几个家：自己的、爸妈的、朋友分享过来的。
+设备页顶部的**家庭下拉**可以只显示某一家，共享家庭会标注「（共享）」；
+不选就是全部家庭一起列。设备条目带 `homeId`/`homeName`，跨家庭的操作按
+「设备名模糊匹配唯一命中」的规则走，重名时它会让你说得更具体。
+
+> v1.1.1 前有共享家庭的人会看到 `code=-1：no permit` 和空列表：
+> 那时 `home_owner` 写死成了自己的 userId，而共享家庭的房主是别人。
+> 现在按各家庭自己的 `home_owner` 取，取不到的家庭跳过并记日志，不再拖垮整张列表。
 
 ## 会访问哪些网址
 
@@ -51,9 +64,12 @@
 const mijia = api.use('mijia')
 
 // 多维筛选设备列表
-await mijia.listDevices({ room: '客厅', type: 'light', online: true })
-//   -> [{ did, name, model, roomName, isOnline, type, label, controllable }]
-//    type: light/switch/ac/curtain/fan/sensor/hub/other；room 为子串匹配
+await mijia.listDevices({ room: '客厅', type: 'light', online: true, home: '我的家' })
+//   -> [{ did, name, model, roomName, homeId, homeName, isOnline, type, label, controllable }]
+//    type: light/switch/ac/curtain/fan/sensor/hub/other；room/home 为子串匹配，home 不传=按设置里的默认家（再空=全部）
+
+// 账号下有哪些家（shared=true 表示是别人分享过来的）
+await mijia.homesList() // -> [{ id, name, uid, shared, roomCount }]
 
 // 按房间汇总（场景/报表模块好用）
 await mijia.listRooms() // -> [{ room, total, online, types: { 灯: 2, ... } }]
