@@ -80,12 +80,17 @@ describe('路径校验', () => {
     assert.match(r.message, /完整路径/, `提示要能看懂，实际：${r.message}`)
   })
 
-  test('完整绝对路径被接受', () => {
+  // checkRoot 只收 Windows 盘符路径（提示就是「比如 D:\\Aurabot\\rvc」），
+  // 而 node:path 的 isAbsolute 是跟着宿主平台走的：在 Linux/macOS 上 'D:\\x' 不算绝对路径，
+  // 这两条会在 CI 里假红。功能本身只对 Windows 用户有意义，非 Windows 上跳过。
+  const winOnly = process.platform === 'win32' ? test : test.skip
+
+  winOnly('完整绝对路径被接受（Windows 盘符）', () => {
     const r = ST.checkRoot('D:\\Aurabot\\rvc')
     assert.equal(r.ok, true, `完整路径应当接受：${JSON.stringify(r)}`)
   })
 
-  test('路径里有中文时给出警告（但有警告不等于不能用）', () => {
+  winOnly('路径里有中文时给出警告（但有警告不等于不能用）', () => {
     const r = ST.checkRoot('D:\\机器人\\rvc')
     assert.equal(r.ok, true, '有中文仍可用')
     assert.match(r.warn, /中文|空格/, `要提醒换全英文路径，实际：${JSON.stringify(r.warn)}`)
