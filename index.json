@@ -31,6 +31,36 @@
       "publishedAt": "2026-11-25T04:53:00.294Z"
     },
     {
+      "id": "activity",
+      "name": "活动记录",
+      "version": "1.0.0",
+      "description": "定时采样当前前台窗口，按应用分类记录一天在哪些程序上花了多久，生成可查的日志与统计。",
+      "category": "desktop",
+      "tags": [
+        "活动",
+        "统计",
+        "Windows"
+      ],
+      "author": "fengzhi-97",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "process"
+      ],
+      "replacesBuiltin": false,
+      "homepage": "https://github.com/aureth-labs/dsh-aurabot-qq",
+      "tag": "activity-v1.0.0",
+      "file": "activity-v1.0.0.zip",
+      "path": "activity-v1.0.0/activity-v1.0.0.zip",
+      "size": 47489,
+      "sha256": "cccb75995cd772fde15e42e0955837df477ec423bb0f5d538cdeb499af420e12",
+      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
+      "publishedAt": "2026-11-25T14:35:21.423Z"
+    },
+    {
       "id": "ai-brief",
       "name": "AI 新闻推送",
       "version": "2.2.1",
@@ -63,6 +93,32 @@
       "sha256": "2acd1733671bb1f768a7f666477c41797ac8944dff7301a0f3405b5fc87094c9",
       "commit": "60bd267535ab0bd360c76de72433b9609c840d43",
       "publishedAt": "2026-11-12T04:18:02.203Z"
+    },
+    {
+      "id": "anti-ai",
+      "name": "去 AI 味",
+      "version": "1.0.0",
+      "description": "清掉「作为 AI」「总而言之」「希望对你有帮助」这类客服腔，并认出模型写的「不说话」记号",
+      "category": "social",
+      "tags": [
+        "去AI味",
+        "客服腔",
+        "沉默"
+      ],
+      "author": "肥鱼鱼",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [],
+      "replacesBuiltin": false,
+      "tag": "anti-ai-v1.0.0",
+      "file": "anti-ai-v1.0.0.zip",
+      "path": "anti-ai-v1.0.0/anti-ai-v1.0.0.zip",
+      "size": 4036,
+      "sha256": "e6b59f85889aacf6a1c4f679a25bc2b47567dbaa934a825d641c892f174eae45",
+      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
+      "publishedAt": "2026-11-25T14:35:21.423Z"
     },
     {
       "id": "anti-bot",
@@ -375,6 +431,68 @@
       "publishedAt": "2026-11-12T06:53:24.988Z"
     },
     {
+      "id": "bili-dynamic",
+      "name": "B站发动态",
+      "version": "1.0.0",
+      "description": "她自己会发 B 站动态（文案自己写），主人也能让她发一条；每天有上限，可随时关掉",
+      "category": "platform",
+      "tags": [
+        "B站",
+        "动态",
+        "发布"
+      ],
+      "author": "肥鱼鱼",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "bili-dynamic-v1.0.0",
+      "file": "bili-dynamic-v1.0.0.zip",
+      "path": "bili-dynamic-v1.0.0/bili-dynamic-v1.0.0.zip",
+      "size": 6315,
+      "sha256": "5b559ce92896353de8e56913271f10ee13d5ca16ffc777e01eb99497dedb1eb1",
+      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
+      "publishedAt": "2026-11-25T14:35:21.423Z"
+    },
+    {
+      "id": "bili-reply",
+      "name": "B站回动态评论",
+      "version": "1.0.0",
+      "description": "回她自己 B 站动态下面的评论：读评论、写一句、发出去；默认只读不回，有每天上限",
+      "category": "platform",
+      "tags": [
+        "B站",
+        "评论",
+        "回复"
+      ],
+      "author": "肥鱼鱼",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "bili-reply-v1.0.0",
+      "file": "bili-reply-v1.0.0.zip",
+      "path": "bili-reply-v1.0.0/bili-reply-v1.0.0.zip",
+      "size": 6767,
+      "sha256": "b5e6db697a9eb4eb1be56e66f6f3566cf40b18798b053cc6ea8dc63005e15471",
+      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
+      "publishedAt": "2026-11-25T14:35:21.423Z"
+    },
+    {
       "id": "bilibili",
       "name": "回b站@",
       "version": "1.0.0",
@@ -663,6 +781,35 @@
       "publishedAt": "2026-11-16T15:45:11.363Z"
     },
     {
+      "id": "cross-chat-memory",
+      "name": "跨聊天近况",
+      "version": "0.1.0",
+      "description": "让她知道自己在别的聊天里最近说过什么：主人私聊每轮自动带上别处近况；谁当面问「你跟谁聊了啥」时，她自己能翻到。默认不外传主人的私事，群与群之间不串。",
+      "category": "social",
+      "tags": [
+        "记忆",
+        "跨聊天",
+        "上下文"
+      ],
+      "author": "RookieApe-tao",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "cross-chat-memory-v0.1.0",
+      "file": "cross-chat-memory-v0.1.0.zip",
+      "path": "cross-chat-memory-v0.1.0/cross-chat-memory-v0.1.0.zip",
+      "size": 13792,
+      "sha256": "5819fc44ba954c85049c848b4cdad09bfa683355f84dbd0af249f8c3d6eb8b45",
+      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
+      "publishedAt": "2026-11-25T14:35:21.423Z"
+    },
+    {
       "id": "ctx-guard",
       "name": "上下文守门",
       "version": "1.0.0",
@@ -753,6 +900,37 @@
       "publishedAt": "2026-11-25T14:31:36.185Z"
     },
     {
+      "id": "digest",
+      "name": "群聊日报",
+      "version": "1.0.0",
+      "description": "每天到点把当天群聊压成几条要点私聊推给主人：谁在发愁、哪句话被岔开、什么事说定了没落地",
+      "category": "social",
+      "tags": [
+        "日报",
+        "群聊",
+        "总结",
+        "提醒"
+      ],
+      "author": "踏雪",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "digest-v1.0.0",
+      "file": "digest-v1.0.0.zip",
+      "path": "digest-v1.0.0/digest-v1.0.0.zip",
+      "size": 8125,
+      "sha256": "c26df38e19d4d0b7ee050409f4fa53a1b5da2fdc058795ef0298ec8b07a664f7",
+      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
+      "publishedAt": "2026-11-25T14:35:21.423Z"
+    },
+    {
       "id": "douyin",
       "name": "刷抖音",
       "version": "2.3.9",
@@ -813,6 +991,36 @@
       "sha256": "9d0709bcaa0b495b35483201411269608e9048872b12f6e9781bf9d10d1cc943",
       "commit": "319d5d5daf67a205ed8f211f6fe51744f8ba3370",
       "publishedAt": "2026-11-25T12:06:28.597Z"
+    },
+    {
+      "id": "dream-sleep",
+      "name": "做梦睡觉",
+      "version": "3.0.0",
+      "description": "让她像真人一样睡觉：按睡眠周期一段段做梦、会失眠、入睡快慢随机、醒来时间随机、梦会被白天做过的事影响。",
+      "category": "social",
+      "tags": [
+        "睡觉",
+        "做梦",
+        "心情"
+      ],
+      "author": "风止",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "dream-sleep-v3.0.0",
+      "file": "dream-sleep-v3.0.0.zip",
+      "path": "dream-sleep-v3.0.0/dream-sleep-v3.0.0.zip",
+      "size": 28781,
+      "sha256": "21377e9278271735ad8e948c594cc3ccba63f6acb0751ee15156fbac73b4e8d9",
+      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
+      "publishedAt": "2026-11-25T14:35:21.423Z"
     },
     {
       "id": "dsh-image",
@@ -1090,6 +1298,34 @@
       "sha256": "b94a6ef019363b89a33874ea75acac5b1f47ad3fc48b41b6d4a0c5a149b5c342",
       "commit": "7d365c9cc4316f77271c27750f3e319cf4590dae",
       "publishedAt": "2026-11-25T12:24:42.990Z"
+    },
+    {
+      "id": "fortune",
+      "name": "今日运势",
+      "version": "1.0.0",
+      "description": "发「运势」抽一签，每人每天一签；四种签配不同的建议，同一天重复抽只回原来那一签。",
+      "category": "social",
+      "tags": [
+        "运势",
+        "抽签",
+        "娱乐"
+      ],
+      "author": "kiriko666",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem"
+      ],
+      "replacesBuiltin": false,
+      "tag": "fortune-v1.0.0",
+      "file": "fortune-v1.0.0.zip",
+      "path": "fortune-v1.0.0/fortune-v1.0.0.zip",
+      "size": 4193,
+      "sha256": "fe71a6611a91c7a192171256d679f4ca640d8b34b39795f3296700316ff4d6bf",
+      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
+      "publishedAt": "2026-11-25T14:35:21.423Z"
     },
     {
       "id": "github-assistant",
@@ -1842,6 +2078,36 @@
       "publishedAt": "2026-11-14T08:20:25.125Z"
     },
     {
+      "id": "module-wish",
+      "name": "模块心愿单",
+      "version": "1.0.0",
+      "description": "从聊天里发现她还缺什么能力，私信主人；同意后生成可直接交给 AI 的模块开发提示词",
+      "category": "manage",
+      "tags": [
+        "自省",
+        "模块",
+        "需求",
+        "提示词"
+      ],
+      "author": "HDB-Studio",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "plugin-config",
+        "filesystem"
+      ],
+      "replacesBuiltin": false,
+      "tag": "module-wish-v1.0.0",
+      "file": "module-wish-v1.0.0.zip",
+      "path": "module-wish-v1.0.0/module-wish-v1.0.0.zip",
+      "size": 16004,
+      "sha256": "ee8b15248c06f97c756f1980367e07d61b6a80286bdbe459c3fe5f5b4b550e9a",
+      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
+      "publishedAt": "2026-11-25T14:35:21.423Z"
+    },
+    {
       "id": "moegirl",
       "name": "萌娘百科",
       "version": "1.0.0",
@@ -1901,6 +2167,38 @@
       "sha256": "2adc8b04aac2c01e18b5b91a237202a1de0d162a5f19592a249b4c155fa1a6f9",
       "commit": "3880b8766bfc4dba643a05b7d81a03a9c22afd43",
       "publishedAt": "2026-11-07T14:19:58.408Z"
+    },
+    {
+      "id": "morning",
+      "name": "每日晚报",
+      "version": "1.0.0",
+      "description": "每晚定时抓多个科技媒体，筛成几条要点私聊推给主人（标注来源），也能随时问她「今天有什么新闻」",
+      "category": "tool",
+      "tags": [
+        "新闻",
+        "晚报",
+        "RSS",
+        "资讯",
+        "定时"
+      ],
+      "author": "踏雪",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "plugin-config"
+      ],
+      "replacesBuiltin": false,
+      "tag": "morning-v1.0.0",
+      "file": "morning-v1.0.0.zip",
+      "path": "morning-v1.0.0/morning-v1.0.0.zip",
+      "size": 9997,
+      "sha256": "f82c82a0a9f21248171f5c1dd32a2db2ae3b7db12cedc2f39d18dcfb291971dd",
+      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
+      "publishedAt": "2026-11-25T14:35:21.423Z"
     },
     {
       "id": "moyu-calendar",
@@ -2059,6 +2357,38 @@
       "sha256": "d8eb328b7fb5eb1e694bde471ed9f1eefef809553705ff76ae582c649cfe94c2",
       "commit": "2ac48b0e1272c48251f99de329eb7e6df784e311",
       "publishedAt": "2026-11-25T04:56:53.048Z"
+    },
+    {
+      "id": "persona-lab",
+      "name": "人格实验室",
+      "version": "0.2.1",
+      "description": "观察群友的说话习惯，并允许她在主人会话里追加或在授权后重写人格；带备份、撤销和定期自我反思。",
+      "category": "manage",
+      "tags": [
+        "人格",
+        "口癖",
+        "群聊",
+        "自我调整",
+        "备份"
+      ],
+      "author": "Misaki_0903",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "plugin-config",
+        "filesystem",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "persona-lab-v0.2.1",
+      "file": "persona-lab-v0.2.1.zip",
+      "path": "persona-lab-v0.2.1/persona-lab-v0.2.1.zip",
+      "size": 13196,
+      "sha256": "113979e20ecad9276a3b5cc7a7ddc69e1f15bb58b9eff2029944d76b8d11ff5e",
+      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
+      "publishedAt": "2026-11-25T14:35:21.423Z"
     },
     {
       "id": "persona-memory",
@@ -2221,6 +2551,64 @@
       "publishedAt": "2026-11-15T08:27:07.556Z"
     },
     {
+      "id": "poke-pro",
+      "name": "专业戳一戳",
+      "version": "1.0.0",
+      "description": "被戳时按权重随机反戳、LLM 回复、发表情、发表情包、发语音、禁言或触发命令；支持主动戳、关键词戳与定时戳。",
+      "category": "social",
+      "tags": [
+        "戳一戳",
+        "poke",
+        "互动",
+        "反戳"
+      ],
+      "author": "MOSS",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "plugin-config"
+      ],
+      "replacesBuiltin": false,
+      "tag": "poke-pro-v1.0.0",
+      "file": "poke-pro-v1.0.0.zip",
+      "path": "poke-pro-v1.0.0/poke-pro-v1.0.0.zip",
+      "size": 17548,
+      "sha256": "191f2e6f0041c86059bad1f3fcbc77dfc640cb4f83a7e9bbca237f230c79146f",
+      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
+      "publishedAt": "2026-11-25T14:35:21.423Z"
+    },
+    {
+      "id": "poke-react",
+      "name": "小动作（戳回去 · 表情回应）",
+      "version": "1.0.0",
+      "description": "被戳一戳会戳回去；看到消息偶尔给那条消息贴个表情回应，有每小时上限",
+      "category": "social",
+      "tags": [
+        "戳一戳",
+        "表情回应",
+        "互动"
+      ],
+      "author": "肥鱼鱼",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "plugin-config"
+      ],
+      "replacesBuiltin": false,
+      "tag": "poke-react-v1.0.0",
+      "file": "poke-react-v1.0.0.zip",
+      "path": "poke-react-v1.0.0/poke-react-v1.0.0.zip",
+      "size": 4206,
+      "sha256": "f42a347d3dfc365487540d3c756fcb21137ef28520d31ac94e5890b472f7f6fb",
+      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
+      "publishedAt": "2026-11-25T14:35:21.423Z"
+    },
+    {
       "id": "price-watch",
       "name": "价格监控",
       "version": "1.1.0",
@@ -2380,6 +2768,35 @@
       "sha256": "4cd8155b6c6eb54bc8dd095841586cacd6c1d18550364917d6f733783ee7111b",
       "commit": "f2e91f5830239af326c4982c802775ab29a542f6",
       "publishedAt": "2026-11-25T09:28:03.838Z"
+    },
+    {
+      "id": "reminder",
+      "name": "约定提醒",
+      "version": "1.0.0",
+      "description": "她说「明天提醒你」的时候真的会到点说；主人也能发 /提醒 明天早上八点 交作业",
+      "category": "tool",
+      "tags": [
+        "提醒",
+        "约定",
+        "定时"
+      ],
+      "author": "肥鱼鱼",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "plugin-config"
+      ],
+      "replacesBuiltin": false,
+      "tag": "reminder-v1.0.0",
+      "file": "reminder-v1.0.0.zip",
+      "path": "reminder-v1.0.0/reminder-v1.0.0.zip",
+      "size": 5150,
+      "sha256": "a2fa6371ad6b01ac6a5297e126d2f043986b9bcc1157c72aeb4b767d96f1e586",
+      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
+      "publishedAt": "2026-11-25T14:35:21.423Z"
     },
     {
       "id": "rich-input",
@@ -2600,6 +3017,36 @@
       "publishedAt": "2026-11-05T12:14:07.525Z"
     },
     {
+      "id": "schedule",
+      "name": "她的一天",
+      "version": "1.0.0",
+      "description": "每天给她排一张时间表（几点在干嘛、忙不忙），聊天时她知道自己在做什么",
+      "category": "social",
+      "tags": [
+        "日程",
+        "作息",
+        "人设"
+      ],
+      "author": "肥鱼鱼",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "schedule-v1.0.0",
+      "file": "schedule-v1.0.0.zip",
+      "path": "schedule-v1.0.0/schedule-v1.0.0.zip",
+      "size": 5625,
+      "sha256": "2cc33e9bcd1403433314a80da5259b8ed98951b78c2335bf2caebcf0267f64bd",
+      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
+      "publishedAt": "2026-11-25T14:35:21.423Z"
+    },
+    {
       "id": "self-learn",
       "name": "自主学习",
       "version": "1.0.0",
@@ -2767,6 +3214,66 @@
       "publishedAt": "2026-11-11T08:36:13.298Z"
     },
     {
+      "id": "sleep",
+      "name": "睡觉做梦",
+      "version": "2.1.0",
+      "description": "拟真的睡眠节律：入睡与醒来时间随机、会失眠、会做梦，梦与白天经历挂钩，并区分梦与现实分别入库。",
+      "category": "creative",
+      "tags": [
+        "睡眠",
+        "做梦",
+        "节律"
+      ],
+      "author": "fengzhi-97",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "homepage": "https://github.com/aureth-labs/dsh-aurabot-qq",
+      "tag": "sleep-v2.1.0",
+      "file": "sleep-v2.1.0.zip",
+      "path": "sleep-v2.1.0/sleep-v2.1.0.zip",
+      "size": 26076,
+      "sha256": "7b8fd73d291270b9e8c074b75f6d2e0fc864b3de2fbd855ab0679023de163e45",
+      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
+      "publishedAt": "2026-11-25T14:35:21.423Z"
+    },
+    {
+      "id": "slop",
+      "name": "去套话",
+      "version": "1.0.0",
+      "description": "只在发给模型的历史上改写套话式提问，不动落盘会话，也不改主人看到的原文。",
+      "category": "tool",
+      "tags": [
+        "聊天",
+        "改写"
+      ],
+      "author": "fengzhi-97",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "homepage": "https://github.com/aureth-labs/dsh-aurabot-qq",
+      "tag": "slop-v1.0.0",
+      "file": "slop-v1.0.0.zip",
+      "path": "slop-v1.0.0/slop-v1.0.0.zip",
+      "size": 18902,
+      "sha256": "8065279cf66a868011d833b2d26ae010da1473eacd273f59b9a69a7f1835f691",
+      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
+      "publishedAt": "2026-11-25T14:35:21.423Z"
+    },
+    {
       "id": "smart-search",
       "name": "联网搜索",
       "version": "1.0.3",
@@ -2796,6 +3303,66 @@
       "sha256": "529588234b4dc966c6176b245dfe04868e309416e849628e4755972309efe90b",
       "commit": "9b3e577853d934f7983f4f4e7ce0427f2356676f",
       "publishedAt": "2026-11-24T03:18:06.903Z"
+    },
+    {
+      "id": "song",
+      "name": "点歌",
+      "version": "1.0.1",
+      "description": "按歌名或关键词点歌，拉取音源并推送播放，支持队列与失败回退。替换内置 song。",
+      "category": "social",
+      "tags": [
+        "音乐",
+        "点歌"
+      ],
+      "author": "fengzhi-97",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "process",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": true,
+      "homepage": "https://github.com/aureth-labs/dsh-aurabot-qq",
+      "tag": "song-v1.0.1",
+      "file": "song-v1.0.1.zip",
+      "path": "song-v1.0.1/song-v1.0.1.zip",
+      "size": 55447,
+      "sha256": "b07dbe194601da91ea1ef366363388e8ca294c9a4fdde735ba68ba1bc8f22b36",
+      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
+      "publishedAt": "2026-11-25T14:35:21.423Z"
+    },
+    {
+      "id": "speak-natural",
+      "name": "说话自然度",
+      "version": "1.0.0",
+      "description": "让她像正常人打字一样说话：短、不解释、不总结、不堆颜文字；发出去前再兜底剪掉书面语开头和括号动作。",
+      "category": "social",
+      "tags": [
+        "说话方式",
+        "去AI味",
+        "聊天增强"
+      ],
+      "author": "旭光Ⅺ",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "speak-natural-v1.0.0",
+      "file": "speak-natural-v1.0.0.zip",
+      "path": "speak-natural-v1.0.0/speak-natural-v1.0.0.zip",
+      "size": 9998,
+      "sha256": "17a1a3da61c62fd251993bbd3aa9dd671aac400010c48e78062d2229a97595c5",
+      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
+      "publishedAt": "2026-11-25T14:35:21.423Z"
     },
     {
       "id": "stardew",
@@ -2992,6 +3559,36 @@
       "sha256": "e8aa2828c843fefc135184ade1a916dca39fe81f560f6c37a080cb08c0024b7b",
       "commit": "191316ee69e375cdf2d3a7a1e8492c5d1119d5a1",
       "publishedAt": "2026-11-25T13:08:33.270Z"
+    },
+    {
+      "id": "todo",
+      "name": "待办调度",
+      "version": "1.1.0",
+      "description": "定时待办与可选的早晚问候计划",
+      "category": "tool",
+      "tags": [
+        "待办",
+        "定时",
+        "提醒"
+      ],
+      "author": "明天阵雨转晴 (Jupiter-L-Z)",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "todo-v1.1.0",
+      "file": "todo-v1.1.0.zip",
+      "path": "todo-v1.1.0/todo-v1.1.0.zip",
+      "size": 20230,
+      "sha256": "17f854b90c5de7955a6a9cbdaab2d7a76ed7062dac97ed4c30e1c1ead24c00be",
+      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
+      "publishedAt": "2026-11-25T14:35:21.423Z"
     },
     {
       "id": "token-budget",
@@ -3455,5 +4052,5 @@
       "reason": "作者主动撤回。"
     }
   ],
-  "generatedAt": "2026-11-25T14:31:36.185Z"
+  "generatedAt": "2026-11-25T14:35:21.423Z"
 }
