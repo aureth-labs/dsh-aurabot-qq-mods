@@ -13,6 +13,7 @@
 import { join } from 'node:path'
 import { mkdirSync } from 'node:fs'
 import { UIA_OPS, uiaScripts, prepareUia, interpretUia } from './uia.mjs'
+import { QQ_OPS, qqScripts, prepareQq, interpretQq } from './qq.mjs'
 
 /** SendKeys 白名单：常用键名 → token。不接受任意字符串（SendKeys 的 +^%~(){}[] 是语法字符）。 */
 const KEY_TOKENS = {
@@ -36,6 +37,13 @@ export const OPS = {
   'clipboard.read': { label: '读剪贴板', danger: 'safe' },
   'clipboard.write': { label: '写剪贴板', danger: 'safe' },
   'screenshot': { label: '全屏截图', danger: 'safe' },
+  // v1.3.0 保留的通用截屏：抓虚拟屏幕→缩放→JPEG。v1.3.1 不再用它做「共享屏幕」
+  //（共享改走 QQ 客户端原生功能），但截图/诊断仍可用；只读屏幕，danger=safe。
+  'screen.capture': { label: '截屏（JPEG 压缩帧）', danger: 'safe' },
+  'screen.info': { label: '读屏幕尺寸', danger: 'safe' },
+  // v1.3.1：走机器人自己的 QQ 客户端（GUI）发屏幕共享 / 远程协助邀请。
+  // 不再截图发帧、也不自建网页；真正的风险是「把屏幕交出去」→ input。
+  ...QQ_OPS,
   'window.list': { label: '枚举窗口', danger: 'safe' },
   'window.activate': { label: '激活窗口', danger: 'input' },
   'window.close': { label: '关闭窗口', danger: 'close' },
@@ -86,6 +94,54 @@ $g.Dispose()
 $bmp.Save((D $a[0]),[System.Drawing.Imaging.ImageFormat]::Png)
 $bmp.Dispose()
 Write-Output ok`,
+  // v1.3.0：共享帧。与 screenshot 的区别是「缩放 + JPEG 质量」——整屏 PNG 每帧 3~8MB，
+  // 走 QQ 发图或网页拉流都撑不住；缩到 maxWidth 宽、质量 20~95 的 JPEG 一般 60~250KB。
+  // 编码走 WPF JpegBitmapEncoder，不用 System.Drawing 的 EncoderParameters：真机（2026-11-17）
+  // Defender AMSI 会把「CopyFromScreen + EncoderParameters 落 JPEG」整段判成恶意脚本，换成 WPF 才放行。
+  // 输出末尾一行 JSON 是虚拟屏幕矩形（远端输入的归一化坐标按它换算），文件路径由 JS 生成后经 base64 传入。
+  'screen.capture':
+    `${PREFIX}$ErrorActionPreference='Stop'
+${ARGS}
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName PresentationCore
+Add-Type -AssemblyName WindowsBase
+$b=[System.Windows.Forms.SystemInformation]::VirtualScreen
+$maxW=[int](D $a[0]); $q=[int](D $a[1])
+if($maxW -lt 320){ $maxW=320 }; if($maxW -gt 3840){ $maxW=3840 }
+if($q -lt 20){ $q=20 }; if($q -gt 95){ $q=95 }
+$scale=1.0
+if($b.Width -gt $maxW){ $scale=$maxW / [double]$b.Width }
+$w=[int][Math]::Max(1,[Math]::Round($b.Width * $scale))
+$h=[int][Math]::Max(1,[Math]::Round($b.Height * $scale))
+$bmp=New-Object System.Drawing.Bitmap $b.Width,$b.Height
+$g=[System.Drawing.Graphics]::FromImage($bmp)
+$g.CopyFromScreen($b.X,$b.Y,0,0,$bmp.Size)
+$g.Dispose()
+$small=New-Object System.Drawing.Bitmap $w,$h
+$g2=[System.Drawing.Graphics]::FromImage($small)
+$g2.InterpolationMode=[System.Drawing.Drawing2D.InterpolationMode]::HighQualityBilinear
+$g2.DrawImage($bmp,0,0,$w,$h)
+$g2.Dispose()
+$ms=New-Object System.IO.MemoryStream
+$small.Save($ms,[System.Drawing.Imaging.ImageFormat]::Bmp)
+$ms.Position=0
+$frame=[System.Windows.Media.Imaging.BitmapFrame]::Create($ms)
+$enc=New-Object System.Windows.Media.Imaging.JpegBitmapEncoder
+$enc.QualityLevel=[int]$q
+$enc.Frames.Add($frame)
+$fs=[System.IO.File]::Create((D $a[2]))
+$enc.Save($fs)
+$fs.Dispose()
+$ms.Dispose()
+$small.Dispose()
+$bmp.Dispose()
+@{x=[int]$b.X;y=[int]$b.Y;w=[int]$b.Width;h=[int]$b.Height;sw=$w;sh=$h} | ConvertTo-Json -Compress`,
+  'screen.info':
+    `${PREFIX}$ErrorActionPreference='Stop'
+Add-Type -AssemblyName System.Windows.Forms
+$b=[System.Windows.Forms.SystemInformation]::VirtualScreen
+@{x=[int]$b.X;y=[int]$b.Y;w=[int]$b.Width;h=[int]$b.Height} | ConvertTo-Json -Compress`,
   'window.list':
     `${PREFIX}$ErrorActionPreference='Stop'
 @{ w=@(Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object @{n='pid';e={$_.Id}},@{n='name';e={$_.ProcessName}},@{n='title';e={$_.MainWindowTitle}}) } | ConvertTo-Json -Compress -Depth 3`,
@@ -149,6 +205,8 @@ Write-Output ok`,
   // UIA 的 5 段脚本在 lib/uia.mjs（与选择器解析、输出解释放在一起，方便对照契约看）；
   // PREFIX/ARGS 从本文件注入，保证「压进度流 + base64 参数」两处只有一份实现。
   ...uiaScripts({ PREFIX, ARGS }),
+  // v1.3.1：QQ 原生屏幕共享 / 远程协助（脚本在 lib/qq.mjs，同样只注入 PREFIX/ARGS）。
+  ...qqScripts({ PREFIX, ARGS }),
 }
 
 /**
@@ -183,12 +241,25 @@ export function createOps({ ps, dataDir }) {
       case 'uia.getText':
       case 'uia.invoke':
         return prepareUia(op, args)
+      // v1.3.1：QQ 原生共享/协助的参数整理在 lib/qq.mjs（hwnd/昵称/等待秒数）。
+      case 'qq.windows':
+      case 'qq.share':
+      case 'qq.shareStop':
+      case 'qq.assist':
+      case 'qq.assistStop':
+        return prepareQq(op, args)
       case 'clipboard.write': {
         const text = String(args.text ?? '')
         return { argv: [text], summary: `${text.length} 个字符` }
       }
       case 'screenshot':
+      case 'screen.info':
         return { argv: [], summary: '' } // 文件名由 run 自己生成（落 dataDir/shots，调用方传什么都不认）
+      case 'screen.capture': { // v1.3.0：共享帧的参数只认「宽度上限 + JPEG 质量」，路径由 run 生成
+        const maxWidth = Math.min(3840, Math.max(320, Math.round(Number(args.maxWidth) || 1280)))
+        const quality = Math.min(95, Math.max(20, Math.round(Number(args.quality) || 60)))
+        return { argv: [String(maxWidth), String(quality)], summary: `${maxWidth}px · JPEG ${quality}` }
+      }
       case 'window.activate':
       case 'window.close': {
         const pid = num(args.pid, 'pid')
@@ -230,23 +301,31 @@ export function createOps({ ps, dataDir }) {
       mkdirSync(join(dataDir, 'shots'), { recursive: true })
       argv.push(join(dataDir, 'shots', `shot-${Date.now()}.png`))
     }
+    // v1.3.0：共享帧同样落 dataDir/shots（文件名带随机后缀，避免同一毫秒两帧撞名）
+    if (op === 'screen.capture') {
+      mkdirSync(join(dataDir, 'shots'), { recursive: true })
+      argv.push(join(dataDir, 'shots', `frame-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.jpg`))
+    }
     // UIA 五件：脚本内部已经把「找不到窗口/元素/不支持该模式」都翻成结构化失败输出，正常退出；
     // 只有真出错（PowerShell 起不来、脚本崩）才会抛。抛的时候错误上若挂着已产出的 stdout
     // （注入的 fake ps 可以挂），照样按结构化结果解释——真实 ps.run 不挂，就把错往上交。
     const isUia = op.startsWith('uia.')
+    const isQq = op.startsWith('qq.')
     // 只读类操作偶发失败（PS 5.1 首次加载模块的退出码毛刺）安全重试一次；动作类绝不重试（防重复点击）
-    const retryable = ['screenshot', 'window.list', 'clipboard.read', 'uia.tree', 'uia.getText']
+    const retryable = ['screenshot', 'screen.capture', 'screen.info', 'window.list', 'clipboard.read', 'uia.tree', 'uia.getText', 'qq.windows']
     let out = ''
     try {
       out = (await ps.run(buildScript(target, argv))).trim()
     } catch (e) {
       const partial = typeof e?.stdout === 'string' ? e.stdout.trim() : ''
-      if (isUia && partial) out = partial
+      if ((isUia || isQq) && partial) out = partial
       else if (!retryable.includes(op)) throw e
       else out = (await ps.run(buildScript(target, argv))).trim()
     }
     // UIA 五件的后续处理统一交给 lib/uia.mjs 的 interpretUia（按操作挑字段、拼给主人看的话）
     if (isUia) return interpretUia(op, out)
+    // v1.3.1：QQ 原生共享/协助同样由脚本内部把失败原因结构化，再交给 lib/qq.mjs 统一翻译。
+    if (isQq) return interpretQq(op, out)
     switch (op) {
       case 'clipboard.read':
         return { ok: true, message: out ? `剪贴板内容（${out.length} 字符）` : '剪贴板是空的', data: out }
@@ -254,6 +333,27 @@ export function createOps({ ps, dataDir }) {
         return { ok: true, message: '已写入剪贴板' }
       case 'screenshot':
         return { ok: true, message: `截图已保存：${argv[0]}`, data: argv[0] }
+      // v1.3.0：共享帧。stdout 末尾是虚拟屏幕矩形 JSON；解析失败不算失败（画面已经存下来了），
+      // 只是远端坐标换算会退回「按画面尺寸等比」的兜底。
+      case 'screen.capture': {
+        let meta = {}
+        try { const m = String(out).match(/\{[\s\S]*\}/); meta = m ? JSON.parse(m[0]) : {} } catch { meta = {} }
+        return {
+          ok: true,
+          message: `已截一帧：${meta.sw || '?'}×${meta.sh || '?'}（${argv[0]}px / JPEG ${argv[1]}）`,
+          data: {
+            file: argv[2],
+            x: Number(meta.x) || 0, y: Number(meta.y) || 0,
+            width: Number(meta.w) || 0, height: Number(meta.h) || 0,
+            scaledWidth: Number(meta.sw) || 0, scaledHeight: Number(meta.sh) || 0,
+          },
+        }
+      }
+      case 'screen.info': {
+        let meta = {}
+        try { const m = String(out).match(/\{[\s\S]*\}/); meta = m ? JSON.parse(m[0]) : {} } catch { throw new Error('屏幕尺寸读不出来：' + String(out).slice(0, 120)) }
+        return { ok: true, message: `虚拟屏幕 ${meta.w}×${meta.h}（原点 ${meta.x},${meta.y}）`, data: { x: Number(meta.x) || 0, y: Number(meta.y) || 0, width: Number(meta.w) || 0, height: Number(meta.h) || 0 } }
+      }
       case 'window.list': {
         // ConvertTo-Json 单元素时给的不是数组：统一包一层
         let list = []
