@@ -43,11 +43,13 @@ function harness({ behavior = 'ok', pageUrl = 'about:blank' } = {}) {
         child.pid = undefined
         queueMicrotask(() => child.emit('error', new Error('spawn ENOENT')))
       }
+      // 静默退出：进程起来马上 exit、stderr 一个字不写（同目录残留实例 / 清理搬盘弄坏安装）
+      if (behavior === 'silent-exit') queueMicrotask(() => child.emit('exit', 0, null))
       return child
     },
     getPort: async () => 18888,
     getBrowserJson: async (url) => {
-      if (behavior === 'no-browser') throw new Error('连接被拒绝')
+      if (behavior === 'no-browser' || behavior === 'silent-exit') throw new Error('连接被拒绝')
       if (url.endsWith('/json/list')) return [{ id: '1', type: 'page', url: pageUrl, webSocketDebuggerUrl: 'ws://127.0.0.1/test' }]
       if (url.includes('/json/new')) return { id: '2', type: 'page', url: 'about:blank', webSocketDebuggerUrl: 'ws://127.0.0.1/new' }
       return { Browser: '假浏览器' }
@@ -175,6 +177,20 @@ test('生命周期：启动失败要清理并带退避，启动参数不写模�
     // 退避期间再 launch：不再真启动，直接回退避提示
     const r2 = await h.b.launch('测试')
     assert.equal(r2.ok, false)
+  } finally {
+    h.cleanup()
+  }
+})
+
+test('静默退出要说明真实原因，不再怪「浏览器路径和专用资料目录」', async () => {
+  const h = harness({ behavior: 'silent-exit' })
+  try {
+    const r = await h.b.launch('测试')
+    assert.equal(r.ok, false)
+    assert.match(r.message, /自己退出/)
+    assert.match(r.message, /任务管理器|重装 Edge/)
+    assert.doesNotMatch(r.message, /检查浏览器路径和专用资料目录/, '路径明明没问题，不该再怪路径')
+    assert.equal(h.children.length, 1)
   } finally {
     h.cleanup()
   }

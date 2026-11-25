@@ -1,0 +1,29 @@
+{
+  "name": "shangxue-playmusic",
+  "displayName": "语音点歌",
+  "version": "1.0.0",
+  "description": "点歌功能：搜哔哩哔哩/网易云的原唱，按匹配度挑最优一首，下载后抽成 mp3 当语音条发到当前会话。这是省算力的点歌通道（不占用唱歌/翻唱）",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "author": "shangxue",
+  "category": "social",
+  "tags": ["点歌", "音乐", "哔哩哔哩", "网易云", "语音条"],
+  "platforms": ["qq"],
+  "pluginApi": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "pluginCapabilities": ["filesystem", "network", "process"],
+  "build": {
+    "out": "lib"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "npm run build && node --test \"test/*.test.mjs\"",
+    "check": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.6.3"
+  }
+}

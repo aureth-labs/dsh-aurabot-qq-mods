@@ -182,7 +182,7 @@ export function shouldRecord(row, { recordGroups = true, groupList = '', private
 export default {
   id: 'history-vault',
   name: '跨会话记忆',
-  version: '0.1.3',
+  version: '0.1.4',
   api: 1,
   description: '三层存储跨会话保留聊天细节，分层读取，会话归档后细节不丢，重复压缩不重复花模型调用',
   panel: 'panel.js',
@@ -197,6 +197,7 @@ export default {
     dailyCalls: 24,       // 每天最多几次压缩模型调用（成本上限；要够首装回填一周聊天用）
     injectDays: 3,        // 注入备忘覆盖最近几天
     injectChars: INJECT_MAX_CHARS,
+    injectOnce: true,     // 同一会话同一份备忘只注入一次；摘要更新或换会话才重新注入
   },
   settings: [
     { key: 'enabled', label: '启用', type: 'switch', hint: '关掉后不再归档，也不再注入备忘' },
@@ -208,6 +209,7 @@ export default {
     { key: 'monthAfterDays', label: '满几天压月印象', type: 'number', min: 32, max: 365, step: 1 },
     { key: 'dailyCalls', label: '每天压缩调用上限', type: 'number', min: 1, max: 60, step: 1, hint: '模型调用的成本闸' },
     { key: 'injectDays', label: '备忘覆盖天数', type: 'number', min: 1, max: 14, step: 1 },
+    { key: 'injectOnce', label: '同一会话只注入一次', type: 'switch', hint: '默认开：同一份备忘不再每轮重复写进会话历史；摘要更新或换会话时自动重新注入。关掉恢复每轮注入。' },
   ],
 
   async setup(api) {
@@ -538,6 +540,9 @@ export default {
       return text
     }
 
+    // 同一个会话里，同一份备忘只追加一次；否则它会被写进会话历史、下一轮又整段重发。
+    // 摘要变化或换会话（sessionId 变化）才重新注入。
+    const injectedMemo = new Map() // sessionId || chatId -> text
     api.on('prompt', (content, info) => {
       const c = cfg()
       if (!c.enabled) return content
@@ -545,7 +550,14 @@ export default {
       if (chat.kind === 'system') return content // 后台自省回合不注入
       const text = memoFor(chat.chatId, c.injectDays)
       if (!text) return content
-      return [...content, { type: 'text', text: text.slice(0, Math.max(200, c.injectChars)) }]
+      const injectText = text.slice(0, Math.max(200, c.injectChars))
+      if (c.injectOnce !== false) {
+        const key = String(info?.sessionId || chat.chatId || '')
+        if (key && injectedMemo.get(key) === injectText) return content
+        if (injectedMemo.size > 500) injectedMemo.clear()
+        if (key) injectedMemo.set(key, injectText)
+      }
+      return [...content, { type: 'text', text: injectText }]
     })
 
     api.rule(() => {

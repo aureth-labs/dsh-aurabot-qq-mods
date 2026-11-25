@@ -17,11 +17,12 @@ const DUMP_XML =
   '<node class="android.widget.TextView" text="hello" bounds="[0,100][1080,2340]"/></hierarchy>'
 
 /** 组一个 fake api：每次全新（session/捕获互相隔离），返回 { api, 记录 } */
-function fakeApi({ hub = {} } = {}) {
+function fakeApi({ hub = {}, visibleDecisions = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'phone-route-'))
   const rec = {
     dir,
     thinkCalls: [], // { key, title, prompt }
+    askCalls: [], // 静默直连（不进会话）的调用，#61 回归要看它
     subagentCalls: [], // 方案 A 下应始终为空
     sendTexts: [],
     routes: new Map(), // path → handler
@@ -40,6 +41,7 @@ function fakeApi({ hub = {} } = {}) {
     sessionTimeoutMs: 60000,
     writeEventMemory: true,
     decisionModel: '',
+    visibleDecisions, // 默认 true（本文件多数用例要验决策窗落点 = think 路径）；#61 回归用例显式传 false
     autoBrowse: false,
     intervalHours: 4,
     maxRunsPerDay: 3,
@@ -68,7 +70,7 @@ function fakeApi({ hub = {} } = {}) {
     dataDir: () => dir,
     settings: () => settings,
     log: { info: () => {}, warn: () => {}, error: () => {} },
-    ask: async () => '合并后的经验正文',
+    ask: async (o) => { rec.askCalls.push(o); return '{"action":"finish","ok":true,"summary":"做完了"}' },
     // 工作区决策（self / delegate 都落到这里）；一步 finish
     think: async (prompt, opts = {}) => {
       rec.thinkCalls.push({ key: opts.key, title: opts.title, prompt })
@@ -170,5 +172,23 @@ test('定时器 sweep（cron 流程）→ 共享决策窗（key=decision），�
   assert.equal(rec.subagentCalls.length, 0)
   assert.equal(rec.thinkCalls[0].key, 'decision', `定时决策应落共享会话窗（实际 key=${rec.thinkCalls[0].key}）`)
   assert.ok(await waitFor(() => mod.session.status().owner === null), '跑完应释放会话锁')
+  rmSync(rec.dir, { recursive: true, force: true })
+})
+
+// #61 回归：「决策过程可见」关着（默认）时，操作决策一律走 api.ask 静默直连——
+// 任务书与界面文字不得注入她的人格会话窗（那会被当成对方发言，她会一直"回复屏幕"）。
+test('#61：visibleDecisions=false（默认）→ 决策不进会话窗，全走静默直连 api.ask', async () => {
+  const { api, rec } = fakeApi({ visibleDecisions: false })
+  const mod = phone.setup(api)
+  const r = await mod.run({ goal: '打开B站看看' })
+  assert.equal(r.ok, true)
+  assert.equal(rec.thinkCalls.length, 0, '可见开关关着时一条决策都不许进会话窗（api.think）')
+  assert.ok(rec.askCalls.length >= 1, '决策应走 api.ask 静默直连')
+  // 结构保持 {system,text} 分离：整段拼成正文塞进会话，正是 #61 的病灶形态。
+  // 注意 askCalls 里也可能有记忆整理等直连 api.ask 的字符串调用——那本来就不进会话，合规。
+  for (const call of rec.askCalls.filter((c) => c && typeof c === 'object')) {
+    assert.ok(!/【系统指令/.test(call.text || ''), 'text 里不该混入系统指令前缀')
+  }
+  assert.equal(mod.session.status().owner, null, '跑完应释放会话锁')
   rmSync(rec.dir, { recursive: true, force: true })
 })

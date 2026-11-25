@@ -8,6 +8,59 @@
 
 原是 Aurabot 内置模块，1.2.0 起搬到社区模块库。老用户升级时，在用的会自动装回来，配置和登录状态不变。
 
+## 语音对讲（1.1.0）
+
+按一下热键开始听，说完再按一下发出去，她自己开口回答，声音从你的扬声器出来。没有通话窗、没有挂断按钮，桌宠只冒一条状态气泡（🎤 在听… / 🤔 在想… / 🔊 在说…）。
+
+为什么是 toggle 而不是按住说话：Electron 的 `globalShortcut` 只有按键按下事件，拿不到抬起，所以按住说话和「静音多少秒断句」都做不了。第一下按下 = 开始录音，第二下按下 = 停止并发送，就是这个原因。
+
+服务端一轮走完 `识别（ASR）→ 她本人思考（api.think）→ 语音合成（可选变声）→ 返回音频`，全程不经过 QQ。
+
+### 面板设置
+
+| 配置项 | 默认 | 说明 |
+| --- | --- | --- |
+| `voiceHotkey` | `Alt+Space` | 全局热键。留空 = 不启用；被别的程序占用时气泡提醒一次 |
+| `callEngine` | `native` | 回答的声音：`native`（插件自带 edge 合成，失败退 Windows 自带语音，**不依赖豆包**）/ `sovits`（本地 GPT-SoVITS）/ `voice`（「语音」页接管，出你自己选了接管才碰） |
+| `sovitsUrl` | `http://127.0.0.1:9880` | 仅 `callEngine=sovits` 使用；参考音频沿用「语音」页的 gptsovits 配置 |
+| `callRvc` + `callRvcVoice` | 关 / 空 | TTS 出稿后用「翻唱」模块的音色再变一次声，说话唱歌同一个声音 |
+| `callMaxChars` | `120` | 一次最多说多少字（口语要短，长了反而不像人） |
+| `callAsrUrl` | `http://127.0.0.1:8000` | 备选识别服务（本地 faster-whisper，`POST /v1/audio/transcriptions`） |
+| `callMicDeviceId` / `callSpeakerDeviceId` | 空 | 客户端枚举设备后上报，留空 = 系统默认 |
+| `callTalkMode` | `toggle` | 固定 toggle，只此一档（原因见上） |
+
+### 依赖的本地服务与降级行为
+
+这一段是重点：**没有任何本地服务时，桌宠不会崩，只是没法对讲**。每一环都有明确降级与一句人话提示。
+
+| 环节 | 依赖 | 缺失/不可用时的行为 |
+| --- | --- | --- |
+| 耳朵（识别） | 优先 DSH「语音输入」插件；退路是本地 faster-whisper（`callAsrUrl`） | **前置探活**：开录前先探一次（DSH provider 是否启用，或对 `callAsrUrl` 发 `GET /health`，2 秒超时）。不可用就直接返回 `{ok:false, error:'asr-not-ready', message:'本地识别 … 连不上，请在面板配 faster-whisper 或开 DSH 语音输入'}`，客户端弹气泡，**不会让你说完才告诉你没配**。通道通了但识别不出内容 → `asr-failed`（「没听清，再说一遍？」） |
+| 嘴（合成） | `callEngine=native` 时用插件自带的 `voice/tts.js`（锁 edge 引擎）；`sovits` 用本地 GPT-SoVITS；`voice` 用「语音」模块 | `native` 失败自动退 Windows 自带语音，**全程不需要任何外部服务**；`sovits` 连不上 → 这一轮返回 `tts-failed`（「声音没合成出来，稍后再试」）并在模块日志里记原因；`voice` 模块没开 → `「语音」模块没开着，接管引擎不可用` |
+| 变声（RVC） | 「翻唱」模块已就绪且已导入该音色 | 一律**降级为原声，不失败**：没装/没就绪 → `rvcNote:'翻唱模块没就绪，这一轮没变声（原声）'`；音色名对不上 → `rvcNote:'翻唱里没有音色「X」，这一轮没变声（原声）'`；转换抛错 → `rvcNote:'变声失败，用原声：…'` |
+| 大脑 | `api.think` | 抛错或空回复 → `think-failed`（「她一时没想好怎么答，再说一遍？」） |
+
+客户端侧同样四道保险，任何一步失败热键都能立刻再按：取麦 8 秒超时、录音 60 秒自动收口、网络请求 30 秒超时、播放 15 秒兜底。整轮结束（成功或失败）都会 `voice:done` 解锁热键，并有 70 秒活动看门狗兜底防渲染层卡死。
+
+麦克风权限收窄到「只对隐藏录音窗、且只在录音期间放行」——不是对所有窗口常驻放行。
+
+### 接口
+
+模块 route 全路径精确匹配，逐条注册（不做前缀匹配）：
+
+| 路由 | 说明 |
+| --- | --- |
+| `GET /aurabot/api/voice/talk/config` | 配置快照 + 实时 ASR 探活：`{ok, engine, rvc, rvcVoice, talkMode:'toggle', hotkey, micDeviceId, speakerDeviceId, asrReady, asrReason}` |
+| `POST /aurabot/api/voice/talk` | 一轮对讲。上行 `{ audio: <base64 wav/webm> }`（`audioB64` 仅兜底读一次）；成功回 `{ok, heard, replyText, audioB64, mime, engine, ms, rvcNote?}`，失败回 `{ok:false, error, message}` |
+
+两条都走 `x-pet-token` 鉴权。反代部署时把这两条加进放行清单即可（其余路径保持 404）。
+
+### 从「打电话」升级
+
+旧的「打电话」形态（`/client/call/*` 五条路由、通话状态机、挂断写记忆、通话窗）已整体删除，换成上面的单轮对讲。旧配置项 `callPttKey`（按住说话键）与 `callVadSilence`（静音断句阈值）随之移除——它们依赖按键抬起事件和 VAD，而这套实现拿不到抬起、也不做流式断句。面板上直接少了这两项，不会有残留项；其余 `call*` 配置项保留原名。
+
+**升级后客户端文件有变化**（新增 `voice-talk.html` / `voice-talk.js`），面板「桌宠」卡会提示「插件里的客户端更新了」，点一次「重新生成客户端」并重启 Electron 才生效。
+
 ## 人物大小
 
 配置项 `petScale`（0.5~2.0，默认 1）：整个桌宠窗口按比例缩放，物理和拖拽跟着一起变。面板「桌宠」卡的大小滑条改的就是这一项（1.0.3 起支持）。
