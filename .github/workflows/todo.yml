@@ -1,0 +1,33 @@
+name: Todo submission checks
+on:
+  push:
+    branches: [add-todo-scheduler-1.0.0]
+  pull_request:
+    paths:
+      - 'modules/todo/**'
+      - '.github/workflows/todo.yml'
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 22
+      - name: Module tests
+        run: node --test modules/todo/test/*.test.mjs
+      - name: Catalog freshness
+        run: |
+          npm run catalog
+          git diff --exit-code -- modules/README.md
+      - name: Manifest and version checks
+        run: |
+          git fetch https://github.com/aureth-labs/dsh-aurabot-qq-mods.git main
+          node scripts/check.mjs --base FETCH_HEAD
+      - name: Package and entry validation
+        run: npm run pack
