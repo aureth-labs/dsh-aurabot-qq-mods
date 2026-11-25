@@ -1,0 +1,21 @@
+{
+  "id": "balance",
+  "name": "查余额",
+  "version": "1.0.0",
+  "description": "在 QQ 里查 DeepSeek 官方和中转站的账户余额：/余额 一条命令出结果，也能问她「我还有多少钱」。",
+  "category": "tool",
+  "tags": [
+    "余额",
+    "DeepSeek",
+    "中转站"
+  ],
+  "author": "DFH-clouds",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "network",
+    "filesystem"
+  ]
+}

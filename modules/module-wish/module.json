@@ -1,0 +1,22 @@
+{
+  "id": "module-wish",
+  "name": "模块心愿单",
+  "version": "1.0.0",
+  "description": "从聊天里发现她还缺什么能力，私信主人；同意后生成可直接交给 AI 的模块开发提示词",
+  "category": "manage",
+  "tags": [
+    "自省",
+    "模块",
+    "需求",
+    "提示词"
+  ],
+  "author": "HDB-Studio",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "plugin-config",
+    "filesystem"
+  ]
+}
