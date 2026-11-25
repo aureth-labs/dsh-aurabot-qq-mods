@@ -1,0 +1,15 @@
+{
+  "id": "mentions-catchup",
+  "name": "补回错过的@",
+  "version": "1.0.0",
+  "description": "电脑不会 24 小时开机。开机、网关重连、以及每 30 分钟回去看一眼，把「@ 了我但没回」的消息补上，攒够时间才补，不刷屏。",
+  "category": "social",
+  "tags": ["离线补课", "@回复", "群聊"],
+  "author": "旭光Ⅺ",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["plugin-config"],
+  "homepage": ""
+}
