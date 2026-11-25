@@ -1,0 +1,23 @@
+{
+    "id":  "poke-react",
+    "name":  "小动作（戳回去 · 表情回应）",
+    "version":  "1.0.0",
+    "description":  "被戳一戳会戳回去；看到消息偶尔给那条消息贴个表情回应，有每小时上限",
+    "category":  "social",
+    "tags":  [
+                 "戳一戳",
+                 "表情回应",
+                 "互动"
+             ],
+    "author":  "肥鱼鱼",
+    "license":  "MIT",
+    "api":  1,
+    "minPluginVersion":  "1.2.0",
+    "requires":  [
+
+                 ],
+    "capabilities":  [
+                         "filesystem",
+                         "plugin-config"
+                     ]
+}
