@@ -72,6 +72,29 @@ export function recover(energy, { minutes = 0, perMinute = 0 } = {}) {
 export const exhausted = (energy, threshold = 0.5) => energy <= threshold
 
 /**
+ * 收到收线时该「真的睡」还是「只安静一会儿」（2026-11-25 加，对应 #250）。
+ *
+ * 原来只要判定成收线就 requestSleep('talk', 'night')，而 nextWakeTime(kind='night')
+ * 是「下一个起床点」——下午三点说「晚安」，她会睡到次日早上八点，消失一整天。
+ * #250 里列了 16~22 小时的实测案例。
+ *
+ * 规则：
+ *   · 夜间疲劳时段          → 真的睡，kind=night
+ *   · 午间疲劳时段          → 午睡，kind=noon
+ *   · 词里带「午/眯/盹/躺」  → 即使深夜也按午睡处理（她说的是眯一会儿）
+ *   · 其他时段（白天傍晚）   → 不睡，只安静 dayMuteMinutes 分钟
+ *
+ * @returns {{sleep:true, kind:string}|{sleep:false, muteMinutes:number}}
+ */
+export function closeAction(cfg, word, ts = Date.now()) {
+  const kind = fatigueKind(cfg, ts)
+  const napByWord = ['午', '眯', '盹', '躺'].some((m) => String(word || '').includes(m))
+  if (kind === 'night' && !napByWord) return { sleep: true, kind: 'night' }
+  if (kind === 'noon' || (kind === 'night' && napByWord)) return { sleep: true, kind: 'noon' }
+  return { sleep: false, muteMinutes: Math.max(5, Number(cfg.dayMuteMinutes) || 30) }
+}
+
+/**
  * 这次该几点醒（毫秒时间戳）。
  * 夜里睡：固定起床点 ± 随机浮动（上限 90 分钟）。
  * 午睡：固定时长 ± 浮动，不跟夜间起床点走。

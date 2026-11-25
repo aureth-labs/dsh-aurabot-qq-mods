@@ -17,6 +17,7 @@ const DEFAULTS = {
   sessionTimeoutMs: 900000,
   writeEventMemory: true,
   decisionModel: '',
+  visibleDecisions: false, // #61：默认关——决策走静默直连，不进人格会话窗；开了才落工作区「操作决策」窗供围观
   // 主动逛（照刷B站的节奏三件套）
   autoBrowse: false, // 定时自己去逛：默认关（开总开关后还要单独开它）
   intervalHours: 4, // 多久逛一轮
@@ -385,6 +386,7 @@ return function Panel({ settings, save, toast }) {
     swRow('试运行', 'dryRun', '只出计划不真点击（默认关）'),
     swRow('逛完关闭应用', 'closeAppsAfter', '任务结束后强停这一轮到过的应用进程，释放手机内存（默认开；桌面不受影响）'),
     swRow('跑完写入她的记忆', 'writeEventMemory', '每次任务结束把结果写一条进记忆模块（默认开）'),
+    swRow('决策过程可见', 'visibleDecisions', '打开后每步决策落到工作区「操作决策」会话窗，可实时围观。代价（#61）：任务书和抓来的界面文字会进她的会话，可能被当成对方发言回话——只有你要盯着看时才开，平时关着。选了决策模型时此开关无效（决策模型本来就走静默直连）。'),
     // 定时主动逛（照刷B站的节奏三件套）
     swRow('定时主动逛', 'autoBrowse', '开着她会在醒着时间内按下面的间隔自己去逛一轮（AI 按总纲挑应用，跑完私聊汇报；默认关）'),
     h(ui.Row, { label: '多久逛一轮', hint: '距上次主动逛超过这个小时数才会再逛（默认 4 小时）' },

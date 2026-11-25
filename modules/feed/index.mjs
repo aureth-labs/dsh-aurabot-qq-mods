@@ -92,7 +92,7 @@ function parseMealTimes(text) {
 export default {
   id: 'feed',
   name: '喂食',
-  version: '3.2.0',
+  version: '3.2.1',
   api: 1,
   description: '按作息饿：起床饿、饭后饱、干活更饿；会自己找零食并跟你说；吃了会开心、会记得',
   tab: 'persona',
@@ -837,7 +837,7 @@ export default {
       const todayLog = st.log.filter((r) => ymd(new Date(r.at)) === today);
       return {
         ok: true,
-        version: '3.2.0',
+        version: '3.2.1',
         now: Math.round(hNow * 100) / 100,
         hunger: Math.round(st.hunger),
         satiety: 100 - Math.round(st.hunger),
