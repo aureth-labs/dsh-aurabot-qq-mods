@@ -62,6 +62,17 @@ jobs:
           else
             node scripts/check.mjs
           fi
+      - name: PR 不允许手改 modules/README.md
+        if: github.event_name == 'pull_request'
+        run: |
+          # 这张表由 npm run catalog 从 modules/<id>/module.json 生成。
+          # 谁都在同一张表里加一行，PR 一多就互相撞（#150 那批三十多张全卡在这），
+          # 所以 PR 只放 modules/<id>/ 目录，目录表由合并后统一重新生成。
+          git fetch -q origin "${{ github.base_ref }}"
+          if git diff --name-only "FETCH_HEAD...HEAD" | grep -qx 'modules/README.md'; then
+            echo "::error::modules/README.md 是脚本生成的，不要在 PR 里手改；新模块只要提交 modules/<id>/ 目录，目录表由维护者合并后跑 npm run catalog 重新生成。"
+            exit 1
+          fi
       - name: 跑模块自己的测试
         run: |
           for dir in modules/*/; do
