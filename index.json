@@ -1694,6 +1694,36 @@
       "publishedAt": "2026-11-14T08:20:25.125Z"
     },
     {
+      "id": "moegirl",
+      "name": "萌娘百科",
+      "version": "1.0.0",
+      "description": "外接萌娘百科：遇到不认识的动漫游戏角色、作品、梗，能搜出条目并读正文；带本地缓存，查过的不重复请求。",
+      "category": "tool",
+      "tags": [
+        "知识库",
+        "萌娘百科",
+        "ACG",
+        "外接"
+      ],
+      "author": "旭光Ⅺ",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem"
+      ],
+      "replacesBuiltin": false,
+      "tag": "moegirl-v1.0.0",
+      "file": "moegirl-v1.0.0.zip",
+      "path": "moegirl-v1.0.0/moegirl-v1.0.0.zip",
+      "size": 8296,
+      "sha256": "9e8971b3cc9dcd04b1163f485d04c2f7d2e1394547444921d065bc027631a739",
+      "commit": "41f835b94cc4f655edee3cc8d2087c18b60a9c7b",
+      "publishedAt": "2026-11-25T13:43:09.392Z"
+    },
+    {
       "id": "moodboard",
       "name": "心情看板",
       "version": "1.0.0",
@@ -3150,5 +3180,5 @@
       "reason": "作者主动撤回。"
     }
   ],
-  "generatedAt": "2026-11-25T13:08:33.270Z"
+  "generatedAt": "2026-11-25T13:43:09.392Z"
 }
