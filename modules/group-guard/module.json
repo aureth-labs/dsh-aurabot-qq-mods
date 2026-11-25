@@ -1,0 +1,19 @@
+{
+  "id": "group-guard",
+  "name": "群聊特别处理",
+  "version": "1.0.0",
+  "description": "给指定的群加背景说明，并给「她会不会开口」加硬上限——必回和「正聊得起劲」都算，防止在机器人扎堆的群里一句接一句刷屏。",
+  "category": "manage",
+  "tags": [
+    "群聊",
+    "提示词",
+    "上下文",
+    "防刷屏"
+  ],
+  "author": "KuroPeach",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": []
+}
