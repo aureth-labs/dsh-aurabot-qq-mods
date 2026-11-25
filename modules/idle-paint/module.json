@@ -1,0 +1,15 @@
+{
+  "id": "idle-paint",
+  "name": "空闲画画",
+  "version": "1.0.0",
+  "description": "闲着没事的时候自己把本机 ComfyUI 拉起来画一张，画完自己检查有没有崩坏，过了再发；画完把 ComfyUI 关掉还显存。",
+  "category": "creative",
+  "tags": ["ComfyUI", "画图", "空闲", "自检"],
+  "author": "旭光Ⅺ",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["filesystem", "process", "network", "plugin-config", "plugin-internals"],
+  "homepage": ""
+}

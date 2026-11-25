@@ -1,0 +1,23 @@
+{
+  "id": "anti-bot",
+  "name": "人机反面教材",
+  "version": "1.1.0",
+  "description": "从 B 站 / 聊天里认出「一眼就是 AI」的发言，当反面教材收起来，每轮聊天提醒别那么说话；同时收真人说得有意思的金句当学习材料。",
+  "category": "social",
+  "tags": [
+    "人机检测",
+    "语感",
+    "反例",
+    "金句"
+  ],
+  "author": "旭光Ⅺ",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "filesystem",
+    "plugin-internals"
+  ],
+  "homepage": ""
+}
