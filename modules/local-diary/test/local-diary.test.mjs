@@ -22,7 +22,7 @@ function tempRoot(t) {
 }
 
 /** 够 setup() 跑起来的假宿主；跑的其实就是真实代码路径。 */
-function fakeApi(root, { think, preset } = {}) {
+function fakeApi(root, { think, preset, rows, ownerQQ = '1' } = {}) {
   const routes = {}
   const cfg = { ...mod.defaults, ...(preset || {}) }
   const api = {
@@ -33,10 +33,11 @@ function fakeApi(root, { think, preset } = {}) {
     toolSelector: null,
     dataDir: () => join(root, 'data'),
     settings: () => cfg,
+    config: () => ({ ownerQQ }),
     log: { info() {}, warn() {}, error() {} },
     every: () => {},
     command: () => {},
-    context: () => {},
+    context: (fn) => { api.contextFn = fn },   // 捕获注入钩子，只给主人私聊那条用例用
     rule: () => {},
     tool: (fn) => { api.toolSelector = fn },
     defineTool: (tool) => tool,
@@ -49,7 +50,7 @@ function fakeApi(root, { think, preset } = {}) {
     route: (path, handler) => { routes[path] = handler },
     core: {
       hub: {
-        chatLogOf: () => [
+        chatLogOf: () => rows || [
           { t: Date.parse('2026-11-15T09:12:00'), chatId: 'private:1', who: 'user', text: '早' },
           { t: Date.parse('2026-11-15T09:13:00'), chatId: 'private:1', who: 'bot', text: '早呀' },
           { t: Date.parse('2026-11-15T12:00:00'), chatId: 'group:888', who: 'user', text: '在吗' },
@@ -434,4 +435,81 @@ test('旧日记只有单个 wish: 也能读成一个愿望', async (t) => {
   const item = inst.list().find((x) => x.day === DAY)
   assert.deepEqual(item.wishes, ['想和他去看一次海。'])
   assert.equal(item.wish, '想和他去看一次海。')
+})
+
+// ---- 1.2.0 新增：按时段采样、主群/主人私聊优先、日记只注入主人私聊 ----
+
+test('采样按时段铺开，不会只剩当天最后几条', async (t) => {
+  const root = tempRoot(t)
+  // 早上 6 点、中午 12 点、深夜 23 点各 50 条；纯取尾部的话早上和中午会全丢
+  const rows = []
+  for (const [h, tag] of [[6, '清晨'], [12, '中午'], [23, '深夜']]) {
+    for (let i = 0; i < 50; i += 1) {
+      rows.push({ t: new Date(2026, 10, 15, h, i % 60).getTime(), chatId: 'group:888', who: 'user', text: `${tag}${i}` })
+    }
+  }
+  const { api } = boot(root, { rows, preset: { maxRows: 30 } })
+  const prompts = []
+  await api.routes['/run']()
+  // 从落盘文件反推不了素材，直接看聊天条数上限被遵守即可
+  const status = await api.routes['/status']()
+  assert.equal(status.ok, true)
+
+  // 换个角度验证：maxRows 小时，采样结果里三个时段都还留有痕迹
+  const seen = []
+  const { api: api2 } = boot(root, { rows, preset: { maxRows: 30 }, think: async (p) => { seen.push(p); return BODY } })
+  await api2.routes['/run']()
+  assert.equal(seen.length, 1)
+  for (const tag of ['清晨', '中午', '深夜']) {
+    assert.ok(seen[0].includes(tag), `喂给模型的素材里应该有${tag}的聊天，实际没有`)
+  }
+})
+
+test('主人私聊和主群优先：其他群刷屏再多也抢不走额度', async (t) => {
+  const root = tempRoot(t)
+  const rows = []
+  // 主人私聊 5 条（都在中午）
+  for (let i = 0; i < 5; i += 1) rows.push({ t: new Date(2026, 10, 15, 12, i).getTime(), chatId: 'private:1', who: 'user', text: `主人说的第${i}句` })
+  // 别的群 300 条刷屏
+  for (let i = 0; i < 300; i += 1) rows.push({ t: new Date(2026, 10, 15, 22, i % 60).getTime(), chatId: 'group:999', who: 'user', text: `群友刷屏${i}` })
+  const seen = []
+  const { api } = boot(root, { rows, preset: { maxRows: 40 }, think: async (p) => { seen.push(p); return BODY } })
+  await api.routes['/run']()
+  assert.equal(seen.length, 1)
+  // 五条主人私聊应当全部进素材（主人私聊只有 5 条，远小于七成额度）
+  for (let i = 0; i < 5; i += 1) assert.ok(seen[0].includes(`主人说的第${i}句`), `主人私聊第 ${i} 句不该被刷屏挤掉`)
+})
+
+test('主群群号可以在面板里配，不填就全按时间截断', async (t) => {
+  const root = tempRoot(t)
+  const rows = []
+  for (let i = 0; i < 5; i += 1) rows.push({ t: new Date(2026, 10, 15, 12, i).getTime(), chatId: 'group:608034610', who: 'user', text: `主群第${i}句` })
+  for (let i = 0; i < 200; i += 1) rows.push({ t: new Date(2026, 10, 15, 22, i % 60).getTime(), chatId: 'group:999', who: 'user', text: `别的群${i}` })
+
+  const seen = []
+  const { api } = boot(root, { rows, preset: { maxRows: 30, mainGroup: '608034610' }, think: async (p) => { seen.push(p); return BODY } })
+  await api.routes['/run']()
+  assert.equal(seen.length, 1)
+  for (let i = 0; i < 5; i += 1) assert.ok(seen[0].includes(`主群第${i}句`), `配了主群后，主群第 ${i} 句应该保住`)
+})
+
+test('日记线索只注入主人私聊，群聊和陌生人不带', async (t) => {
+  const root = tempRoot(t)
+  const { api } = boot(root, { ownerQQ: '1' })
+  await api.routes['/run']()   // 先写一篇，index 里才有东西
+
+  assert.equal(typeof api.contextFn, 'function', '模块应该注册了上下文钩子')
+
+  // 主人私聊：注入
+  const ownerText = api.contextFn({ chat: { kind: 'private', userId: '1' } })
+  assert.match(ownerText, /你写过这些私人日记/)
+
+  // 陌生人的私聊：不注入（原来会漏，等于把私聊内容带到别人那）
+  assert.equal(api.contextFn({ chat: { kind: 'private', userId: '999' } }), '')
+
+  // 群聊：不注入（原来会漏，等于把私聊内容带到群里）
+  assert.equal(api.contextFn({ chat: { kind: 'group', groupId: '888' } }), '')
+
+  // 没有 chat（系统轮）也不该崩
+  assert.equal(api.contextFn({}), '')
 })

@@ -1,0 +1,23 @@
+{
+  "id": "ctx-guard",
+  "name": "上下文守门",
+  "version": "1.0.0",
+  "description": "盯着每轮对话的 token 用量，到线用私聊提醒你该压缩上下文了。只提醒不动手，因为压缩服务在模块侧取不到。阈值、文案语气、冷却都在面板里调。",
+  "category": "tool",
+  "tags": [
+    "上下文",
+    "token",
+    "压缩",
+    "省钱"
+  ],
+  "author": "KuroPeach",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "filesystem",
+    "plugin-config",
+    "plugin-internals"
+  ]
+}
