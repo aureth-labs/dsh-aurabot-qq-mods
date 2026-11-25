@@ -65,7 +65,36 @@ export async function egoAlive(port, getJson) {
  * 认领一个属于本模块的标签页：新开自己的 about:blank（PUT，旧内核回退 GET），
  * 新不开不出来才捡一个现成的 about:blank；绝不关闭列表里的其他标签页（那是别人在用的）。
  */
-export async function acquireEgoTarget(port, getJson) {
+/**
+ * 认领一个属于本模块的标签页：优先走 CDP Target.createTarget({ background: true })
+ * 在后台建页 —— /json/new 会激活新标签页并把整个窗口顶到前台，定时任务每轮连接
+ * 都弹一次窗口、抢一次焦点；后台建页完全不碰焦点。浏览器级 CDP 不可用时退回
+ * /json/new（PUT，旧内核回退 GET），并把焦点还给建页前激活的那个标签页。
+ * 新不开不出来才捡一个现成的 about:blank；绝不关闭列表里的其他标签页（那是别人在用的）。
+ */
+export async function acquireEgoTarget(port, getJson, connect) {
+  const list = () => getJson(`http://127.0.0.1:${port}/json/list`, 3000).catch(() => [])
+  // 先记住当前激活的标签页，/json/new 回退路径要把焦点还给它
+  const before = (await list()).find((x) => x.type === 'page')
+  // —— 首选：浏览器级 CDP 后台建页，不打扰前台 ——
+  if (connect) {
+    try {
+      const v = await getJson(`http://127.0.0.1:${port}/json/version`, 1500)
+      const ws = v?.webSocketDebuggerUrl
+      if (ws) {
+        const browser = connect(ws)
+        try {
+          await browser.ready
+          const { targetId } = await browser.send('Target.createTarget', { url: 'about:blank', background: true }, 3000)
+          if (targetId) {
+            const fresh = (await list()).find((x) => x.id === targetId && x.type === 'page' && x.webSocketDebuggerUrl)
+            if (fresh) return fresh
+          }
+        } finally { browser.close() }
+      }
+    } catch { /* 浏览器级连不上就走 /json/new 回退 */ }
+  }
+  // —— 回退：HTTP 接口建页（会激活新页），把焦点还给之前的标签页 ——
   const url = `http://127.0.0.1:${port}/json/new?about:blank`
   let t = null
   try {
@@ -73,15 +102,45 @@ export async function acquireEgoTarget(port, getJson) {
     if (r.ok) t = await r.json()
   } catch { /* 旧内核或忙，走下面的回退 */ }
   if (!t?.webSocketDebuggerUrl) { try { t = await getJson(url) } catch { /* 再回退 */ } }
+  if (t?.webSocketDebuggerUrl && before?.id && before.id !== t.id) {
+    await fetch(`http://127.0.0.1:${port}/json/activate/${before.id}`).catch(() => {})
+  }
   if (!t?.webSocketDebuggerUrl) {
-    const list = (await getJson(`http://127.0.0.1:${port}/json/list`, 3000).catch(() => null)) || []
-    t = list.find((x) => x.type === 'page' && x.webSocketDebuggerUrl && /^about:blank/.test(x.url || '')) || null
+    t = (await list()).find((x) => x.type === 'page' && x.webSocketDebuggerUrl && /^about:blank/.test(x.url || '')) || null
   }
   if (!t?.webSocketDebuggerUrl) throw new Error('DSH 侧边浏览器里拿不到可用标签页')
   return t
 }
 
 /** ego 后端：ensure() 返回可用的 { port }；没跑就用 DSH 自带的 node 拉起（一行 heredoc，实测可冷启动）。 */
+// 拉起 ego-browser 时给子进程的环境。
+//
+// EGO_LINUX_HEADLESS 会从三个地方漏进来：系统环境变量、宿主进程（DSH 在某些装法下
+// 自己就带着 =1）、以及面板里的「headless override」。后两者用户并没有亲手选过，
+// 却会跟着 process.env 一路继承下去 —— 结果每次冷启动都起成无头实例：
+//   · 没有窗口，人没法扫码登录，登录态一过期就只能干等；
+//   · 页面按后台节流渲染，`section.note-item` 拿不到布局，量出来是 0×0，卡片解析
+//     全部返回空，调用方退到滚动兜底（xhs 的 b.scroll 就踩在这里）。
+// 桌面平台默认带窗口才合理；真要无头（服务器 / CI）显式设 AURABOT_EGO_HEADLESS=1
+// 说明意图。Linux 无显示环境仍原样尊重该变量。
+export function egoChildEnv(base = process.env, plat = process.platform) {
+  const env = { ...base, ELECTRON_RUN_AS_NODE: '1' }
+  if (plat !== 'win32' && plat !== 'darwin') return env
+  if (/^(1|true|yes|on)$/i.test(String(env.AURABOT_EGO_HEADLESS || ''))) env.EGO_LINUX_HEADLESS = '1'
+  else delete env.EGO_LINUX_HEADLESS
+  // 窗口落在屏幕外 (-2400,-2400)：共享实例冷启动带窗口（能扫码、布局正常），
+  // 但平时不该占据屏幕 / 抢焦点。模块要展示窗口时用 show(true) 经 CDP 把它挪回
+  // 屏幕内（Browser.setWindowBounds），看完 show(false) 挪回去；后台标签页照常
+  // 渲染（LAUNCH_FLAGS 已带 --disable-backgrounding-occluded-windows 等三个
+  // 反节流开关）。仅桌面平台注入；不影响 Linux/CI。
+  const extra = String(env.EGO_LINUX_EXTRA_ARGS || '')
+  const pos = '--window-position=-2400,-2400'
+  if (!extra.includes('--window-position')) {
+    env.EGO_LINUX_EXTRA_ARGS = extra ? extra + ' ' + pos : pos
+  }
+  return env
+}
+
 export function createEgoBackend({
   stateFile = egoStateFile(),
   cliPath = () => findEgoCli(),
@@ -105,7 +164,7 @@ export function createEgoBackend({
         child = execFile(node, [cli], {
           windowsHide: true,
           timeout: 45000,
-          env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+          env: egoChildEnv(),
         }, () => {
           // 脚本执行完但端口没就绪也按失败处理（下一轮错误提示会带上端口没开）
           if (readEgoPort(stateFile)) return
@@ -133,7 +192,22 @@ export function createEgoBackend({
     if (starting) return starting.then((p) => ({ port: p, shared: true }))
     starting = (async () => {
       log?.info?.('[ego] 侧边浏览器没在跑，拉起 DSH 共享实例')
-      return coldStart(check)
+      const p = await coldStart(check)
+      // --window-position 有启动竞态：Edge 先在默认位置画一帧才应用参数。
+      // 冷启动就绪的瞬间用 CDP 把窗口挪到屏幕外，压掉那一闪。
+      try {
+        const v = await getJson(`http://127.0.0.1:${p}/json/version`, 1500)
+        const ws = v?.webSocketDebuggerUrl
+        if (ws) {
+          const { connectCdp } = await import('./browser.mjs')
+          const c = connectCdp(ws)
+          try {
+            await c.ready
+            await c.send('Browser.setWindowBounds', { windowId: 1, bounds: { left: -2400, top: -2400 } }).catch(() => {})
+          } finally { c.close() }
+        }
+      } catch { /* 挪窗失败不影响可用性；--window-position 兜底 */ }
+      return p
     })()
     try {
       const p = await starting

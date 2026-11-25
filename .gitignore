@@ -4,6 +4,9 @@ dist/
 .registry/
 .aurabot-cache/
 .runtime/
+# 编辑器本地设置：各人路径不同（typescript.tsdk 等），不入库
+.vscode/settings.json
 
 # 测试临时数据（测试往这里写，不提交）
 .tmp-data/
+

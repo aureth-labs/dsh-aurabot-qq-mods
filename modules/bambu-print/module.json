@@ -1,0 +1,24 @@
+{
+  "id": "bambu-print",
+  "name": "拓竹",
+  "version": "1.1.1",
+  "description": "看拓竹（Bambu Lab）3D 打印机的状态，远程暂停、继续、停止和拍照；每个 QQ 各管各的凭据，账号密码走一次性网页、不经过聊天，凭据加密存在本机，群聊默认脱敏：只报进度、层数和温度，不露文件名和项目名。",
+  "category": "tool",
+  "tags": [
+    "拓竹",
+    "3D打印",
+    "Bambu"
+  ],
+  "author": "cdcp998",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "network",
+    "filesystem",
+    "process",
+    "plugin-config",
+    "plugin-internals"
+  ]
+}
