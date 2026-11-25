@@ -1,0 +1,24 @@
+{
+  "id": "love-mode",
+  "name": "快来跟我恋爱吧",
+  "version": "1.5.0",
+  "description": "教她怎么爱你：六种关系模式，AI 自动生成你们的画像，一键自动匹配。",
+  "category": "social",
+  "tags": [
+    "恋爱",
+    "人格",
+    "陪伴",
+    "模式"
+  ],
+  "author": "liaojiabo",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "plugin-config",
+    "filesystem",
+    "plugin-internals"
+  ],
+  "homepage": "https://github.com/accomplish07zrh-eng/dsh-aurabot-qq-mods"
+}

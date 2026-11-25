@@ -235,23 +235,99 @@ MoMo 的 TTS 接口是伪装成 `chat/completions` 的：
 
 ---
 
-## 想让它接管全部语音
+## 完全接管语音（进阶用法，可选）
 
-现在模块 id 是 `aura-mimo`，和内置 `voice` 并存，互不影响。
+### 先分清两种状态
 
-如果想让**她所有的语音**（包括内置语音功能触发的）都走 MiMo：
+| 状态 | 谁在念 | MiMo 生效的地方 |
+|---|---|---|
+| **默认（并存）** | 内置 `voice` 念所有的 | 只有 `mimo_say` 工具、自动语音、`/语音` 命令 |
+| **完全接管（替换）** | 全由 MiMo 念 | **她所有的语音条**，包括内置语音功能触发的那些 |
+
+想让"她的每一句语音都是自己的声音"，才需要做下面这一步。不做也完全能用。
+
+### 为什么能替换
+
+内置 `voice` 的源码开头写着：
+
+> 导出 `speak(text)` → `{ file, engine }`：聊天中枢发语音时找它。
+> **替换这个模块就能换成任何你想要的念法。**
+
+聊天中枢发语音条时调的是 `api.use('voice').speak(text)`。
+本模块实现了同一个接口（`setup()` 返回 `{ speak }`），所以只要"变成 voice"，
+它就会被自动调用 —— 这是 Aurabot 官方留的口子，不是 hack。
+
+### 怎么做（一步）
 
 ```bash
-cd .../modules
-mv aura-mimo voice   # 内置 voice 就不会加载了
+cd <dsh 数据目录>/plugins-data/aurabot/modules
+mv aura-mimo voice
 ```
 
-但这会把模块 id 变成 `voice`，**它的标签页位置也会变**（并进「表达」页），配置键、`client.js` 分组都要跟着改。
+Windows PowerShell：
 
-而且内置 `voice` 还带 `/voice/install`、`/voice/asr-*` 这些路由（语音识别、音色安装），替换后这些功能会一起消失。**除非你确认不用那些，否则别改名。**
+```powershell
+Rename-Item '<dsh 数据目录>\plugins-data\aurabot\modules\aura-mimo' 'voice'
+```
 
----
+**只改文件夹名就够了。** 模块 id 取自文件夹名，改完自动对上，不用动任何文件
+（`module.json` 里的 `id` 写的是什么都不影响）。
 
+改完重启 DSH，或等它 3 秒内自动重载。
+
+### 怎么确认真的接管了
+
+**① 日志（最快）**
+
+`<dsh 数据目录>/plugins-data/aurabot/logs/` 下最新的 `.log` 里应该有：
+
+```
+[modules] 模块「voice」（自己写的）已启动
+```
+
+出现下面任何一条就是**没成功**：
+
+| 日志 | 原因 |
+|---|---|
+| `模块 id「...」要和文件夹名「...」一样` | 用的是 1.1.0 或更早，升级到 1.1.1 |
+| `模块「aura-mimo」...已启动` | 文件夹没改成 voice |
+| 完全没有 voice 相关行 | DSH 没重载，真正重启一次 |
+
+**② 模块列表**
+
+面板 → 模块，或访问 `http://127.0.0.1:6180/aurabot/api/modules`：
+
+```json
+{ "id": "voice", "running": "user", "userDir": ".../modules/voice", "builtin": true }
+```
+
+关键：`running` 必须是 **`user`**。如果是 `builtin`，说明还在跑内置的。
+
+**③ 实际听**
+
+填好 API Key、上传参考音频，在 QQ 里让她说句话。
+语音条的**音色应该是 MiMo 的**，而不是原来内置 TTS 的声音。
+
+### 代价（务必先看）
+
+| 项目 | 说明 |
+|---|---|
+| **语音识别会消失** | 内置 `voice` 还带 `/voice/asr-status`、`/voice/asr-prepare`、`/voice/asr-last`、`/voice/asr-test`（听语音转文字）和 `/voice/install`（音色安装）。本模块没有这些功能，替换后一起没了 |
+| **配置要重填** | 配置按模块 id 存，`aura-mimo` 和 `voice` 是两份。原来填的 API Key 不会跟过来 |
+| **参考音频要重传** | 数据目录也按 id 分：落在 `modules-data/<id>/ref/`，改名后目录变了 |
+
+**要用语音识别就别做这一步。** 默认的三种入口已经够用。
+
+### 改回去
+
+```bash
+mv voice aura-mimo
+```
+
+内置 `voice` 会自动回来。原来的配置也还在（`modules-data/aura-mimo/` 没动过）。
+
+> 顺带说明：1.1.1 之前（1.1.0）改完名会出现"面板消失"——那是从 `module.json`
+> 读 id 导致加载失败、回退内置 voice 的 bug，1.1.1 已改成用文件夹名，不会再有。
 ## 配置项
 
 | 键 | 默认 | 说明 |

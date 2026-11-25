@@ -12,7 +12,7 @@
 //   · 端口漂移：baseUrl 失败或轮询出错都会重读 host.json 再试。
 //   · 窗口：置顶、透明无边框、JS 拖拽 + 甩抛（physics.js，P3）、托盘退出、单实例锁。
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, screen, globalShortcut, shell } = require('electron')
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, screen, globalShortcut, shell, session } = require('electron')
 const fs = require('node:fs')
 const path = require('node:path')
 const { execFile, spawn } = require('node:child_process')
@@ -439,6 +439,7 @@ function enforceWindowSize(why) {
 // 关 = 拖到哪松手就停在哪（不抛也不落，连「温柔放下」的原地掉落也一并停掉）。
 // 拦截点放主进程 pet:throw 一处：渲染页的甩抛（pet:throw）和原地掉落（throwWith(0,0)）都走这条通道。
 let releaseLand = true
+<<<<<<< HEAD
 // 上游 1.0.14：右键「查看余额」显隐 / 动画节奏倍率。缺省值与上游一致（余额默认开、节奏 1 = 正常）。
 let balanceEnabled = true
 let animRate = 1
@@ -450,6 +451,18 @@ let houseEnabled = true
 function pushAnimRate() {
   if (!win || win.isDestroyed()) return
   win.webContents.executeJavaScript(`window.__setAnimRate && window.__setAnimRate(${JSON.stringify(animRate)})`).catch(() => {})
+=======
+// ---------- /config 参数化契约（服务端 /config 下发，8 秒轮询即时生效）----------
+let animRate = 1          // 动画节奏倍率 0.5~2（缺省 1）：渲染端挤压/idle 节拍按它缩放
+let balanceEnabled = true // 右键「查看余额」显隐（缺省 true；菜单没有这一项时其他项照常可点）
+let cfgPhysics = null     // /config 的 physics.{gravity,restitution}（缺省 null = 只用默认/包物理）
+let clickChase = false    // 点击扑鼠标独立闸（默认关；=== true 口径，服务端已收口）
+let teaseChase = false    // 晃鼠标勾引追独立闸（默认关；=== true 口径，服务端已收口）
+/** 生效物理参数：默认值 ← pack.physics ← /config.physics 逐层覆盖（后者优先）。
+ *  甩抛循环与松手初速估算统一走这里，别再各自拼一份（口径不一致是老 bug 温床）。 */
+function effectivePhysics() {
+  return { ...physics.DEFAULT_PHYSICS, ...(pack && pack.physics ? pack.physics : {}), ...(cfgPhysics || {}) }
+>>>>>>> origin/main
 }
 function applyScale(s) {
   if (!win || win.isDestroyed()) return
@@ -524,6 +537,7 @@ async function refreshConfig() {
         blurHide: c.blurHide !== false,
       }
       applyChatHotkey()
+<<<<<<< HEAD
       // 待办配置（同一条路径：面板改键后要能跟上来，不能只在启动注册一次）
       const td = cfg.todo || {}
       todoCfg = {
@@ -571,6 +585,19 @@ async function refreshConfig() {
       const hr = cfg.hear || {}
       hearCfg = { enabled: hr.enabled !== false, sendToChat: hr.sendToChat !== false }
       if (changed || !win.__packPushed) { win.__packPushed = true; pushPackToRenderer(); pushPackToExtras() }
+=======
+      // 语音对讲配置（服务端 /config 的 voiceTalk 段 + 顶层 voiceHotkey，见 VOICE-TALK-DESIGN.md §3）。
+      // 与 chatCfg 同路径：面板改键后 8 秒轮询内跟上来，不用重启桌宠。
+      const vt = (cfg.voiceTalk && typeof cfg.voiceTalk === 'object') ? cfg.voiceTalk : {}
+      voiceTalkCfg = {
+        enabled: vt.enabled !== false,
+        hotkey: String(vt.hotkey || cfg.voiceHotkey || '').trim() || 'Alt+Space',
+        micDeviceId: String(vt.micDeviceId || '').trim(),
+        speakerDeviceId: String(vt.speakerDeviceId || '').trim(),
+      }
+      applyVoiceTalkHotkey()
+      if (changed || !win.__packPushed) { win.__packPushed = true; pushPackToRenderer() }
+>>>>>>> origin/main
       // 干活状态：/config 也带当前档位（客户端重启/漏事件时靠它对一次，不弹提示、不再提醒）
       const key = `${(cfg.work && cfg.work.state) || ''}|${(cfg.work && cfg.work.task) || ''}`
       if (key !== lastWorkKey) {
@@ -688,7 +715,22 @@ async function pollLoop() {
       for (const e of data.events || []) {
         if (e.type === 'pack') { pack = null; win.__packPushed = false; refreshConfig(); if (multiApi) multiApi.pushPackAll(); continue }
         if (e.type === 'work') { applyWork(e); continue }
+<<<<<<< HEAD
         if (e.type === 'behavior' && !firstBoot) { handleBehavior(e); continue } // 下发层：行为动作单
+=======
+        // 服务端 voiceTalk 状态事件（listening/thinking/speaking/idle）：切桌宠气泡/动作，无窗无挂断 UI。
+        // 去重：本地状态机已经在播同一状态时不要再弹一次（同一个气泡会闪一下 + 回执重复）；
+        // 只有服务端报的状态与最近一次本地状态不同、或本地这一轮已结束时才补位显示。
+        if (e.type === 'voiceTalk') {
+          const st = String((e && e.state) || '')
+          if (voiceTalkBusy && st === voiceTalkLastState) continue // 本地同状态已显示：吞掉
+          if (!voiceTalkBusy && st === 'idle') continue            // 空闲 idle 无需弹/清（本地 done 已收）
+          voiceTalkLastState = st
+          voiceTalkBubble(st)
+          continue
+        }
+        if (e.type === 'behavior' && !firstBoot) { handleBehavior(e).catch((err) => console.error('行为动作执行失败：', err && err.stack ? err.stack : err)); continue } // 下发层：行为动作单
+>>>>>>> origin/main
         if (e.type === 'proactive' && String(e.text || '').trim() && !firstBoot) {
           // 气泡投给谁：事件里带 petId 的（多开时每只各自的人格碎碎念）只投给那一只；
           // 不带的（主动搭话 / 干活提示 / 待办，全都有 QQ 语义）照旧投给主宠物。
@@ -4030,7 +4072,183 @@ ipcMain.handle('pet:hear', async (_e, base64) => {
 })
 
 
+<<<<<<< HEAD
 // ---------- 小屋（上游 1.0.12 复式场景窗：移植自 zizic04/dsh-pet-home，MIT；素材 CC BY-NC-SA 禁商用，自用） ----------
+=======
+// ---------- 免界面语音对讲（voice-talk）：全局热键 toggle + 隐藏录音窗 + 系统外放 ----------
+// 设计权威：docs/VOICE-TALK-DESIGN.md。无窗、无呼叫/挂断 UI、绝不 alwaysOnTop 的可见卡死窗。
+// 流程：热键 #1 → 隐藏窗 getUserMedia + MediaRecorder 开始（气泡"在听"）；
+//       热键 #2 → 停止 → base64 wav → POST /voice/talk { audio } → 播放（气泡"在想/在说"）。
+// 所有环节都有超时与失败恢复，任何一步失败后热键都能再次触发（绝不卡死、绝不 AppHangTransient）。
+let voiceTalkCfg = { enabled: true, hotkey: 'Alt+Space', micDeviceId: '', speakerDeviceId: '' }
+let voiceTalkReg = ''          // 当前已注册的全局对讲热键（'' = 未注册）
+let voiceTalkWarnedAt = 0      // 占用提醒防抖：5 分钟内只气泡提醒一次
+let voiceTalkWin = null        // 隐藏录音窗（show:false，永不显示）
+let voiceTalkReady = false     // 隐藏窗 did-finish-load 就绪
+let voiceTalkBusy = false      // 一轮对讲正在处理中（录音/请求/播放期间不重复 toggle）
+let voiceTalkRecording = false // 是否正在录音（隐藏窗侧权威，这里只记状态供气泡用）
+/** 隐藏录音窗是否存活。 */
+const voiceTalkWinAlive = () => Boolean(voiceTalkWin && !voiceTalkWin.isDestroyed())
+/** 确保隐藏录音窗存在（只在首次触发时惰性创建，不占可见窗口）。 */
+function ensureVoiceTalkWin() {
+  if (voiceTalkWinAlive()) return voiceTalkWin
+  voiceTalkReady = false
+  voiceTalkWin = new BrowserWindow({
+    width: 1, height: 1, show: false, frame: false, resizable: false,
+    skipTaskbar: true, transparent: true,
+    // backgroundThrottling:false —— 隐藏窗也不能被后台节流，否则 MediaRecorder/onstop 可能被饿死。
+    // nodeIntegration 直连 ipcRenderer（与 chat.html/house.html 同款，本地页无远程内容）。
+    webPreferences: { nodeIntegration: true, contextIsolation: false, spellcheck: false, backgroundThrottling: false },
+  })
+  voiceTalkWin.loadFile(path.join(__dirname, 'voice-talk.html')).catch((err) => {
+    console.error('语音对讲隐藏窗加载失败：', err && err.message ? err.message : err)
+    voiceTalkReady = false
+    voiceTalkBusy = false
+  })
+  voiceTalkWin.webContents.on('did-finish-load', () => {
+    voiceTalkReady = true
+    pushVoiceTalkCfg()
+  })
+  voiceTalkWin.webContents.on('render-process-gone', (_e, d) => {
+    voiceTalkReady = false
+    voiceTalkBusy = false
+    voiceTalkRecording = false
+    if (d && d.reason !== 'clean-exit' && d.reason !== 'exited') {
+      debugIconLog({ kind: 'voice-talk-render-gone', reason: d.reason, exitCode: d.exitCode })
+    }
+  })
+  voiceTalkWin.on('closed', () => { voiceTalkWin = null; voiceTalkReady = false; voiceTalkBusy = false; voiceTalkRecording = false })
+  return voiceTalkWin
+}
+/** 把服务端的对讲配置推给隐藏窗（token 不出主进程；请求由主进程代理）。 */
+function pushVoiceTalkCfg() {
+  if (!voiceTalkWinAlive() || !voiceTalkReady) return
+  voiceTalkWin.webContents.executeJavaScript(
+    `window.__voiceCfg && window.__voiceCfg(${JSON.stringify(voiceTalkCfg)})`).catch(() => {})
+}
+/** 全局对讲热键注册/注销：与 applyChatHotkey 同款——先注销旧键再注册新键，占用失败提示一次。 */
+function applyVoiceTalkHotkey() {
+  const want = voiceTalkCfg.enabled && voiceTalkCfg.hotkey ? voiceTalkCfg.hotkey : ''
+  if (want === voiceTalkReg) return
+  if (voiceTalkReg) { try { globalShortcut.unregister(voiceTalkReg) } catch {} ; voiceTalkReg = '' }
+  if (!want) return
+  let ok = false
+  try { ok = globalShortcut.register(want, toggleVoiceTalk) } catch { ok = false }
+  if (ok) {
+    voiceTalkReg = want
+  } else {
+    if (Date.now() - voiceTalkWarnedAt > 5 * 60_000) {
+      voiceTalkWarnedAt = Date.now()
+      showBubble(`语音对讲热键 ${want} 被别的程序占用了（可在面板换一个）`, '', 'text', '', '', 'behavior', '语音对讲')
+    }
+  }
+}
+let voiceTalkLastState = ''    // 最近一次显示过的对讲状态（服务端事件去重）
+/** 桌面极简状态气泡（在听/在想/在说/出错），走现有 showBubble 通道，无窗无挂断 UI。 */
+function voiceTalkBubble(state) {
+  voiceTalkLastState = String(state || '')
+  const map = {
+    listening: '🎤 在听…', thinking: '🤔 在想…', speaking: '🔊 在说…',
+    idle: '', error: '语音对讲出了点问题，再按一下热键试试',
+  }
+  const text = map[state]
+  if (text) showBubble(text, '', 'text', '', '', 'whisper', '语音对讲')
+  else hideBubble()
+}
+let voiceTalkGuard = null       // 活动看门狗：70s 没收到隐藏窗任何状态回报才强制收尾（防渲染层卡死）
+const VOICE_WATCHDOG_MS = 70_000 // > 网络 30s + 播放 15s 的最坏等待，保证合法一轮不被误杀
+let voiceTalkLastPress = 0      // 热键防抖：200ms 内重复事件只认一次（操作系统可能连发）
+/** 看门狗：任何状态回报都续一次（＝渲染层还活着）；50s 完全静默才强制收尾。
+ *  不用"整轮固定 45s"是因为合法一轮最长可达 8s 取麦 + 60s 录音 + 30s 网络 + 15s 播放。 */
+function armVoiceWatchdog() {
+  if (voiceTalkGuard) clearTimeout(voiceTalkGuard)
+  voiceTalkGuard = setTimeout(() => {
+    if (voiceTalkWinAlive()) voiceTalkWin.webContents.executeJavaScript('window.__voiceStop && window.__voiceStop()').catch(() => {})
+    voiceTalkBusy = false
+    voiceTalkRecording = false
+    voiceTalkGuard = null
+  }, VOICE_WATCHDOG_MS)
+}
+/** 热键 toggle：第 1 下开始录音，第 2 下停止并送出。
+ *  注意：不能在 main 侧用"一轮未结束就忽略"的 busy 锁——第 2 下必须能穿透到隐藏窗才能停止录音；
+ *  重入保护放在渲染层的 phase 状态机里（只在 thinking/speaking 时吞掉重复按键）。 */
+function toggleVoiceTalk() {
+  if (!voiceTalkCfg.enabled) return
+  const now = Date.now()
+  if (now - voiceTalkLastPress < 200) return // 防连发（不影响正常的"按一下→再按一下"）
+  voiceTalkLastPress = now
+  const w = ensureVoiceTalkWin()
+  if (!voiceTalkWinAlive()) { voiceTalkBubble('error'); return }
+  // 窗口还没加载完（首次触发极短窗口期）：此时不录音，提示用户再按一下（绝不阻塞等待）
+  if (!voiceTalkReady) { voiceTalkBubble('error'); return }
+  // 权限闸：在渲染层调 getUserMedia 之前先打开（permission handler 检查这个 flag），
+  // 整轮结束（voice:done / 出错 / 兜底超时）再关——只对本隐藏窗、只在录音周期内放行 media。
+  voiceTalkRecording = true
+  armVoiceWatchdog()
+  w.webContents.executeJavaScript('window.__voiceToggle && window.__voiceToggle()').catch(() => {
+    voiceTalkBusy = false
+    voiceTalkRecording = false
+    if (voiceTalkGuard) { clearTimeout(voiceTalkGuard); voiceTalkGuard = null }
+    voiceTalkBubble('error')
+  })
+}
+// 隐藏窗状态回报：listening/thinking/speaking/idle/error（同步桌宠气泡，不改变 busy 锁）
+ipcMain.on('voice:state', (_e, state) => {
+  const s = String(state || '')
+  armVoiceWatchdog() // 活体信号：渲染层还在推进状态，续一次看门狗
+  if (s === 'listening' || s === 'thinking' || s === 'speaking') voiceTalkBusy = true
+  if (s === 'listening') voiceTalkRecording = true
+  if (s === 'idle' || s === 'error') { voiceTalkBusy = false; voiceTalkRecording = false }
+  if (s === 'error') return // 具体原因由 voice:message 带人话文案显示
+  voiceTalkBubble(s)
+})
+// 带具体原因的错误气泡（麦克风被占用/权限/网络/识别没配好等）
+ipcMain.on('voice:message', (_e, text) => {
+  showBubble(String(text || '语音对讲出了点问题，再按一下热键试试'), '', 'text', '', '', 'whisper', '语音对讲')
+})
+// 一轮结束（成功/失败都发）：解锁热键，清掉兜底定时器。error 时 bubble 已由 voice:state 显示。
+ipcMain.on('voice:done', () => {
+  voiceTalkBusy = false
+  voiceTalkRecording = false
+  if (voiceTalkGuard) { clearTimeout(voiceTalkGuard); voiceTalkGuard = null }
+})
+// 服务端请求代理（隐藏窗 invoke）：只放行 /voice/talk 单轮路由，token 不出主进程。
+// 30 秒超时（含在隐藏窗侧的另一层超时保护），4xx/5xx 的 JSON body 原样回传（中文错误码不丢）。
+ipcMain.handle('voice:request', async (_e, opts) => {
+  const o = opts || {}
+  const p = String(o.path || '')
+  if (p !== '/voice/talk' && p !== '/voice/talk/config') return { ok: false, error: 'bad-path' }
+  const host = readHost()
+  if (!host) return { ok: false, error: 'host-not-ready', message: '桌宠还没连上插件，稍等一下再试' }
+  try {
+    const isGet = p.endsWith('/config')
+    const res = await fetch(`${host.baseUrl}${host.api}${p}`, {
+      method: isGet ? 'GET' : 'POST',
+      headers: { 'x-pet-token': host.token, ...(isGet ? {} : { 'content-type': 'application/json' }) },
+      body: isGet ? undefined : JSON.stringify(o.body || {}),
+      signal: AbortSignal.timeout(30_000),
+    })
+    let data = null
+    try { data = await res.json() } catch { data = null }
+    if (data && typeof data === 'object') return data
+    return { ok: false, error: 'http-' + res.status, message: '服务没答应（HTTP ' + res.status + '）' }
+  } catch (err) {
+    const timeout = err && (err.name === 'TimeoutError' || err.name === 'AbortError')
+    return { ok: false, error: timeout ? 'network-timeout' : 'network-error',
+      message: timeout ? '网络超时了，再按一下热键重试' : '没连上插件，检查网络后再试' }
+  }
+})
+// 麦克风列表上报（隐藏窗 enumerateDevices → 服务端存 micDeviceId，沿面板配置通道 /config 的 voiceTalk 段）。
+ipcMain.on('voice:mics', (_e, list) => {
+  const mics = Array.isArray(list) ? list.slice(0, 20).map((d) => ({
+    deviceId: String(d && d.deviceId || '').slice(0, 200),
+    label: String(d && d.label || '').slice(0, 120),
+  })) : []
+  apiPost('/voice/talk/mics', { mics })
+})
+
+// ---------- 小屋（复式场景窗：移植自 zizic04/dsh-pet-home，MIT；素材 CC BY-NC-SA 禁商用，自用） ----------
+>>>>>>> origin/main
 // 与对话框同款的第二窗模式（nodeIntegration 直连 ipc，省一套 preload）：
 //   入屋 = 右键「回小屋」→ 隐藏桌面窗、打开 house.html 场景窗（query 带 base/token，素材走 /asset/house/*）；
 //   出屋 = 场景内拖到窗外松手（pet:house:exit）或右键「到屋外玩」→ 桌面窗挪到光标处再显示、关场景窗。
@@ -4282,14 +4500,24 @@ function petCountLabel() {
   return extra ? `多养一只（现在 ${extra + 1} 只）` : '多养一只'
 }
 
-function createTray() {
+function applyTrayMenu() {
+  if (!tray || tray.isDestroyed()) return
   try {
-    const img = nativeImage.createFromBuffer(Buffer.from(
-      'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAEUlEQVR42mNk+M9Qz4AFMGETAG1hCQeukhTbAAAAAElFTkSuQmCC', 'base64'))
-    tray = new Tray(img)
-    tray.setToolTip('Aurabot 桌宠')
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: '显示 / 隐藏', click: () => (win ? (win.isVisible() ? win.hide() : win.show()) : createWindow()) },
+<<<<<<< HEAD
+=======
+      { label: voiceTalkCfg.enabled ? '关闭语音对讲' : '开启语音对讲', click: () => {
+        voiceTalkCfg.enabled = !voiceTalkCfg.enabled
+        applyVoiceTalkHotkey()
+        if (!voiceTalkCfg.enabled && voiceTalkRecording) {
+          // 关掉时若正在录音：让隐藏窗停掉并释放设备（不残留麦克风占用）
+          if (voiceTalkWinAlive()) voiceTalkWin.webContents.executeJavaScript('window.__voiceStop && window.__voiceStop()').catch(() => {})
+        }
+        applyTrayMenu()
+      } },
+      { label: houseAlive() ? '到屋外玩' : '回小屋', click: toggleHouse },
+>>>>>>> origin/main
       ...(chatCfg.enabled ? [{ label: chatWinAlive() ? '关闭对话框' : '打开对话框', click: toggleChat }] : []),
       { label: '收起气泡', click: hideBubble },
       { type: 'separator' },
@@ -4303,6 +4531,15 @@ function createTray() {
       { type: 'separator' },
       { label: '退出桌宠', click: () => quitByUser('tray') },
     ]))
+  } catch (e) { console.error('托盘菜单刷新失败（不影响气泡）：', e.message) }
+}
+function createTray() {
+  try {
+    const img = nativeImage.createFromBuffer(Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAEUlEQVR42mNk+M9Qz4AFMGETAG1hCQeukhTbAAAAAElFTkSuQmCC', 'base64'))
+    tray = new Tray(img)
+    tray.setToolTip('Aurabot 桌宠')
+    applyTrayMenu()
   } catch (e) { console.error('托盘创建失败（不影响气泡）：', e.message) }
 }
 
@@ -4310,6 +4547,19 @@ app.on('second-instance', () => { if (win) { win.show(); win.focus() } })
 app.whenReady().then(() => {
   // Windows 上没设 AppUserModelID 时系统通知会被静默丢掉（完工提醒依赖它）
   try { app.setAppUserModelId('com.aurabot.pet') } catch {}
+  // ---------- 麦克风权限：只对语音对讲隐藏窗、且仅在录音期间放行 media ----------
+  // 旧版对所有窗口常驻放行 media 是能力放大（也是旧版有窗语音 UI 卡死事故的帮凶），这里收窄：
+  // 仅当 webContents 是 voiceTalkWin 且 voiceTalkRecording===true 时才回调 true，其余一律拒绝。
+  try {
+    session.defaultSession.setPermissionRequestHandler((wc, permission, callback) => {
+      if ((permission === 'media' || permission === 'audioCapture')
+          && voiceTalkRecording && voiceTalkWinAlive() && wc === voiceTalkWin.webContents) return callback(true)
+      callback(false)
+    })
+    session.defaultSession.setPermissionCheckHandler((wc, permission) =>
+      (permission === 'media' || permission === 'audioCapture')
+      && voiceTalkRecording && voiceTalkWinAlive() && wc === voiceTalkWin.webContents)
+  } catch (e) { console.error('媒体权限收窄失败（语音对讲不可用，不影响其他功能）：', e.message) }
   createWindow()
   createTray()
   refreshConfig()

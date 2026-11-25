@@ -1,0 +1,23 @@
+{
+  "id": "nickname-memory",
+  "name": "昵称记忆",
+  "version": "1.2.1",
+  "description": "她会记住大家怎么称呼一个人（也能自己给对方起个叫法），以后就用这个称呼叫对方；新叫法会顶掉旧的。称呼本只给主人看，群里的叫法不跨聊天串。",
+  "category": "social",
+  "tags": [
+    "昵称",
+    "称呼",
+    "认人",
+    "记忆"
+  ],
+  "author": "Cinderlia",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.3.0",
+  "requires": [],
+  "capabilities": [
+    "filesystem",
+    "plugin-config",
+    "plugin-internals"
+  ]
+}
