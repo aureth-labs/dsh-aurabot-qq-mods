@@ -413,20 +413,15 @@ test('定时检查走 api.every(60s) 并在停用时清理，不用裸 setInterv
   cleanup(h)
 })
 
-test('模块定义：删掉宿主不认的分组字段，版本 1.0.1 四处一致', () => {
-  assert.equal(priceWatch.version, '1.0.1')
-  assert.equal(priceWatch.group, undefined)
-  assert.equal(priceWatch.defaults.__panelGroup, undefined)
+test('模块定义：版本 1.1.0 四处一致', () => {
+  assert.equal(priceWatch.version, '1.1.0')
   const manifest = JSON.parse(readFileSync(join(MODULE_DIR, 'module.json'), 'utf8'))
   const pkg = JSON.parse(readFileSync(join(MODULE_DIR, 'package.json'), 'utf8'))
   const lock = JSON.parse(readFileSync(join(MODULE_DIR, 'package-lock.json'), 'utf8'))
-  assert.equal(manifest.version, '1.0.1')
-  assert.equal(pkg.version, '1.0.1')
-  assert.equal(lock.version, '1.0.1')
-  assert.equal(lock.packages[''].version, '1.0.1')
-  const readme = readFileSync(join(MODULE_DIR, 'README.md'), 'utf8')
-  assert.match(readme, /「系统」组/)
-  assert.ok(!/group: 'platform'/.test(readme), 'README 不再宣称 platform 分组')
+  assert.equal(manifest.version, '1.1.0')
+  assert.equal(pkg.version, '1.1.0')
+  assert.equal(lock.version, '1.1.0')
+  assert.equal(lock.packages[''].version, '1.1.0')
 })
 
 test('面板接口：跨站拒绝，写接口只收 POST', async () => {

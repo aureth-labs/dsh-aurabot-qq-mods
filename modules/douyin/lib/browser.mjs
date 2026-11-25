@@ -26,9 +26,15 @@ const CANDIDATES = [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 ].filter(Boolean)
 
-/** 找浏览器：面板填了就用填的，否则 Edge 优先，再找 Chrome / Chromium。 */
+// 启动等待预算：冷启动 + 杀毒逐个扫 msedge 的子进程时，15 秒经常不够，
+// 短了会把「启动慢」误报成「浏览器没起来，请检查路径」。
+const LAUNCH_POLL_MS = 250
+const LAUNCH_POLLS = 120
+const LAUNCH_TIMEOUT_SEC = (LAUNCH_POLL_MS * LAUNCH_POLLS) / 1000
+
+/** 找浏览器：面板填了且真实存在就用填的；填的路径不存在（磁盘清理/搬移后很常见）就回退去常见安装位置探测，Edge 优先，再找 Chrome / Chromium。 */
 export function findBrowser(explicit = '', exists = existsSync) {
-  if (explicit) return exists(explicit) ? explicit : ''
+  if (explicit && exists(explicit)) return explicit
   return CANDIDATES.find((p) => exists(p)) || ''
 }
 
@@ -166,7 +172,7 @@ export function createBrowser({ profileDir, browserPath = () => '', log, now = D
       }
       if (!egoBackend) egoBackend = createEgoBackend({ getJson, log })
       const { port } = await egoBackend.ensure(check)
-      const target = await acquireEgoTarget(port, getBrowserJson)
+      const target = await acquireEgoTarget(port, getBrowserJson, connect)
       check()
       const c = connect(target.webSocketDebuggerUrl)
       try {
@@ -303,10 +309,15 @@ export function createBrowser({ profileDir, browserPath = () => '', log, now = D
     }
   }
 
-  function launchError(error, p) {
+  function launchError(error, p, why = '') {
     const detail = [error?.message, p?.error?.message, p?.stderr?.trim()].filter(Boolean).join('；')
     if (/SingletonLock|profile appears to be in use/i.test(detail)) return lockError()
-    return new Error(detail || '浏览器没起来，请检查浏览器路径和专用资料目录')
+    // 有具体报错就原样报，别再合并成一句怪路径的话——历史上把「进程静默退出」「启动太慢」
+    // 全报成「浏览器没起来，请检查浏览器路径和专用资料目录」，路径明明是对的，用户查路径查不出问题。
+    if (detail) return new Error(detail)
+    if (p?.exited) return new Error('浏览器进程启动后自己退出了，没有任何报错输出。最常见原因：已经有一个用同一资料目录的浏览器在跑（浏览器自动更新重启 / 上次的窗口没关干净；专用窗口平时放在屏幕外看不见）；另外磁盘清理或「把软件搬到别的盘」会弄坏 Edge 安装（路径还在但起不来，你这个情况如果是清理 C 盘之后出现的，多半是它）。先在任务管理器结束全部 msedge.exe / chrome.exe 再重试；还不行就修复 / 重装 Edge，或在面板换一个浏览器路径')
+    if (why === 'timeout') return new Error(`浏览器进程 ${LAUNCH_TIMEOUT_SEC} 秒内没开出调试端口（进程还活着，路径多半没问题，是启动太慢或被杀毒软件拦了）。稍等再试一次；反复出现就检查杀毒软件对 Edge 的拦截`)
+    return new Error('浏览器没起来，请检查浏览器路径和专用资料目录')
   }
 
   async function launch(source, check) {
@@ -338,7 +349,8 @@ export function createBrowser({ profileDir, browserPath = () => '', log, now = D
       if (hasLock()) throw lockError()
       const path = browserPath()
       const bin = findBrowser(path)
-      if (!bin) throw new Error(path ? `浏览器路径不对：${path}` : '找不到 Edge / Chrome，先装一个，或在面板里填浏览器路径')
+      if (!bin) throw new Error(path ? `浏览器路径不对：${path}（这个文件不存在，常见安装位置也没找到 Edge / Chrome；先装一个，或把路径改成 msedge.exe / chrome.exe 的完整路径）` : '找不到 Edge / Chrome，先装一个，或在面板里填浏览器路径')
+      if (path && bin !== path) log?.warn?.(`面板填的浏览器路径不存在：${path}，已自动改用 ${bin}`)
       mkdirSync(profileDir, { recursive: true })
       const port = await getPort()
       check()
@@ -365,8 +377,8 @@ export function createBrowser({ profileDir, browserPath = () => '', log, now = D
       ], { stdio: ['ignore', 'ignore', 'pipe'], detached: true })
       p = owned = observe(child, port)
       child.unref()
-      for (let i = 0; i < 60; i++) {
-        await wait(250)
+      for (let i = 0; i < LAUNCH_POLLS; i++) {
+        await wait(LAUNCH_POLL_MS)
         check()
         if (p.exited || p.error) throw launchError(null, p)
         const version = await getBrowserJson(`http://127.0.0.1:${port}/json/version`, 1500).catch(() => null)
@@ -379,7 +391,7 @@ export function createBrowser({ profileDir, browserPath = () => '', log, now = D
           return
         }
       }
-      throw launchError(null, p)
+      throw launchError(null, p, 'timeout')
     } catch (error) {
       try { await stopOwned(p) } catch (stopError) { throw new Error(`${launchError(error, p).message}；${stopError.message}`) }
       if (error.code === 'cancelled') throw error
@@ -436,6 +448,11 @@ export function createBrowser({ profileDir, browserPath = () => '', log, now = D
   function need() {
     if (!connected()) throw new Error('浏览器没连上')
     return cdp
+  }
+
+  /** 只读状态：上次启动失败的原因与下次重试时间（退避期内才带 lastError）。绝不启动浏览器。 */
+  function status() {
+    return { connected: connected(), lastError: retryAt && now() < retryAt ? lastError : '', retryAt: retryAt || 0 }
   }
 
   /** 在页面里跑一段表达式，返回值（可以是 Promise）。 */
@@ -556,7 +573,22 @@ export function createBrowser({ profileDir, browserPath = () => '', log, now = D
 
   /** 窗口挪到屏幕里给人看 / 挪回屏幕外。 */
   async function show(visible) {
-    if (egoTarget) return // 窗口归 DSH，挪不动
+    if (egoTarget) {
+      // 共享窗口归 DSH 管，但「显示浏览器窗口」不能是空操作 —— 主人扫码、做
+      // 安全验证时点它，要把窗口从屏幕外 (-2400,-2400) 挪回屏幕内、带到前台、
+      // 切到本模块的标签页。收起（visible=false）挪回屏幕外并取消置顶焦点。
+      try {
+        const { windowId } = await cdp.send('Browser.getWindowForTarget')
+        if (visible) {
+          await cdp.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } }).catch(() => {})
+          await cdp.send('Browser.setWindowBounds', { windowId, bounds: { left: 80, top: 60, width: 1280, height: 860 } }).catch(() => {})
+        } else {
+          await cdp.send('Browser.setWindowBounds', { windowId, bounds: { left: -2400, top: -2400 } }).catch(() => {})
+        }
+      } catch { /* 挪窗失败不拦着 bringToFront：能带到前台也算数 */ }
+      if (visible) await cdp?.send('Page.bringToFront').catch(() => {})
+      return
+    }
     const c = need()
     const { windowId } = await c.send('Browser.getWindowForTarget')
     await c.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } }).catch(() => {})
@@ -586,5 +618,5 @@ export function createBrowser({ profileDir, browserPath = () => '', log, now = D
     return closing
   }
 
-  return { open, connected, evaluate, goto, waitFor, click, press, type, clearFocused, pressEnter, waitResponse, screenshot, show, close }
+  return { open, connected, status, evaluate, goto, waitFor, click, press, type, clearFocused, pressEnter, waitResponse, screenshot, show, close }
 }

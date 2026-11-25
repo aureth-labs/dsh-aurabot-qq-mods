@@ -8,6 +8,9 @@
 //   3. 降价提醒 —— 比插件上次看到的价格明显便宜；
 //   4. 历史价格最低 —— 比插件记录过的最低价还低。
 //
+// 查到的价格会顺手写进她的记忆（带「价格监控」标签，有效期按设置来的天数），
+// 以后被问到「上次那个多少钱」时能想起来。记忆模块不在时查价照常工作。
+//
 // 数据来自什么值得买的公开列表接口（不需要登录），它本身聚合了京东 / 天猫 /
 // 拼多多 / 抖音商城等平台的爆料，所以一条查询就能横向比较几个平台。
 //
@@ -17,9 +20,11 @@
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { randomBytes } from 'node:crypto'
-import { parsePrice, formatPrice, productKey, qualityOf, pickCandidates, evaluateAlert, pruneRecords, dueWatches } from './lib/core.mjs'
+import { parsePrice, formatPrice, productKey, qualityOf, pickCandidates, evaluateAlert, rankResults, relevanceOf, broadenKeyword, extractProductName, pruneRecords, dueWatches } from './lib/core.mjs'
+import { normalizeTtlMinutes, ttlLabel, TTL_DEFAULT_MINUTES, syncPriceMemory, listPriceMemories, forgetPriceMemories, memoryWritable } from './lib/memory-bridge.mjs'
+import { READ_TOOLS, extractToolCalls, looksLikeEmpty } from './lib/reply-guard.mjs'
 
-const VERSION = '1.0.1'
+const VERSION = '1.1.0'
 const LIST_API = 'https://api.smzdm.com/v1/list'
 const PAGE_SIZE = 50
 const MAX_PAGES = 5
@@ -195,10 +200,16 @@ export default {
     queryPages: 2,
     // 查价时最多列几条：群里最怕一屏几十条报价
     queryTopN: 3,
+    // 查价结果里是否附上爆料链接
+    queryShowLink: true,
     guestQuery: true,
     guestWatch: false,
     alertCooldownMinutes: 180,
     watchTtlDays: 90,
+    // 查到的价格写进记忆，并保留这么多分钟（默认 30，0 = 永久）
+    memorySync: true,
+    memoryTtlMinutes: TTL_DEFAULT_MINUTES,
+    memoryImportance: 0.45,
     // 群聊白名单：默认开启，必须先把群号加进白名单，群里才能用这个插件
     groupWhitelist: true,
     whitelistGroups: '',
@@ -224,6 +235,25 @@ export default {
       if (s0.active !== want) api.saveSettings({ active: want })
     } catch (error) {
       log.warn('对齐价格监控开关状态失败：' + (error && error.message ? error.message : error))
+    }
+    // 保留时长从「天」→「小时」→「分钟」改过两轮：老配置里存过 memoryTtlDays / memoryTtlHours
+    // 就换算一次，免得用户设过的值在升级后悄悄变成默认 30 分钟。只搬一次，之后以 memoryTtlMinutes 为准。
+    try {
+      const saved = api.config() && api.config().modules && api.config().modules['price-watch']
+      const has = (key) => saved && saved[key] !== undefined && saved[key] !== null && saved[key] !== ''
+      if (has('memoryTtlDays') || has('memoryTtlHours')) {
+        const days = has('memoryTtlDays') ? Number(saved.memoryTtlDays) : NaN
+        const hours = has('memoryTtlHours') ? Number(saved.memoryTtlHours) : NaN
+        const minutes = Number.isFinite(days) && days >= 0
+          ? days * 1440
+          : (Number.isFinite(hours) && hours >= 0 ? Math.round(hours * 60) : NaN)
+        if (Number.isFinite(minutes) && (saved.memoryTtlMinutes === undefined || saved.memoryTtlMinutes === null)) {
+          api.saveSettings({ memoryTtlMinutes: minutes })
+          log.info('价格监控：价格记忆保留时长已换算成 ' + minutes + ' 分钟')
+        }
+      }
+    } catch (error) {
+      log.warn('换算价格记忆保留时长失败：' + (error && error.message ? error.message : error))
     }
     // 每次现取：failover / 测试替换全局 fetch 时也能跟着走
     const fetchImpl = dependencies.fetch || ((url, init) => fetch(url, init))
@@ -308,6 +338,8 @@ export default {
         maxWatches: clamp(s.maxWatches, 1, 100, 20),
         pages: clamp(s.queryPages, 1, MAX_PAGES, 2),
         queryTopN: clamp(s.queryTopN, 1, 20, 3),
+        // 查价结果附带链接（关掉就只报价格和平台，不发网址）
+        showLink: s.queryShowLink !== false,
         guestQuery: s.guestQuery !== false,
         guestWatch: s.guestWatch === true,
         cooldown: clamp(s.alertCooldownMinutes, 10, 10080, 180) * 60000,
@@ -319,6 +351,11 @@ export default {
         startHour: clamp(s.checkStartHour, 0, 23, 0),
         endHour: clamp(s.checkEndHour, 0, 23, 0),
         maxChecks: clamp(s.maxChecksPerRun, 1, 50, 5),
+        // 查价记忆：写到她的记忆库，保留 memoryTtlMinutes 分钟（默认 30，0 = 永久）
+        memorySync: s.memorySync !== false,
+        // 老配置的 memoryTtlDays / memoryTtlHours 在启动时已经换算成分钟，这里只读分钟
+        memoryTtlMinutes: normalizeTtlMinutes(s.memoryTtlMinutes, TTL_DEFAULT_MINUTES),
+        memoryImportance: clamp(s.memoryImportance, 0.1, 0.9, 0.45),
       }
     }
 
@@ -412,6 +449,34 @@ export default {
      * 用一条观测更新「本插件记录的最低价」。返回是否创了新低。
      * lastSeen 用来做记录表的 LRU；每次都裁到 MAX_RECORDS，state.json 不会无限长。
      */
+    function rememberPrice (key, item, c, stamp, extra = {}) {
+      if (!c.memorySync) return { ok: false, skipped: 'disabled' }
+      const memory = memoryWritable(api)
+      if (!memory) return { ok: false, skipped: 'memory-unavailable' }
+      const record = recordOf(key) || {}
+      const out = syncPriceMemory(memory, {
+        key,
+        title: String(item.title || '').slice(0, 120),
+        mall: item.mall || '',
+        price: item.price,
+        lowest: Number(record.lowest) || 0,
+        previous: extra.previous,
+        drop: extra.drop,
+        isNewLow: extra.isNewLow === true,
+        ttlMinutes: c.memoryTtlMinutes,
+        at: stamp,
+      }, {
+        previousId: record.memoryId,
+        ttlMinutes: c.memoryTtlMinutes,
+        importance: c.memoryImportance,
+        chatId: extra.chatId,
+        now: stamp,
+      })
+      if (out.ok && out.id && key && recordOf(key)) recordOf(key).memoryId = out.id
+      return out
+    }
+
+    /** 用一条观测更新「本插件记录的最低价」。返回是否创了新低。 */
     function observe (key, price, url, title, stamp) {
       if (!key || !Number.isFinite(Number(price)) || Number(price) <= 0) return false
       const cur = recordOf(key)
@@ -444,6 +509,26 @@ export default {
 
     // ---------- 命令渲染 ----------
     const priceText = (n) => (Number.isFinite(Number(n)) ? '¥' + formatPrice(n) : '价格未知')
+
+    /**
+     * 原文价格里的附加条件（需用券、凑单、淘金币…）。
+     * 价格本身一律显示数字，这里只把「为什么可能更便宜」的理由摘出来。
+     */
+    function priceNote (item) {
+      const raw = String((item && item.priceText) || '').trim()
+      if (!raw) return ''
+      // 去掉数字金额和「过期 / 售罄」这类状态词，剩下的才是条件
+      let rest = raw
+        .replace(/[\d.]+\s*元[起]?/g, ' ')
+        .replace(/过期|售罄|已结束|plus会员|PLUS会员/gi, ' ')
+        .replace(/[|｜]/g, ' ')
+        .replace(/[\s　]+/g, ' ')
+        .trim()
+      // 全角括号可能不配对：统一成一对
+      rest = rest.replace(/^[（(]\s*/, '').replace(/\s*[）)]$/, '').trim()
+      if (!rest) return ''
+      return '（' + rest.slice(0, 24) + '）'
+    }
 
     function qualityMark (item) {
       if (item.quality === 'super') return '【超级好价】'
@@ -478,6 +563,8 @@ export default {
         '/查询价格 商品名或链接 —— 多平台价格搜索，按平台列最低价和链接',
         '/价格列表 —— 看正在监控的商品',
         '/取消监控 编号 —— 取消一个监控',
+        '/价格记忆 —— 看记忆里存了哪些查过的价格',
+        '/忘掉价格 [编号或关键词] —— 删掉一条价格记忆；不给参数就全清',
         '数据来自什么值得买的公开好价（聚合京东 / 天猫 / 拼多多 / 抖音商城）。',
         '「插件记录最低价」是开始监控之后见到的价格，不是全网史低。',
       ].join('\n')
@@ -517,7 +604,7 @@ export default {
         const head = picked.kind === 'many'
           ? '「' + q + '」匹配到好几个，回 /监控价格 编号 选一个：'
           : '没找到完全一致的，这几个看起来最接近，回 /监控价格 编号 选一个：'
-        return { ok: true, message: head + '\n' + list.map((item, i) => (i + 1) + '. ' + qualityMark(item) + item.title.slice(0, 42) + '\n   ' + item.mall + ' · ' + priceText(item.price) + '\n   ' + item.url).join('\n'), options: list }
+        return { ok: true, message: head + '\n' + list.map((item, i) => (i + 1) + '. ' + qualityMark(item) + item.title.slice(0, 42) + '\n   ' + item.mall + ' · ' + priceText(item.price) + (c.showLink && item.url ? '\n   ' + item.url : '')).join('\n'), options: list }
       }
       return startWatch(picked.item, q, chatId, options.creatorId)
     }
@@ -529,7 +616,19 @@ export default {
       const dup = mine.find((w) => w.key && item.key && w.key === item.key)
       if (dup) return { ok: true, watch: dup, message: '「' + dup.title.slice(0, 40) + '」已经在监控了。\n现在 ' + priceText(dup.price) + (Number.isFinite(Number(dup.lowest)) ? '，插件记录最低 ' + priceText(dup.lowest) : '') + '\n' + dup.url }
       const stamp = nowMs()
+      const seenBefore = Boolean(item.key && recordOf(item.key))
+      const previous = seenBefore ? Number(recordOf(item.key).lowest) : NaN
       if (item.key) observe(item.key, item.price, item.url, item.title, stamp)
+      // 加监控本身就是一次查询：当时的价格也记进记忆
+      try {
+        rememberPrice(item.key || '', item, c, stamp, {
+          previous: Number.isFinite(previous) ? previous : undefined,
+          isNewLow: Number.isFinite(previous) && Number(item.price) < previous,
+          chatId,
+        })
+      } catch (error) {
+        log.warn('写价格记忆失败（忽略）：' + (error && error.message ? error.message : error))
+      }
       const record = recordOf(item.key)
       const watch = {
         id: idOf(),
@@ -589,7 +688,11 @@ export default {
       return 20
     }
 
-    function groupByMall (items) {
+    /**
+     * 面板按平台分组。组内同样「先像不像这件商品、再比价格」，
+     * 否则每个平台的第一条都是贴膜 / 耗材这类便宜的周边。
+     */
+    function groupByMall (items, query = '') {
       const map = new Map()
       for (const item of items) {
         const mall = item.mall || '其他平台'
@@ -601,6 +704,9 @@ export default {
           mall,
           items: rows
             .sort((a, b) => {
+              const ra = relevanceOf(query, a)
+              const rb = relevanceOf(query, b)
+              if (ra.tier !== rb.tier) return rb.tier - ra.tier
               const pa = Number.isFinite(a.price) ? a.price : Infinity
               const pb = Number.isFinite(b.price) ? b.price : Infinity
               if (pa !== pb) return pa - pb
@@ -619,26 +725,41 @@ export default {
      * 查价结果只列「最便宜的前 N 条」，而不是把每个平台的报价都铺出来 —— 群里最怕刷屏。
      * N 是设置里的 queryTopN（默认 3），想看更多就调大。
      */
-    function searchText (query, items, prior = {}, topN = 3) {
+    function searchText (query, items, prior = {}, topN = 3, opts = {}) {
+      const showLink = opts.showLink !== undefined ? opts.showLink === true : conf().showLink
       if (!items.length) return '没找到「' + query + '」的价格。换个说法试试，比如带上品牌或关键词。'
       const limit = Math.max(1, Math.min(20, Number(topN) || 3))
-      const ranked = items
-        .filter((item) => Number.isFinite(item.price) && item.price > 0)
-        .sort((a, b) => a.price - b.price)
-      const picked = ranked.slice(0, limit)
+      // 先按「像不像这件商品」分层，同层再比价格：不然「拓竹 A1」会先列出 17 块的打印板和 18 块的耗材
+      const ranked = rankResults(query, items, limit)
+      const picked = ranked.picked
       if (!picked.length) return '「' + query + '」有 ' + items.length + ' 条爆料，但都没给出能比较的价格。'
-      const lines = ['「' + query + '」最低 ' + picked.length + ' 条' + (items.length > picked.length ? '（共 ' + items.length + ' 条爆料）' : '') + '：']
+      const broad = opts.broadened ? '（用「' + opts.broadened + '」补搜了整机）' : ''
+      const head = ranked.weak
+        ? '「' + query + '」没有完全对得上的，最像的 ' + picked.length + ' 条' + broad + '（' + items.length + ' 条爆料）：'
+        : ranked.onlyAccessory
+          ? '「' + query + '」只搜到耗材 / 配件，没找到整机价' + broad + '；这几条是周边（' + items.length + ' 条爆料）：'
+          : '「' + query + '」最低 ' + picked.length + ' 条' + broad + (items.length > picked.length ? '（共 ' + items.length + ' 条爆料）' : '') + '：'
+      const lines = [head]
       picked.forEach((item, i) => {
         const record = prior[item.key]
         const isLow = record && Number(record.observations) > 1 && Number.isFinite(Number(record.lowest)) && Number(item.price) <= Number(record.lowest) + 0.001
-        const tags = [qualityMark(item), isLow ? '【插件记录最低】' : ''].filter(Boolean).join('')
-        const note = item.priceText && /\d+\s*元/.test(String(item.priceText)) && String(item.priceText).length > 12
-          ? '（' + item.priceText.replace(/^\s*[\d.]+\s*元/, '').trim() + '）'
-          : ''
+        // 配件、赠品这类标出来：价格低不等于你要的那件便宜
+        const tags = [qualityMark(item), isLow ? '【插件记录最低】' : '', item.accessory ? '【配件】' : ''].filter(Boolean).join('')
+        // 价格默认用数字（¥872），原文里的「需用券 / 凑单 / 淘金币」这类条件留在括号里，
+        // 不把「过期 | 831.3元（需用券）」整段原样丢出来。
+        const note = priceNote(item)
         lines.push((i + 1) + '. ' + priceText(item.price) + ' · ' + (item.mall || '未知平台') + ' ' + tags + item.title.slice(0, 38) + note)
-        lines.push('   ' + item.url)
+        // 链接由 queryShowLink 控制：群里嫌刷屏 / 只想看个价时可以关掉
+        if (showLink && item.url) lines.push('   ' + item.url)
       })
+      if (!showLink) lines.push('（链接没打开：面板「查询价格附带链接」关着；要看原文就把它打开。）')
       if (items.length > picked.length) lines.push('只列最低 ' + picked.length + ' 条；想多看几条，把面板「查询价格显示条数」调大。')
+      // 只搜到周边时，给的是「下一步怎么办」，不是让她自己解释为什么没有整机
+      if (ranked.onlyAccessory) {
+        lines.push('换个说法再试：把品牌写成型号，或者直接搜「' + query + ' 打印机」「' + query + ' 整机」这样的品类词。')
+      } else if (!ranked.weak) {
+        lines.push('下单前看一眼标题：带「配件 / 耗材」的是周边，不是主商品。')
+      }
       return lines.join('\n')
     }
 
@@ -718,6 +839,17 @@ export default {
       watch.lowestAt = record && record.lowestAt ? record.lowestAt : stamp
       watch.lastCheck = stamp
       watch.history = [...(watch.history || []), { at: stamp, price: item.price }].slice(-60)
+      // 后台看到的新价格也进记忆：同款更新同一条，有效期从这次检查重新算
+      try {
+        rememberPrice(watch.key || item.key || '', item, c, stamp, {
+          previous: before.price,
+          drop: result.drop,
+          isNewLow,
+          chatId: watch.chatId,
+        })
+      } catch (error) {
+        log.warn('写价格记忆失败（忽略）：' + (error && error.message ? error.message : error))
+      }
       const alert = result.alert || qualityNew
       let message = ''
       let cooled = false
@@ -887,6 +1019,80 @@ export default {
       }
     }
 
+    /**
+     * 查一次价格：搜索 → 记录观测 → 写记忆 → 出文案。
+     * 命令、工具、面板共用这一条路径，所以「查到的价格有没有进记忆」三处口径一致。
+     * 记忆写失败只是少一条记忆，不影响这次查价的结果和返回的文字。
+     */
+    async function queryAndRemember (raw, c, options = {}) {
+      const text = String(raw || '').trim()
+      if (!text) return { ok: false, message: '要查什么？发 /查询价格 商品名或链接。' }
+      // 允许直接发链接（什么值得买的能换回商品名，其它平台的会给出提示）
+      const resolved = await resolveQuery(text)
+      if (resolved.note && !resolved.query) return { ok: false, message: resolved.note }
+      const keyword = resolved.query || text
+      let items = await request(keyword, c.pages)
+      let broadened = ''
+      // 只搜到耗材 / 配件，没有整机：常见于「品牌+型号」写得太紧，
+      // 用型号单独再搜一次，别拿一堆周边当结果回给她。
+      if (items.length && !rankResults(keyword, items, 1).hasMain) {
+        const wider = broadenKeyword(keyword)
+        if (wider && wider !== keyword) {
+          try {
+            const again = await request(wider, c.pages)
+            if (again.length) {
+              const merged = [...items]
+              const seen = new Set(items.map((item) => item.articleId || item.url))
+              for (const item of again) if (!seen.has(item.articleId || item.url)) merged.push(item)
+              const check = rankResults(keyword, merged, 1)
+              // 只有真搜到了主商品才换：放宽是为了找整机，不是为了塞更多配件
+              if (check.hasMain) {
+                items = merged
+                broadened = wider
+                log.info('价格监控：「' + keyword + '」只搜到配件，改用「' + wider + '」补搜到了整机')
+              }
+            }
+          } catch (error) {
+            log.warn('放宽补搜失败（忽略）：' + (error && error.message ? error.message : error))
+          }
+        }
+      }
+      if (!items.length) {
+        return { ok: false, message: '没找到「' + keyword + '」的价格。换个说法试试，比如带上品牌或关键词。', keyword }
+      }
+      // 补搜成功时，排序和文案都按原来的查询来（别把「a1」当商品名回给人）
+      const ranked = rankResults(keyword, items, c.queryTopN)
+      // 先照一张记录快照，再写新观测：这样「比记录最低还低」只对以前见过的商品说
+      const prior = JSON.parse(JSON.stringify(state.records || {}))
+      const stamp = nowMs()
+      for (const item of items) observe(item.key, item.price, item.url, item.title, stamp)
+      // 记忆只记一条，但这一条必须是「这次查的那件商品」，不是最便宜的配件。
+      // 所以和展示用同一套相关度排序（rankResults），不能只比价格。
+      let memory = { ok: false, skipped: 'empty' }
+      try {
+        const best = rankResults(keyword, items, 1).picked[0]
+        if (best) {
+          const before = prior[best.key] || {}
+          const previous = Number(before.lowest)
+          memory = rememberPrice(best.key || '', best, c, stamp, {
+            previous: Number.isFinite(previous) ? previous : undefined,
+            isNewLow: Number(before.observations) > 0 && Number.isFinite(previous) && Number(best.price) < previous,
+            chatId: options.chatId,
+          })
+          // 记的是哪一条要能看出来：查 A1 却记了配件，等于记错了东西
+          if (memory && memory.ok) memory.title = best.title
+        }
+      } catch (error) {
+        log.warn('写价格记忆失败（忽略）：' + (error && error.message ? error.message : error))
+      }
+      state.lastQueryAt = stamp
+      save()
+      const body = searchText(keyword, items, prior, c.queryTopN, { broadened, showLink: c.showLink })
+      // 从链接认出来的，先说一句，免得用户以为是凭空搜的
+      const message = resolved.note && resolved.query !== text ? resolved.note + '\n' + body : body
+      return { ok: true, message, keyword, items, prior, memory }
+    }
+
     async function cmdQuery (arg, msg) {
       const c = conf()
       const text = String(arg || '').trim()
@@ -894,19 +1100,8 @@ export default {
       if (!c.enabled) return '价格监控关着。'
       if (!isOwner(msg) && !c.guestQuery) return '这个只有主人能查。'
       try {
-        // 允许直接发链接（什么值得买的能换回商品名，其它平台的会给出提示）
-        const resolved = await resolveQuery(text)
-        if (resolved.note && !resolved.query) return resolved.note
-        const keyword = resolved.query || text
-        const items = await request(keyword, c.pages)
-        // 先照一张记录快照，再写新观测：这样「比记录最低还低」只对以前见过的商品说
-        const prior = JSON.parse(JSON.stringify(state.records || {}))
-        const stamp = nowMs()
-        for (const item of items) observe(item.key, item.price, item.url, item.title, stamp)
-        save()
-        const body = searchText(keyword, items, prior, c.queryTopN)
-        // 从链接认出来的，先说一句，免得用户以为是凭空搜的
-        return resolved.note && resolved.query !== text ? resolved.note + '\n' + body : body
+        const out = await queryAndRemember(text, c, { chatId: msg && msg.chatId })
+        return out.message
       } catch (error) {
         log.warn('查价格失败：' + (error && error.message ? error.message : error))
         return '查价格出错了：' + (error && error.message ? error.message : '未知错误') + '。稍后再试。'
@@ -915,6 +1110,69 @@ export default {
 
     function cmdList (arg, msg) {
       return listText(msg.chatId)
+    }
+
+    /** 记忆里都存了哪些价格，按最近查到的排序。 */
+    function memoryText () {
+      const c = conf()
+      const memory = memoryWritable(api)
+      if (!memory) return '记忆模块这会儿不在跑（或被关掉了），查到的价格只留在本插件的记录里。'
+      if (!c.memorySync) return '「价格写进记忆」是关着的，查到的价格不会进记忆库；要开就在面板「平台 → 价格监控 → 监控设置 → 展开编辑 → 更多设置」里打开。'
+      const items = listPriceMemories(memory)
+      if (!items.length) return '记忆里还没有查过的价格。用 /查询价格 商品名 查一次，就会记下来。'
+      const keep = c.memoryTtlMinutes > 0 ? '保留 ' + ttlLabel(c.memoryTtlMinutes) : '长期保留'
+      const lines = items.slice(0, 20).map((item, i) => {
+        const until = item.validUntil > 0 ? '（到 ' + clock(item.validUntil) + ' 失效）' : ''
+        return (i + 1) + '. ' + item.text + until
+      })
+      return '记忆里存了 ' + items.length + ' 条价格（' + keep + '）：\n' + lines.join('\n') +
+        (items.length > 20 ? '\n只列最近 20 条。' : '')
+    }
+
+    /**
+     * 清掉价格记忆。三种用法：
+     *   /忘掉价格          → 全清
+     *   /忘掉价格 3        → 只删 /价格记忆 列表里的第 3 条
+     *   /忘掉价格 咖啡机    → 删标题里含这个词的（可能多条）
+     * 只动本插件写的那几条，不动别人的记忆。
+     */
+    function forgetPriceText (arg) {
+      const memory = memoryWritable(api)
+      if (!memory) return '记忆模块这会儿不在跑（或被关掉了），没有什么可清的。'
+      const text = String(arg || '').trim()
+      const mine = listPriceMemories(memory)
+      if (!mine.length) return '记忆里没有价格记载。'
+      let targets = mine
+      let scope = ''
+      if (/^#?\d{1,3}$/.test(text)) {
+        // 编号和 /价格记忆 里列出的顺序一致（最近的在前）
+        const n = Number(text.replace(/^#/, ''))
+        const target = mine[n - 1]
+        if (!target) return '没有编号 ' + n + ' 的价格记忆；发 /价格记忆 看现在有几条（共 ' + mine.length + ' 条）。'
+        targets = [target]
+        scope = '第 ' + n + ' 条'
+      } else if (text) {
+        targets = mine.filter((item) => item.text.includes(text))
+        if (!targets.length) return '记忆里没有和「' + text + '」对得上的价格记载。'
+        scope = '含「' + text + '」的'
+      }
+      const removed = forgetPriceMemories(memory, { ids: targets.map((item) => item.id) })
+      forgetLocalMemoryIds(targets.map((item) => item.id))
+      return '已从记忆里清掉 ' + removed + ' 条价格记载' + (scope ? '（' + scope + '）' : '') + '。'
+    }
+
+    /** 删掉记忆后，把本地记录里指向它的 memoryId 一起抹掉，免得下次更新一条已经不存在的数据。 */
+    function forgetLocalMemoryIds (ids) {
+      const drop = new Set((ids || []).map((id) => String(id || '')).filter(Boolean))
+      if (!drop.size) return
+      let touched = false
+      for (const key of Object.keys(state.records)) {
+        if (drop.has(String(state.records[key].memoryId || ''))) {
+          delete state.records[key].memoryId
+          touched = true
+        }
+      }
+      if (touched) save()
     }
 
     function cmdUnwatch (arg, msg) {
@@ -938,14 +1196,35 @@ export default {
     api.command({ name: '查询价格', aliases: ['查价格', '比价', 'price_query', 'price_compare'], desc: '多平台价格搜索：/查询价格 商品名', run: cmdQuery })
     api.command({ name: '价格列表', aliases: ['监控列表', 'price_list'], desc: '看正在监控的商品', run: cmdList })
     api.command({ name: '取消监控', aliases: ['取消价格', 'price_unwatch'], desc: '取消一个监控：/取消监控 编号', run: cmdUnwatch })
+    api.command({ name: '价格记忆', aliases: ['查过的价格', 'price_memory'], desc: '看记忆里存了哪些查过的价格', run: () => memoryText() })
+    api.command({ name: '忘掉价格', aliases: ['删除价格记忆', '清除价格记忆', 'price_forget'], desc: '删价格记忆：/忘掉价格 [编号或关键词]，不给参数就全清', run: (arg) => forgetPriceText(arg) })
 
     // 主人的命令由中枢执行；非主人（allowGuest*）这里接管，同时把主人那几条命令吞掉，
     // 免得她再对「/监控价格」本身回一句。
     const OWN_CN = /^[\/／]\s*(?:价格帮助|价格监控帮助|监控价格|查询价格|价格列表|取消监控|监控列表|查价格|比价|监控|取消价格)/
     const OWN_EN = /^[\/／]\s*(?:price_help|price_watch_help|price_watch|price_query|price_compare|price_list|price_unwatch|watch_price)(?![a-z0-9_-])/i
+    // 记下「别人问价」的原话：她说「查过了、库里没有」时，用它还原要查的商品。
+    // 只记有点像在问商品的句子，不记全部聊天。
+    const ASK_HINT = /(多少|几块|价格|价|多少钱|贵不贵|便宜|比价|值不值|[A-Za-z]+\s*\d+)/
     api.on('message', async (msg) => {
       if (disposed) return false
       const text = String(msg.text || '').trim()
+      // 记一条「可能是在问商品」的话，最近 10 条、15 分钟内有效。
+      // 存的是**原句**而不是抠出来的型号：只留「A1」会搜出闪迪内存卡，带上「拓竹」才是打印机。
+      if (!msg.isSelf && text && !/^[\/／]/.test(text) && ASK_HINT.test(text) && text.length <= 80) {
+        // 能直接认出「品牌 + 型号」就存那个（最准）；认不出才退回去掉口头禅的原句
+        const product = extractProductName(text)
+        const trimmed = product || String(text)
+          .replace(/[？?。！!，,、~～]+$/g, '')
+          .replace(/^(?:帮我|帮忙|你|那|这个|请问|麻烦)[\s,，]*/g, '')
+          .replace(/(?:现在|如今|目前)?(?:什么价|多少钱|价格|价钱|贵不贵|值不值|便宜吗)[\s？?。!！]*$/g, '')
+          .trim()
+        if (trimmed.length >= 2) {
+          state.recentAsk = [...(state.recentAsk || []), { chatId: msg.chatId, text: trimmed.slice(0, 40), at: nowMs() }]
+            .filter((row) => nowMs() - Number(row.at) < 15 * 60000)
+            .slice(-10)
+        }
+      }
       if (!/^[\/／]/.test(text)) return false
       if (api.isOwner(msg.userId)) return OWN_CN.test(text) || OWN_EN.test(text)
       const c = conf()
@@ -967,6 +1246,193 @@ export default {
       await reply(await cmdWatch(arg, msg))
       return true
     })
+
+    /**
+     * 她把工具调用当普通文字发出来了（QQ 里会出现 <price_query><query>…</query>）。
+     * 这里在发出去之前拦：
+     *   - 只读查询（查价 / 看列表 / 立即检查）替她真跑一次，把结果接在正文后面；
+     *   - 写操作（加监控）只剥标记、不代执行，留一句说明，免得群友靠打字触发写入。
+     * 返回 null = 这条不发（剥完是空的，也没查出东西）；返回字符串 = 改成这个发。
+     */
+    async function rescueToolText (text, msg) {
+      const raw = String(text || '')
+      const all = ['price_query', 'price_watch_add', 'price_watch_list', 'price_watch_check']
+      const { clean, calls } = extractToolCalls(raw, READ_TOOLS, all)
+      if (!calls.length) return raw
+      const c = conf()
+      const notes = []
+      // 只处理一次查询：她在一条消息里写好几个调用，也只回一次，别刷屏
+      const read = calls.find((call) => READ_TOOLS.has(call.name))
+      if (read) {
+        try {
+          if (read.name === 'price_query') {
+            const query = String((read.args && (read.args.query || read.args.q)) || '').trim()
+            if (query) {
+              const out = await queryAndRemember(query, c, { chatId: msg && msg.chatId })
+              notes.push(out.message)
+            } else {
+              notes.push('要查什么商品？把商品名发给我。')
+            }
+          } else if (read.name === 'price_watch_list') {
+            notes.push(listText(msg && msg.chatId))
+          } else {
+            const out = await runChecks({ manual: true })
+            notes.push(out.ok === false
+              ? out.message
+              : out.checked ? '查了 ' + out.checked + ' 个，' + (out.alerts ? '发了 ' + out.alerts + ' 条提醒。' : '这次没有降价。') : (out.message || '现在没有需要更新的商品。'))
+          }
+        } catch (error) {
+          log.warn('替她补跑工具失败：' + (error && error.message ? error.message : error))
+          notes.push('查价格出错了：' + (error && error.message ? error.message : '未知错误') + '。稍后再试。')
+        }
+      }
+      if (calls.some((call) => call.name === 'price_watch_add')) notes.push('加监控我自己做不了，发「/监控价格 商品名」就行。')
+      const said = clean.trim()
+      const parts = []
+      if (said) parts.push(said)
+      else if (notes.length) parts.push('查价我来，别自己瞎翻')
+      for (const note of notes) if (note) parts.push(note)
+      log.info('价格监控：她的回复里带了工具标记，已拦下并补跑（' + calls.map((call) => call.name).join('、') + '）')
+      const merged = parts.join('\n')
+      return merged || null
+    }
+
+    /**
+     * 怀疑她「没查就说查过了」：这类句子必须伴随一次真实查询才允许发出去。
+     * 命中就现场补查一次，把真结果接上；她不查，代码替她查。
+     * 只认「声称查过 / 声称库里没有」这种句式，普通闲聊不碰。
+     */
+    // 「没整机价」和「没有整机价」都要认：模型常省掉中间的「有」。
+    const CLAIM_PATTERN = /(?:查过了?|查了一圈|我查了|查询结果|库里(?:只|没有?|全)|数据库(?:里)?(?:只|没有?|全)|只有耗材|全是耗材|(?<!有)没整机价?|没有整机价?|没整机|查不到|搜不到|没找到)/
+
+    /**
+     * 从「库里只有耗材、没有整机价」这类话里猜她要查什么。
+     * 优先用最近一句里出现的商品名（带型号的片段），猜不出来就不补查。
+     */
+    function guessQuery (text, msg) {
+      // 她自己那句话里如果能认出完整商品名（品牌 + 型号）就优先用，比翻历史更准
+      const body = String(text || '').replace(/<face:[^>]*>|<sticker:[^>]*>|<at:[^>]*>/gi, ' ')
+      // 中文品牌/品类 + 英文型号（拓竹A1 / 拓竹 A1 / 红米 K80 Pro）
+      const fromText = extractProductName(body)
+      if (fromText) return fromText
+      // 只有英文型号（「A1 整机得去官方店」）：拼上前面一句里提到的品牌，避免搜出闪迪 A1 内存卡
+      const alone = body.match(/\b([A-Za-z]{1,8}\s*\d{1,5}[A-Za-z0-9-]*)\b/)
+      if (alone) {
+        const model = alone[1].trim()
+        const brand = findRecentBrand(msg)
+        if (!brand) return model
+        // 历史里那句可能已经包含这个型号（「拓竹 A1」），别再拼一遍
+        if (squashText(brand).includes(squashText(model))) return brand
+        return brand + ' ' + model
+      }
+      // 退回最近几分钟里别人问过的那句完整话（带品牌，不是抠出来的型号）
+      const recent = Array.isArray(state.recentAsk) ? state.recentAsk : []
+      const now = nowMs()
+      for (let i = recent.length - 1; i >= 0; i--) {
+        const row = recent[i]
+        if (!row || now - Number(row.at) > 15 * 60000) continue
+        if (row.chatId && msg && msg.chatId && row.chatId !== msg.chatId) continue
+        if (row.text) return row.text
+      }
+      const model = String(text || '').match(/[A-Za-z]{1,6}\s*\d{1,5}[A-Za-z0-9]*/)
+      return model ? model[0] : ''
+    }
+
+    const squashText = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, '')
+
+    /** 最近这个聊天里别人问过的、带品牌的商品名（用来给孤立型号补上品牌）。 */
+    function findRecentBrand (msg) {
+      const recent = Array.isArray(state.recentAsk) ? state.recentAsk : []
+      const now = nowMs()
+      for (let i = recent.length - 1; i >= 0; i--) {
+        const row = recent[i]
+        if (!row || now - Number(row.at) > 15 * 60000) continue
+        if (row.chatId && msg && msg.chatId && row.chatId !== msg.chatId) continue
+        if (row.text && /[\u4e00-\u9fff]/.test(row.text)) return row.text
+      }
+      return ''
+    }
+
+    /**
+     * 去掉她原话里「查过了 / 库里只有… / 没有整机价」这类没依据的结论，保留其余说法。
+     * 按分句切，命中判断词的分句整段丢掉。
+     */
+    function dropFalseClaims (text) {
+      // 判断词只在「它所在的那一小截」里删，不是整段丢：
+      // 「没有整机价 拓竹 A1 整机得去官方店看」里只有前半截是错的，后半截还带着商品名。
+      // 「没整机价」「没有整机价」「没整机」都要清（模型常省「有」字）
+      const FALSE = /(?:查过了|查了一圈|我查了|查询结果|(?:这)?库里[^，。！？,\n]*|数据库[^，。！？,\n]*|[，,]?\s*(?:只|全都)?(?:是|有)?耗材爆料[^，。！？,\n]*|只有耗材[^，。！？,\n]*|全是耗材[^，。！？,\n]*|(?<!有)没整机价?[^，。！？,\n]*|没有整机价?[^，。！？,\n]*|没整机[^，。！？,\n]*|查不到[^，。！？,\n]*|搜不到[^，。！？,\n]*|没找到[^，。！？,\n]*|(?:整机)?得去(?:官方店|抖音)[^，。！？,\n]*|(?:去)?官方店(?:或者|或|和)?抖音?[^，。！？,\n]*)/g
+      return String(text || '')
+        .replace(/<face:[^>]*>|<sticker:[^>]*>|<at:[^>]*>/gi, ' ')
+        .replace(FALSE, ' ')
+        // 只剩连接词 / 标点的碎渣也清掉
+        .replace(/[，,、；;]\s*(?=[，,、；;。！？]|$)/g, '')
+        .replace(/^[\s，,、；;。！？]+/, '')
+        .replace(/[ \t]{2,}/g, ' ')
+        .trim()
+    }
+
+    /**
+     * 发出去之前的最后一道闸：她说「查过了 / 库里没有」，但这轮根本没有查询记录，
+     * 就替她查一次，并把「她的话 + 真实结果」一起发出去。
+     */
+    async function ensureClaimedQuery (text, msg) {
+      const raw = String(text || '')
+      if (!CLAIM_PATTERN.test(raw)) return raw
+      const c = conf()
+      // 关着 / 白名单外：查不了，但同样不能让她把「库里没有」当成事实说出去。
+      // 撤掉无依据的结论，换成一句如实的说法。
+      if (!c.enabled || !chatAllowed(msg && msg.chatId, c)) {
+        const cleaned = dropFalseClaims(raw)
+        return cleaned.trim() || '这个我查不了，价格监控这会儿没开。'
+      }
+      // 这轮刚刚查过（工具或命令），就认她说的
+      const last = Number(state.lastQueryAt) || 0
+      if (last && nowMs() - last < 120000) return raw
+      // 她这句话已经证明不可信（声称查过但没查），而且实测会裹着上一轮聊别的话题的残句
+      // （「涩图这个别找我」）和 [沉默] 标记一起出来。所以不再尝试打捞她的原文，
+      // 只保留表情/语气，正文一律换成真实结果——宁可简短，也不把不相干的话拼进价格回复。
+      const stickers = (String(raw).match(/<face:[^>]*>|<sticker:[^>]*>/gi) || []).join(' ')
+      const lead = stickers ? '查价我来 ' + stickers : '查价我来。'
+      const query = guessQuery(raw, msg)
+      if (!query) {
+        // 连要查什么都不知道：撤掉无依据的结论，不硬查一个不相干的东西
+        return '这个我得先查一下，把商品名发我就行。'
+      }
+      try {
+        const out = await queryAndRemember(query, c, { chatId: msg && msg.chatId })
+        if (!out.ok) {
+          // 补查没成功：她已经没法说「查过了」，如实说这次没查到
+          return lead + '\n这次没查到「' + query + '」的报价，过会儿再试。'
+        }
+        log.info('价格监控：她声称查过但本轮没有查询记录，已替她补查「' + query + '」')
+        return lead + '\n' + out.message
+      } catch (error) {
+        log.warn('补查失败：' + (error && error.message ? error.message : error))
+        return lead + '\n这次没查到「' + query + '」的报价，过会儿再试。'
+      }
+    }
+
+    // 她发出去之前改一遍：漏出来的工具标记（含参数）在这里拦掉。
+    // 别的模块 / 正常的文字不碰，原样返回不算改写。
+    if (typeof api.on === 'function') {
+      api.on('reply', async (text, info) => {
+        if (disposed) return undefined
+        try {
+          const original = String(text || '')
+          // 1) 漏出来的工具标记（含参数）：剥掉，只读操作替她补跑
+          const afterTools = await rescueToolText(original, { chatId: info && info.chatId })
+          // 2) 声称「查过了 / 库里没有」却没有查询痕迹：替她真查一次再发
+          const claimed = afterTools === null ? null : await ensureClaimedQuery(afterTools, info)
+          // 没变就是「不改写」；null 是「这条别发」
+          if (claimed === original) return undefined
+          return claimed
+        } catch (error) {
+          log.warn('处理回复里的工具标记失败：' + (error && error.message ? error.message : error))
+          return undefined
+        }
+      })
+    }
 
     // ---------- 给她用的工具（主人私聊 / 群聊都能用，写操作只认主人） ----------
     /**
@@ -991,7 +1457,7 @@ export default {
       return [
         api.defineTool({
           name: 'price_query',
-          description: '查询一件商品在多个平台的价格，返回按平台分组的最低价和链接。别人问「这个多少钱」「帮我比个价」时用。query 可以是商品名、关键词，也可以直接给什么值得买的链接。',
+          description: '查询一件商品在多个平台的价格，返回最便宜几条和链接，并把这次查到的价格记进记忆。有人问某件东西多少钱、哪里便宜、值不值时**一定要调用它**，不要凭印象回答「查过了 / 没有」。query 可以是商品名、关键词，也可以直接给什么值得买的链接。',
           properties: { query: { type: 'string', description: '商品名、关键词，或什么值得买的商品链接，比如 switch 2、索尼降噪耳机' } },
           required: ['query'],
           execute: async ({ query }, exec) => {
@@ -999,12 +1465,15 @@ export default {
             const text = String(query || '').trim()
             if (!text) return { ok: false, message: '要查什么商品？' }
             try {
-              const resolved = await resolveQuery(text)
-              if (resolved.note && !resolved.query) return { ok: false, message: resolved.note }
-              const keyword = resolved.query || text
-              const items = await request(keyword, conf().pages)
-              const body = searchText(keyword, items, {}, conf().queryTopN)
-              return { ok: true, message: resolved.query !== text && resolved.note ? resolved.note + '\n' + body : body }
+              const out = await queryAndRemember(text, conf(), { chatId: chat.chatId })
+              if (!out.ok) return { ok: false, message: out.message }
+              // 记忆提示单独一句：让她知道这条价格以后还查得到，也说明保留多久
+              const c2 = conf()
+              const kept = !c2.memorySync ? ''
+                : out.memory && out.memory.ok
+                  ? '（这次的价格已记进记忆，保留 ' + ttlLabel(c2.memoryTtlMinutes) + '）'
+                  : '（记忆这会儿写不进去，价格只在本插件记录里）'
+              return { ok: true, message: out.message + (kept ? '\n' + kept : '') }
             } catch (error) {
               return { ok: false, message: '查价格失败：' + (error && error.message ? error.message : error) }
             }
@@ -1039,7 +1508,21 @@ export default {
         }),
       ]
     })
-    api.rule(() => '你能查商品价格：别人问某件东西多少钱、哪里便宜时用 price_query；主人让你盯着某件商品降价时用 price_watch_add。价格来自什么值得买的公开爆料，是爆料里的价格，购买条件要看原文链接。你说「记录最低价」时指的是你开始监控之后见到的价格，不要说成全网历史最低。')
+    api.rule(() => {
+      const c = conf()
+      const keep = !c.memorySync
+        ? '查价不会写进记忆（「价格写进记忆」关着）。'
+        : '查到的价格会进你的记忆、保留 ' + ttlLabel(c.memoryTtlMinutes) + '。'
+      return [
+        '你能查商品价格。有人问某件东西多少钱、哪里便宜、值不值，先用 price_query 查，**不要凭印象说「查过了 / 库里没有」**——你手上没有旧查询结果的时候，就是没查。',
+        'price_query 回来什么就照着说什么：它列了几条、几块钱、什么平台，就直接报那几条。只有它明确写着「没找到」「只搜到耗材 / 配件」时，才可以这么说。',
+        '没查之前不要说「这库里只有耗材爆料」「得去官方店看」这类话——那是在替查询结果下结论，而结论来自工具，不来自你的猜测。查询真的没返回整机时，可以说平台覆盖有限、建议自己再去官方店核对，但要把查到的几条先报出来。',
+        'price_watch_add 用于主人让你长期盯着某件商品降价。',
+        '价格来自什么值得买的公开爆料，是爆料里的价格，购买条件要看原文链接。',
+        keep,
+        '你说「记录最低价」时指的是你开始监控之后见到的价格，不要说成全网历史最低。',
+      ].join('')
+    })
 
     // ---------- 定时检查 ----------
     // 走 api.every：模块停了自动不跑，回调抛错由核心记进模块错误账；不用裸 setInterval。
@@ -1133,9 +1616,17 @@ export default {
         window: { startHour: c.startHour, endHour: c.endHour },
         maxChecksPerRun: c.maxChecks,
         queryTopN: c.queryTopN,
+        queryShowLink: c.showLink,
         watches: state.watches.map(watchView),
         records: recordsForWatches(),
         stats: { watches: state.watches.length, alerts: Number(state.alerts) || 0, checkedAt: state.lastCheck, checks: Number(state.checks) || 0 },
+        memory: {
+          enabled: c.memorySync,
+          ttlMinutes: c.memoryTtlMinutes,
+          ttlLabel: ttlLabel(c.memoryTtlMinutes),
+          importance: c.memoryImportance,
+          available: Boolean(memoryWritable(api)),
+        },
       }
     })
 
@@ -1148,20 +1639,12 @@ export default {
         const raw = String((body && body.query) || '').trim()
         if (!raw) return { ok: false, message: '要查什么商品？' }
         const c = conf()
-        // 面板里粘贴链接也认
-        const resolved = await resolveQuery(raw)
-        if (resolved.note && !resolved.query) return { ok: false, message: resolved.note }
-        const query = resolved.query || raw
-        const items = await request(query, c.pages)
-        if (!items.length) return { ok: false, message: '没找到「' + query + '」的价格，换个说法试试。' }
-        const prior = JSON.parse(JSON.stringify(state.records || {}))
-        const stamp = nowMs()
-        for (const item of items) observe(item.key, item.price, item.url, item.title, stamp)
-        save()
-        const text = searchText(query, items, prior, c.queryTopN)
+        // 面板里粘贴链接也认；查到的价格同样记进记忆（和 QQ 里查价一个口径）
+        const out = await queryAndRemember(raw, c, { chatId: 'private:' + String(api.config().ownerQQ || 'owner') })
+        if (!out.ok) return { ok: false, message: out.message }
         // 面板里按平台分组也只放前 N 条，和聊天里的口径一致
-        const groups = groupByMall(items).map((group) => ({ ...group, items: group.items.slice(0, c.queryTopN), total: group.items.length }))
-        return { ok: true, message: resolved.query !== raw && resolved.note ? resolved.note + '\n' + text : text, groups, topN: c.queryTopN }
+        const groups = groupByMall(out.items || [], out.keyword || raw).map((group) => ({ ...group, items: group.items.slice(0, c.queryTopN), total: group.items.length }))
+        return { ok: true, message: out.message, groups, topN: c.queryTopN, memory: { ok: Boolean(out.memory && out.memory.ok), ttlMinutes: c.memoryTtlMinutes, ttlLabel: ttlLabel(c.memoryTtlMinutes) } }
       } catch (error) {
         return { ok: false, message: '查价失败：' + (error && error.message ? error.message : error) }
       }
@@ -1199,6 +1682,41 @@ export default {
         return { ok: true, message: '已取消监控。' }
       } catch (error) {
         return { ok: false, message: '取消失败：' + (error && error.message ? error.message : error) }
+      }
+    })
+
+    // 接口：GET /memory（列表）、DELETE /memory {id}（删一条）、POST {clear:true,query}（按编号/关键词/全清）
+    api.route('/memory', async (req) => {
+      const c = conf()
+      const memory = memoryWritable(api)
+      let body = {}
+      try { body = await api.core.http.body(req) } catch (error) {}
+      // 单条删除：{ id } 精确删那一条；{ clear: true, query } 仍可按编号 / 关键词 / 全清
+      if (req && (req.method === 'DELETE' || (body && body.clear))) {
+        const id = String((body && body.id) || '').trim()
+        let message = ''
+        let cleared = ''
+        if (id) {
+          const mine = memory ? listPriceMemories(memory) : []
+          const target = mine.find((item) => item.id === id)
+          if (!target) return { ok: false, message: '这条价格记忆已经不在了（可能刚到期或被删过）。' }
+          const removed = forgetPriceMemories(memory, { ids: [id] })
+          forgetLocalMemoryIds([id])
+          message = removed ? '已删掉这条价格记忆。' : '没删掉：记忆模块拒绝了这次删除。'
+          cleared = id
+          if (!removed) return { ok: false, message }
+        } else {
+          message = forgetPriceText(String((body && body.query) || ''))
+        }
+        return { ok: !/^(没删掉|没有|记忆里没有|记忆模块)/.test(message), message, removedId: cleared, items: memory ? listPriceMemories(memory) : [] }
+      }
+      return {
+        ok: true,
+        available: Boolean(memory),
+        enabled: c.memorySync,
+        ttlMinutes: c.memoryTtlMinutes,
+        ttlLabel: ttlLabel(c.memoryTtlMinutes),
+        items: memory ? listPriceMemories(memory) : [],
       }
     })
 

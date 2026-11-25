@@ -1,0 +1,22 @@
+{
+  "id": "auto-contact",
+  "name": "自动接待",
+  "version": "1.0.0",
+  "description": "自动通过好友申请和群邀请并写入白名单；#sl 只有主人能触发",
+  "category": "manage",
+  "tags": [
+    "自动同意",
+    "好友",
+    "加群",
+    "白名单",
+    "私聊"
+  ],
+  "author": "HDB-Studio",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "plugin-config"
+  ]
+}
