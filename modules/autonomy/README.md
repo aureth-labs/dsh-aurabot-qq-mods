@@ -1,3 +1,23 @@
+<<<<<<< HEAD
+# 自己找事做（autonomy）
+
+按间隔自己判断当前是否空闲，空闲才「自己找事做」。每天有次数上限，超出就不动。
+
+## 能力声明
+
+- `filesystem`
+- `plugin-config`
+- `plugin-internals`
+
+## 设置
+
+- 每日上限
+- 判断间隔
+
+## 许可
+
+MIT
+=======
 # 自主生活 · autonomy
 
 给 [Aurabot](https://github.com/aureth-labs/dsh-aurabot-qq)（DSH 的 QQ 插件）用的模块：**让 AI 角色自己决定什么时候醒、醒来做什么**，而不是只在被叫的时候才回应。
@@ -297,3 +317,4 @@ rm -rf _tmp
 MIT，见 [LICENSE](LICENSE)。
 
 模块 API 由 Aurabot 提供；本模块没有复制 Aurabot 主仓库的代码。
+>>>>>>> origin/main
