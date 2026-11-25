@@ -1,0 +1,20 @@
+{
+  "id": "fortune",
+  "name": "今日运势",
+  "version": "1.0.0",
+  "description": "发「运势」抽一签，每人每天一签；四种签配不同的建议，同一天重复抽只回原来那一签。",
+  "category": "social",
+  "tags": [
+    "运势",
+    "抽签",
+    "娱乐"
+  ],
+  "author": "kiriko666",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "filesystem"
+  ]
+}
