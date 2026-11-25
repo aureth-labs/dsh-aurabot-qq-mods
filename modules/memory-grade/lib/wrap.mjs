@@ -20,6 +20,28 @@
 
 import { makeGrader } from './grade.mjs'
 import { normalizeTags } from './tags.mjs'
+
+// 2026-11-25 爸爸定：碎片压权重。
+// 会话提炼会产出「先查一下」「这个是啥」这种短句，信息量很低，
+// 但也不该直接删——删了就丢东西了。改成把重要度压到很低，
+// 让遗忘曲线自己去清，既不显眼，也还留着。
+// 判据故意做保守：只要沾一点实质内容就放过，宁可漏判别误伤。
+const TRIVIAL_KEEP = [
+  /\d/, // 有数字
+  /[A-Za-z]{2,}/, // 有英文词
+  /说|问|要求|答应|约定|决定|同意|拒绝|不想|喜欢|讨厌|告诉|记得|答应/, // 有表态
+  /今天|明天|昨天|后天|下周|以后|之前|月|年|点|号/, // 有时间
+  /工资|钱|上班|下班|吃饭|睡觉|生病|医院|买|卖|回来|回去/, // 有生活事件
+]
+
+/** 是不是「没什么实质内容的短句」 */
+function isTrivialText(text) {
+  const t = String(text || '').trim()
+  if (!t) return true
+  if (t.length >= 20) return false
+  for (const re of TRIVIAL_KEEP) if (re.test(t)) return false
+  return true
+}
 import { judgeFreshness } from './freshness.mjs'
 import { statSync } from 'node:fs'
 
@@ -275,6 +297,34 @@ export function wrapMemoryAdd(memory, getSettings, opts = {}) {
         if (neverForget && isKnow) {
           const cur = Number(next.importance) || 0
           if (cur < 0.6) next.importance = 0.6
+        }
+      } catch {
+        /* 算不出来就按原来的 */
+      }
+
+      // 2026-11-25 爸爸定：碎片压权重（不删，只让它自然淡）。
+      // 机密、置顶、知识、规矩、事实、长期印象、约定这些一律不压。
+      try {
+        const st1 = getSettings() || {}
+        if (st1.trivialDecay !== false) {
+          const raw = Number(st1.trivialImportance)
+          const lowImp = Number.isFinite(raw) && raw >= 0 ? raw : 0.1
+          const isKnow2 = tags.includes('知识') || item.source === 'knowledge'
+          const keepIt =
+            Boolean(item.pin) ||
+            cls === 'secret' ||
+            isKnow2 ||
+            tags.includes('规矩') ||
+            tags.includes('事实') ||
+            tags.includes('长期印象') ||
+            tags.includes('约定')
+          if (!keepIt && isTrivialText(text)) {
+            const cur = Number(next.importance)
+            if (!Number.isFinite(cur) || cur > lowImp) {
+              next.importance = lowImp
+              next.trivial = true
+            }
+          }
         }
       } catch {
         /* 算不出来就按原来的 */
