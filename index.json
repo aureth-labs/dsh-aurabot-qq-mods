@@ -1957,6 +1957,38 @@
       "publishedAt": "2026-11-24T03:18:06.903Z"
     },
     {
+      "id": "receipt-print",
+      "name": "热敏打印",
+      "version": "0.10.0",
+      "description": "把模板和提示词变成热敏小票：首次使用需在面板或聊天确认使用协议；定时或随时触发，纸宽按毫米自适应排版，配图缩放调色后打印并自动切纸；支持真机校准页，量出实际有效宽度并检查图片切边；每次打印在本机保存正文与触发来源备份，备份目录可自定义；内置 ESC/POS 指令表和字节解码，可查打印机状态并把返回字节翻译成中文；打印失败或打印机报错会主动私聊主人。支持 Windows USB 队列、网口 9100、CUPS 和预览。",
+      "category": "desktop",
+      "tags": [
+        "小票",
+        "热敏打印",
+        "ESC/POS",
+        "说说"
+      ],
+      "author": "HDB",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "process",
+        "plugin-config"
+      ],
+      "replacesBuiltin": false,
+      "tag": "receipt-print-v0.10.0",
+      "file": "receipt-print-v0.10.0.zip",
+      "path": "receipt-print-v0.10.0/receipt-print-v0.10.0.zip",
+      "size": 278425,
+      "sha256": "4cd8155b6c6eb54bc8dd095841586cacd6c1d18550364917d6f733783ee7111b",
+      "commit": "f2e91f5830239af326c4982c802775ab29a542f6",
+      "publishedAt": "2026-11-25T09:28:03.838Z"
+    },
+    {
       "id": "rich-input",
       "name": "看得见的东西",
       "version": "1.6.0",
@@ -2735,5 +2767,5 @@
     }
   ],
   "revoked": [],
-  "generatedAt": "2026-11-25T09:23:29.418Z"
+  "generatedAt": "2026-11-25T09:28:03.838Z"
 }
