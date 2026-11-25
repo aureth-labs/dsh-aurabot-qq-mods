@@ -1,0 +1,25 @@
+{
+    "id":  "bili-dynamic",
+    "name":  "B站发动态",
+    "version":  "1.0.0",
+    "description":  "她自己会发 B 站动态（文案自己写），主人也能让她发一条；每天有上限，可随时关掉",
+    "category":  "platform",
+    "tags":  [
+                 "B站",
+                 "动态",
+                 "发布"
+             ],
+    "author":  "肥鱼鱼",
+    "license":  "MIT",
+    "api":  1,
+    "minPluginVersion":  "1.2.0",
+    "requires":  [
+
+                 ],
+    "capabilities":  [
+                         "network",
+                         "filesystem",
+                         "plugin-config",
+                         "plugin-internals"
+                     ]
+}

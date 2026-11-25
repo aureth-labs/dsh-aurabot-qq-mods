@@ -1,0 +1,24 @@
+{
+    "id":  "schedule",
+    "name":  "她的一天",
+    "version":  "1.0.0",
+    "description":  "每天给她排一张时间表（几点在干嘛、忙不忙），聊天时她知道自己在做什么",
+    "category":  "social",
+    "tags":  [
+                 "日程",
+                 "作息",
+                 "人设"
+             ],
+    "author":  "肥鱼鱼",
+    "license":  "MIT",
+    "api":  1,
+    "minPluginVersion":  "1.2.0",
+    "requires":  [
+
+                 ],
+    "capabilities":  [
+                         "filesystem",
+                         "plugin-config",
+                         "plugin-internals"
+                     ]
+}

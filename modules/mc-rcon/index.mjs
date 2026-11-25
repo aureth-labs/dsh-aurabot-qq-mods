@@ -23,6 +23,7 @@ import { scanServers, testRcon, logAgeMs } from './lib/discover.mjs'
 import { buildSystemPrompt, buildFollowupSystem, buildEventSystem, parseModelReply, toChatLines, cleanForMc, lineList } from './lib/prompt.mjs'
 import { checkCommand } from './lib/commands.mjs'
 import { parseDimension, dimensionLabel } from './lib/dimension.mjs'
+import { dayPhase, parseTimeReply } from './lib/gametime.mjs'
 
 // ---------------------------------------------------------------------------
 // 默认值：第一次加载会写进 config.json 的 ext['mc-rcon']，之后以面板里的为准。
@@ -44,7 +45,7 @@ const DEFAULTS = {
   admins: '',
   allowed: '', // 留空 = 所有玩家都能聊；填了就只理名单里的人
   qqAdmins: '', // 额外允许用 /mc 的 QQ 号（主人永远可以）
-  guestCommands: 'gamemode\ntp\nback\nspawn\nlist\ntime query', // 普通玩家可申请的安全操作
+  guestCommands: 'gamemode\ntp\nback\nspawn\nlist\ntime query\nhome', // 普通玩家可申请的安全操作
   guestCommandCooldownSec: 10, // 同一个普通玩家两次操作的最小间隔
   confirmCrossDimension: true, // 跨维度 tp 前先问确认
   dimensionAliases: '主世界=minecraft:overworld\n地表=minecraft:overworld\noverworld=minecraft:overworld\n下界=minecraft:the_nether\n地狱=minecraft:the_nether\nnether=minecraft:the_nether\n末地=minecraft:the_end\n末影之地=minecraft:the_end\nend=minecraft:the_end',
@@ -88,7 +89,7 @@ const MODE_LABEL = { smart: '智能接话', wake: '只回应召唤', all: '每�
 export default {
   id: 'mc-rcon', // 要和文件夹名一样
   name: '我的世界服务器分身',
-  version: '1.5.7',
+  version: '1.5.18',
   api: 1, // 按哪一版扩展接口写的，别改
   description: '通过 RCON 控制我的世界服务器；在游戏聊天里像群聊一样接话，有人死了会主动调侃一句；换端时自动读取运行中服务器的 RCON 与日志路径。',
 
@@ -121,8 +122,10 @@ export default {
       pending: new Map(), // 同一玩家短时间连发的消息缓冲（合并成一次处理）
       lastPos: new Map(), // 玩家上次 tp 前的坐标（给 back 用）
       pendingTp: new Map(), // 跨维度 tp 等玩家确认
+      tpMemory: [], // 坐标 → 上次执行维度（回家/复用坐标用）
       deathAt: new Map(), // 玩家上次死亡播报时间
       onlineLoading: false,
+      gameTime: null,
       lastDetectAt: 0, // 上次自动检测时间
       lastSwitch: null, // 上次自动/手动切换的记录
       rconWarnAt: 0, // 上一次连不上的告警时间（30 秒内只记一条，别刷屏）
@@ -227,6 +230,17 @@ export default {
       return state.online.names
     }
 
+    /** 服务器里的游戏内时间（time query daytime），缓存 15 秒。 */
+    async function gameTime () {
+      if (state.gameTime && Date.now() - state.gameTime.at < 15_000) return state.gameTime
+      const r = await safeExec('time query daytime')
+      if (!r.ok) return null
+      const ticks = parseTimeReply(r.out)
+      if (ticks == null) return null
+      state.gameTime = { at: Date.now(), ticks, label: dayPhase(ticks) }
+      return state.gameTime
+    }
+
     /** 记住玩家执行 tp 前的位置；玩家说「回去」时 tp 回这里（不依赖服务器的 /back）。 */
     async function rememberPos (player) {
       if (!/^[A-Za-z0-9_]{1,32}$/.test(String(player || ''))) return false
@@ -239,6 +253,15 @@ export default {
     }
 
     /** 玩家当前在哪个维度（data get entity 读 Dimension）。查一次失败会重试一次。 */
+    /** 玩家当前坐标 + 维度，用来给 home 这种没回执的命令判断成没成。 */
+    async function playerSnapshot (player) {
+      if (!/^[A-Za-z0-9_]{1,32}$/.test(String(player || ''))) return ''
+      const pos = await safeExec(`data get entity ${player} Pos`)
+      if (!pos.ok) return ''
+      const dim = await safeExec(`data get entity ${player} Dimension`)
+      return String(pos.out) + '|' + String(dim.ok ? dim.out : '')
+    }
+
     async function currentDimension (player) {
       if (!/^[A-Za-z0-9_]{1,32}$/.test(String(player || ''))) return ''
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -255,6 +278,10 @@ export default {
     /** 玩家回复「是」之后，执行确认过的跨维度 tp。 */
     async function execPending (player, pending) {
       const r = await safeExec(pending.command)
+      if (r.ok && pending.dim) {
+        const coords = normalizeCoords(String(pending.command).split(/\s+/).slice(-3).join(' '))
+        rememberTp(player, coords, pending.dim)
+      }
       addRecent({ at: Date.now(), player: 'RCON', text: `/${pending.command}`, dir: 'out', admin: isAdmin(player) })
       api.log.info(`[MC] RCON /${pending.command}（跨维度确认）→ ${r.ok ? r.out.slice(0, 120) : '失败：' + r.message}`)
       const lines = r.ok ? [`好了 传到${pending.label}了`] : [`没传过去：${r.message}`]
@@ -283,6 +310,26 @@ export default {
         if (!best || item.at > best.at) best = { ...item, player: p }
       }
       return best
+    }
+
+    function normalizeCoords (value) {
+      const parts = String(value || '').trim().split(/\s+/)
+      if (parts.length !== 3) return ''
+      if (!parts.every((p) => /^-?\d+(?:\.\d+)?$/.test(p))) return ''
+      return parts.map((p) => String(Number(p))).join(' ')
+    }
+
+    /** 记住「这个坐标上次是在哪个维度传的」，下次同一坐标可以沿用。 */
+    function rememberTp (player, coords, dim) {
+      if (!coords || !dim) return
+      state.tpMemory.unshift({ player, coords, dim, at: Date.now() })
+      if (state.tpMemory.length > 200) state.tpMemory.length = 200
+    }
+
+    function dimensionForCoords (coords) {
+      if (!coords) return ''
+      const hit = state.tpMemory.find((x) => x.coords === coords && Date.now() - x.at < 24 * 3600_000)
+      return hit ? hit.dim : ''
     }
 
     function fillTarget (command, player, text = '') {
@@ -514,6 +561,7 @@ export default {
       const admin = isAdmin(player)
       const online = await fetchOnline()
       const p = persona()
+      const gt = await gameTime()
       const system = buildSystemPrompt({
         personaBody: p.body,
         personaName: p.name,
@@ -530,6 +578,7 @@ export default {
         must: Boolean(decision.must),
         reason: decision.reason,
         time: new Date().toLocaleString('zh-CN', { hour12: false }),
+        gameTime: gt ? gt.label : '',
       })
       const prompt = `【Minecraft 服务器聊天】${player}${admin ? '（管理员）' : ''}：${text}`
       const raw = await askModel({ system, prompt })
@@ -554,6 +603,7 @@ export default {
             const label = dimensionLabel(wanted, aliases)
             state.pendingTp.set(player, {
               command: `execute in ${wanted} run tp ${player} ${coords}`,
+              dim: wanted,
               label,
               at: Date.now(),
             })
@@ -612,12 +662,22 @@ export default {
         // 跨维度 tp：玩家说了另一个维度就先确认，确认后用 execute in 过去
         if (/^tp\s/i.test(check.command)) {
           const aliases = list(S().dimensionAliases)
-          const wanted = parseDimension(text, aliases)
+          const finalTp = fillTarget(check.command, player, text)
+          const coords = normalizeCoords(finalTp.split(/\s+/).slice(2, 5).join(' '))
+          let wanted = parseDimension(text, aliases)
+          // 只有「刚才那个点 / 也带我过去」这种指代，才去用坐标记忆和上下文；
+          // 普通「tp 100 64 200」按当前维度走，避免同一坐标在不同维度被记忆带错。
+          const refersBack = /刚才|刚刚|上一个|那个点|那个坐标|带我过去|也带我|也去|同样|一起过去/.test(String(text))
+          if (!wanted && refersBack) wanted = dimensionForCoords(coords)
+          if (!wanted && refersBack) {
+            for (let i = state.context.length - 1; i >= Math.max(0, state.context.length - 8); i--) {
+              const d = parseDimension(state.context[i].text, aliases)
+              if (d) { wanted = d; break }
+            }
+          }
+          const cur = await currentDimension(player)
           // 维度 id 只允许常规字符，防止面板里配的别名把 execute in 拼坏
           if (wanted && /^[a-z0-9_.:-]+$/i.test(wanted)) {
-            const finalTp = fillTarget(check.command, player, text)
-            const coords = finalTp.split(/\s+/).slice(2, 5).join(' ')
-            const cur = await currentDimension(player)
             // 只要认出了目标维度，就显式 execute in：不再依赖「当前维度」查询是否成功，
             // 也不依赖玩家刚好就在那个维度。查不到当前维度时按跨维度处理，先确认。
             if (!cur || cur !== wanted) {
@@ -625,6 +685,7 @@ export default {
                 const label = dimensionLabel(wanted, aliases)
                 state.pendingTp.set(player, {
                   command: `execute in ${wanted} run ${finalTp}`,
+                  dim: wanted,
                   label,
                   at: Date.now(),
                 })
@@ -635,16 +696,29 @@ export default {
               }
             }
             const r = await safeExec(`execute in ${wanted} run ${finalTp}`)
+            if (r.ok) rememberTp(player, coords, wanted)
             results.push(r)
             addRecent({ at: Date.now(), player: 'RCON', text: `/${r.cmd}`, dir: 'out', admin })
             api.log.info(`[MC] RCON /${r.cmd}（维度 ${wanted}，当前 ${cur || '未知'}）→ ${r.ok ? r.out.slice(0, 120) : '失败：' + r.message}`)
             continue
           }
+          // 没认出维度：普通 tp，顺手把当前维度记到这个坐标上，下次再用
+          await rememberPos(player)
+          const r = await safeExec(finalTp)
+          if (r.ok && cur) rememberTp(player, coords, cur)
+          results.push(r)
+          addRecent({ at: Date.now(), player: 'RCON', text: `/${r.cmd}`, dir: 'out', admin })
+          api.log.info(`[MC] RCON /${r.cmd}（${check.level}）→ ${r.ok ? r.out.slice(0, 120) : '失败：' + r.message}`)
+          continue
         }
-        // 普通玩家的 tp 之前记一下当前位置，之后说「回去」才能回得来
-        if (/^tp\s/i.test(check.command)) await rememberPos(player)
         const finalCmd = fillTarget(check.command, player, text)
+        const before = check.kind === 'home' ? await playerSnapshot(player) : ''
         const r = await safeExec(finalCmd)
+        if (check.kind === 'home' && r.ok) {
+          const after = await playerSnapshot(player)
+          if (before && after) r.out = before !== after ? '已经到家了（位置变了）' : '位置没变（可能已经在家，或者没有这个家）'
+          else if (!r.out) r.out = '命令已发送（服务器没有给文字回执）'
+        }
         results.push(r)
         addRecent({ at: Date.now(), player: 'RCON', text: `/${finalCmd}`, dir: 'out', admin })
         api.log.info(`[MC] RCON /${finalCmd}（${check.level}）→ ${r.ok ? r.out.slice(0, 120) : '失败：' + r.message}`)
@@ -762,8 +836,9 @@ export default {
       api.log.info(`[MC] 死亡事件：${event.player} ${detail}`)
       try {
         const p = persona()
+        const gt = await gameTime()
         const raw = await askModel({
-          system: buildEventSystem({ personaBody: p.body }),
+          system: buildEventSystem({ personaBody: p.body, gameTime: gt ? gt.label : '' }),
           prompt: `【服务器事件】${event.player} 刚刚${detail}`,
           maxTokens: 200,
         })
@@ -954,6 +1029,7 @@ export default {
       const w = state.watcher?.status() || null
       // 面板 5 秒轮询一次；这里不要每次都 force，否则每 5 秒一条 list 刷服务器日志
       const online = await fetchOnline(false)
+      const gt = await gameTime()
       return {
         ok: true,
         settings: {
@@ -976,6 +1052,7 @@ export default {
         rcon: st,
         watch: w,
         online,
+        gameTime: gt ? gt.label : '',
         persona: persona(),
         recent: state.recent.slice(0, 30),
         lastError: state.lastError,
@@ -1072,6 +1149,7 @@ export default {
       for (const [player, pos] of state.lastPos) if (Date.now() - pos.at > 30 * 60_000) state.lastPos.delete(player)
       for (const [player, at] of state.deathAt) if (at < cutoff) state.deathAt.delete(player)
       for (const [player, p] of state.pendingTp) if (Date.now() - p.at > 60_000) state.pendingTp.delete(player)
+      state.tpMemory = state.tpMemory.filter((x) => Date.now() - x.at < 24 * 3600_000)
       if (state.context.length > 24) state.context.splice(0, state.context.length - 24)
       if (state.recent.length > 60) state.recent.length = 60
     }, '清理缓存')

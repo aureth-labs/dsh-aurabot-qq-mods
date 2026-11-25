@@ -1,0 +1,23 @@
+{
+    "id":  "reminder",
+    "name":  "约定提醒",
+    "version":  "1.0.0",
+    "description":  "她说「明天提醒你」的时候真的会到点说；主人也能发 /提醒 明天早上八点 交作业",
+    "category":  "tool",
+    "tags":  [
+                 "提醒",
+                 "约定",
+                 "定时"
+             ],
+    "author":  "肥鱼鱼",
+    "license":  "MIT",
+    "api":  1,
+    "minPluginVersion":  "1.2.0",
+    "requires":  [
+
+                 ],
+    "capabilities":  [
+                         "filesystem",
+                         "plugin-config"
+                     ]
+}

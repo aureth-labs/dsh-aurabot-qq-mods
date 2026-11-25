@@ -1,0 +1,25 @@
+{
+    "id":  "bili-reply",
+    "name":  "B站回动态评论",
+    "version":  "1.0.0",
+    "description":  "回她自己 B 站动态下面的评论：读评论、写一句、发出去；默认只读不回，有每天上限",
+    "category":  "platform",
+    "tags":  [
+                 "B站",
+                 "评论",
+                 "回复"
+             ],
+    "author":  "肥鱼鱼",
+    "license":  "MIT",
+    "api":  1,
+    "minPluginVersion":  "1.2.0",
+    "requires":  [
+
+                 ],
+    "capabilities":  [
+                         "network",
+                         "filesystem",
+                         "plugin-config",
+                         "plugin-internals"
+                     ]
+}
