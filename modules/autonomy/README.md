@@ -80,6 +80,7 @@
 | `draw` | 画一张图 | `imagegen` 模块 ✅ 内置（需配生图服务） | 跳过 |
 | `speak` | 主动说句话 | `speakup` 模块 ✅ 内置 | 跳过 |
 | `phone` | 手机签到、浏览、点赞 | `phone` 模块 ⚠️ **需另外装** + adb | 跳过 |
+| `vm` | 进虚拟机里写东西、整理目录、跑脚本 | 一台 Linux 虚拟机 + SSH（需授权） | 跳过 |
 | `think` | 纯思考（每天有上限） | 无 | 一直可用 |
 | `rest` | 歇着，自动推迟下次醒 | 无 | 一直可用 |
 
@@ -157,7 +158,7 @@ rm -rf _tmp
 | 键 | 说明 | 默认 |
 |---|---|---|
 | `enabled` | 总开关 | `false`（装上不自己动，要手动打开） |
-| `grants` | 能力授权：`model`（调模型决策）、`phone`（操作手机） | 全 `false` |
+| `grants` | 能力授权：`model`（调模型决策）、`phone`（操作手机）、`vm`（进虚拟机） | 全 `false` |
 | `allowNewMod` | 允许她给自己写新模块 | `false` |
 | `askTimeoutSec` | 决策调用超时（秒） | `45` |
 | `minInterval` / `maxInterval` | 两次醒来的间隔区间（分钟） | `20` / `90` |
@@ -167,11 +168,28 @@ rm -rf _tmp
 | `phoneLock` | 手机锁屏密码，玩手机时自动输入，留空表示不锁屏 | `''` |
 | `phoneMaxPerDay` | 手机每天最多逛几次 | `100` |
 | `moodNote` | 写进提示词的倾向描述（比如想让她多玩手机） | `''` |
+| `vmHost` / `vmPort` / `vmUser` | 虚拟机怎么连（VirtualBox NAT 默认 `127.0.0.1:2222`，用户 `aurelia`） | 本机 / `2222` / `aurelia` |
+| `vmSshKey` | 私钥路径，留空自动找 `~/.ssh/id_ed25519` | `''` |
+| `vmShareDir` | 共享目录在本机的路径（虚拟机里挂成 `/media/sf_share`），留空表示不用 | `''` |
 | `playfulness` | 调皮程度 `low` / `medium` / `high` | `medium` |
 
 ### 手机怎么配
 
 需要 [`phone` 模块](https://github.com/aureth-labs/dsh-aurabot-qq-mods)提供 `adb`。没装 `phone` 模块时，手机相关的动作会被跳过。
+
+### 虚拟机怎么配
+
+`vm` 动作是把命令送到另一台 Linux 上跑，属于「高」风险项，所以**要单独授权**（面板 → 权限 → 进虚拟机里折腾）。
+
+配置三件事：
+
+1. **SSH 免密**：宿主机的公钥要已经在虚拟机里（`~/.ssh/authorized_keys`）。本模块只用公钥认证，不会退回密码登录。
+2. **端口**：VirtualBox 的 NAT 转发默认把宿主 `127.0.0.1:2222` 映射到客户机 `22`，直接照默认填即可；换了端口就改 `vmPort`。
+3. **私钥**：`vmSshKey` 留空时自动找 `~/.ssh/id_ed25519`、`~/.ssh/id_rsa`。
+
+可选：把 `vmShareDir` 指向一个宿主机目录，并在 VirtualBox 里设成共享文件夹（客户机挂到 `/media/sf_share`）。这样钥匙对不上时，模块会把当前公钥写进那个目录；虚拟机里若跑一个每分钟执行的同步脚本（把共享盘里的 `authorized_keys` 装回 `~/.ssh/authorized_keys`），换钥匙之后会自己长回来，不用人肉进去修。
+
+**机器没开机和钥匙不对是两回事**：连不上时模块先只测 TCP —— 端口不通就是「虚拟机没开机」，直接如实说、这一轮换件事，不去查 sshd；端口通但登录失败才走「公钥进共享盘 → 等一分钟 → 再试」。
 
 ## 命令
 
@@ -193,7 +211,7 @@ rm -rf _tmp
 
 ## 安全
 
-这个版本**默认一项能力都没有**：`module.json` 的 `capabilities` 是空数组，代码里也没有任何默认可用的外部能力。
+这个版本**默认一项能力都不用**：`module.json` 的 `capabilities` 只声明「最坏情况下会用到什么」（`filesystem` / `process` / `network` / `plugin-config` / `plugin-internals`）——那是**声明**，不是开关；真正能不能用由 `settings.grants` 决定，默认全 `false`，一项都不给。
 
 ### 逐项授权（默认全关）
 
@@ -203,25 +221,34 @@ rm -rf _tmp
 |---|---|---|---|
 | 调用模型做决策 | `plugin-internals` | 每轮问她「现在想做什么」——不开这项她不会做任何决定 | 中 |
 | 操作连着的那台手机 | `process` | 通过 adb 查电量/锁屏、模拟点击、写手机日记 | 高 |
+| 进虚拟机里折腾 | `process` | 通过 SSH 在另一台 Linux 上执行她自己写出来的命令（写文件、整理目录、跑脚本） | 高 |
 
-没授权时：`wake()` 直接返回「还没授权」，**根本不会去碰宿主模型**；`runAdb()` 直接返回失败，**一条 adb 命令都不会执行**。
+没授权时：`wake()` 直接返回「还没授权」，**根本不会去碰宿主模型**；`runAdb()` 直接返回失败，**一条 adb 命令都不会执行**；`vm` 动作在授权判定那一步就返回，**连 TCP 探活都不会发**。
 
 `capabilities` 写空、`grants` 默认全 `false`、代码里处处先查 `isGranted()`——三处对齐，不会出现「声明说不用、代码偷偷用」。
 
-### 命令白名单
+### 本机命令白名单
 
-不连接任何远端主机。所有外部命令都必须过白名单闸门（`lib/exec-guard.mjs`）。
-
-### 命令白名单
-
-只有两组调用，规则写在 `lib/exec-guard.mjs`，测试逐条钉死：
+本机上的外部命令只有两组，规则写在 `lib/exec-guard.mjs`，测试逐条钉死：
 
 | 可执行文件 | 允许的形态 | 用途 |
 |---|---|---|
 | `adb` | `devices` / `start-server` / `shell dumpsys` / `shell input` / `shell settings` / `shell am` / `shell pm` / `shell screencap` / `shell ls\|cat\|mkdir\|printf\|base64\|date` / `push` / `pull` | 手机状态查询与操作 |
 | `node` | `--check <文件>` | 校验她自写模块的语法 |
 
-白名单**之外的一切都拒绝**：`shell su`、`shell sh`、`install`、`uninstall`、`root`、`remount`、`forward`、以及任何别的可执行文件（bash / sh / powershell / python / curl / ssh…）。
+白名单**之外的一切都拒绝**：`shell su`、`shell sh`、`install`、`uninstall`、`root`、`remount`、`forward`、以及任何别的可执行文件（bash / sh / powershell / python / curl…）。
+
+### 虚拟机那条路（`lib/vm.mjs`）
+
+`vm` 动作要把命令送到**另一台机器**，sshd 那端一定会起 shell，没法像本机那样用「可执行文件 + 参数数组」在结构上消除拼接。所以改成三道闸，测试同样钉死：
+
+1. **授权闸**：没 `grants.vm` 就当作没有这个动作，连探活都不做。
+2. **形状闸**（`checkVmExec`）：送进 `ssh` 的 argv 必须带 `BatchMode=yes`、`NumberOfPasswordPrompts=0`、`PreferredAuthentications=publickey`，且远端命令必须是 `printf %s <base64> | base64 -d | bash` 这一种形态——不接受的拼法直接拒。
+3. **内容闸**（`dangerReason`）：破坏性删除（含长选项 `--recursive`、`find -delete`）、格式化、写裸设备、关机、杀 init、提权、改账户、把内容写成脚本再执行、管道进 shell、碰 ssh 私钥、反弹 shell、改防火墙/内核、清计划任务、拿它当跳板——命中即拒。另外 `looksBroken` 会把半截命令（引号不配对、结尾停在 `|` `&&`、heredoc 没闭合、通篇中文描述）退回让她重写。
+
+> **别把内容闸当边界**：它是**尽力而为的黑名单**，挡得住明显的破坏性写法，挡不住 `python3 -c '...'` 这类图灵完备的间接表达——那不可能穷举。**真正的边界是「主人有没有打开 `grants.vm`」**：没授权时连 TCP 探活都不会发。黑名单只是授权之后多加的一层保险，减少她手滑把机器弄坏的概率，不是用来防蓄意攻击的。
+
+命令统一 base64 编码后单行传送：这样引号、换行、中文都不会被远端 shell 拆坏。
 
 ### 危险命令清单
 
@@ -232,7 +259,7 @@ rm -rf _tmp
 - 提权/改账户：`sudo`、`su`、`useradd`、`passwd`、`chmod 777 /`、`chmod +s`
 - 远端执行：`curl … | sh`、`wget … | bash`、`eval`、`nc -e`、`/dev/tcp/`
 - 系统配置：`iptables`、`sysctl`、`insmod`、`crontab -r`
-- 远端连接：`ssh`、`scp`、`sftp`（这个版本本就不该出现，兜底一层）
+- 跳板连接：从虚拟机里再 `ssh`/`scp`/`sftp`/`rsync` 到别的主机（不允许拿它当跳板）
 
 ### 另外几条边界
 

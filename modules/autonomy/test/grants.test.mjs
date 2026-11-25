@@ -54,21 +54,21 @@ test('module.json 如实声明静态能力，运行时不预设任何权限', ()
   }
   assert.equal(m.capabilities.includes('dynamic-code'), false, '不该声明用不到的能力')
   // 运行时零权限
-  assert.deepEqual(autonomy.defaults.grants, { model: false, phone: false })
+  assert.deepEqual(autonomy.defaults.grants, { model: false, phone: false, vm: false })
 })
 
 test('默认授权全空', () => {
-  assert.deepEqual(autonomy.defaults.grants, { model: false, phone: false })
+  assert.deepEqual(autonomy.defaults.grants, { model: false, phone: false, vm: false })
   for (const g of GRANTS) {
     assert.equal(isGranted(autonomy.defaults, g.id), false, `${g.id} 默认必须是关的`)
   }
 })
 
 test('grantsOf：缺字段、乱数据一律当未授权', () => {
-  assert.deepEqual(grantsOf(undefined), { model: false, phone: false })
-  assert.deepEqual(grantsOf({}), { model: false, phone: false })
-  assert.deepEqual(grantsOf({ grants: { model: 1, phone: 'yes' } }), { model: true, phone: true })
-  assert.deepEqual(grantsOf({ grants: { phone: { evil: true } } }), { model: false, phone: true })
+  assert.deepEqual(grantsOf(undefined), { model: false, phone: false, vm: false })
+  assert.deepEqual(grantsOf({}), { model: false, phone: false, vm: false })
+  assert.deepEqual(grantsOf({ grants: { model: 1, phone: 'yes' } }), { model: true, phone: true, vm: false })
+  assert.deepEqual(grantsOf({ grants: { phone: { evil: true } } }), { model: false, phone: true, vm: false })
   // 未知 id 不会被凭空当成已授权
   assert.equal(isGranted({ grants: {} }, 'nope'), false)
 })

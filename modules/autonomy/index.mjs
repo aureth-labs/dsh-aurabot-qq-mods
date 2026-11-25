@@ -5,7 +5,7 @@
  * 时间间隔由「区间随机 × 时段倍率」决定——高活跃时段间隔偏短，低活跃时段偏长。
  *
  * 动作：idle 发呆 / speak 找主人 / bili 刷B站 / diary 写空间日记（仅自己可见）
- *      phone 去手机上逛 / think 只是想事情
+ *      phone 去手机上逛 / vm 进虚拟机里折腾 / think 只是想事情
  *
  * 所有行为都写进 activity.jsonl（只追加，长期留着），面板里能看到。
  *
@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { assertNoModelText, checkExec } from './lib/exec-guard.mjs';
+import { execSteps, resolveKeyFile, runVmCommand, tcpProbe } from './lib/vm.mjs';
 import { scanModuleCode } from './lib/mod-scan.mjs';
 import { grantRows, isGranted, requireGrant } from './lib/grants.mjs';
 
@@ -117,7 +118,7 @@ async function ask(dsh, { system, text, maxTokens = 260, temperature = 0.9, time
   return result;
 }
 
-const ACTIONS = ['idle', 'speak', 'bili', 'diary', 'phone', 'draw', 'think', 'rest'];
+const ACTIONS = ['idle', 'speak', 'bili', 'diary', 'phone', 'vm', 'draw', 'think', 'rest'];
 /** 有专用执行器的动作；不在这里的动作发布版只记录、不执行 */
 const STANDARD_ACTIONS = new Set(ACTIONS);
 
@@ -135,7 +136,7 @@ const ACTION_MAX_PER_DAY = 5;
  * 容器型动作：每次进去做的事都不一样（逛不同的 App、写不同的脚本、画不同的图），
  * 不该被「同一件事一天最多做几次」这条规则算进去。手机要逛 100 次就靠这条放行。
  */
-const REPEATABLE_ACTIONS = new Set(['phone', 'draw', 'bili', 'rest', 'think']);
+const REPEATABLE_ACTIONS = new Set(['phone', 'vm', 'draw', 'bili', 'rest', 'think']);
 
 /** 动作名相似到这个程度就算同一件事（翻软家底 ≈ 查软家底） */
 const SAME_ACTION_SIM = 0.6;
@@ -346,9 +347,9 @@ export function parsePersonaMbti(md) {
 export default {
   id: 'autonomy',
   name: '自主生活',
-  version: '0.6.1',
+  version: '0.6.2',
   api: 1,
-  description: '她自己决定这一刻做什么、下次什么时候醒；间隔按区间随机并受时段活跃度影响。不执行 shell 命令',
+  description: '她自己决定这一刻做什么、下次什么时候醒；间隔按区间随机并受时段活跃度影响。执行能力全部默认关闭：调模型、操作手机、进虚拟机都要主人逐项授权',
   panel: 'panel.js',
 
   defaults: {
@@ -368,11 +369,19 @@ export default {
     // 允许她给自己写新模块（newmod）。默认关：这是唯一能让她间接碰代码的入口
     allowNewMod: false,
     // 能力授权：默认一项都没给，要在面板里一步一步打开
-    grants: { model: false, phone: false },
+    grants: { model: false, phone: false, vm: false },
     // 手机：锁屏密码。自主生活要玩手机时，先唤醒屏幕再自动输这个密码
     phoneLock: '',
     // 手机每天最多逛几次
     phoneMaxPerDay: 100,
+    // 虚拟机：本机转发端口那台 Linux（VirtualBox NAT 默认 127.0.0.1:2222）
+    vmHost: '127.0.0.1',
+    vmPort: 2222,
+    vmUser: 'aurelia',
+    // 私钥路径。留空 = 自动在 ~/.ssh/id_ed25519、~/.ssh/id_rsa 里找第一个存在的
+    vmSshKey: '',
+    // 宿主与虚拟机之间的共享目录（虚拟机里挂成 /media/sf_share）。留空 = 不用共享盘中转
+    vmShareDir: '',
   },
   settings: [
     { key: 'enabled', label: '启用自主生活', type: 'switch' },
@@ -413,6 +422,11 @@ export default {
         { value: 'high', label: '皮一点' },
       ],
     },
+    { key: 'vmHost', label: '虚拟机地址（本机端口转发，一般 127.0.0.1）', type: 'text' },
+    { key: 'vmPort', label: '虚拟机 SSH 端口（VirtualBox NAT 默认 2222）', type: 'number' },
+    { key: 'vmUser', label: '虚拟机用户名', type: 'text' },
+    { key: 'vmSshKey', label: '虚拟机私钥路径（留空自动找 ~/.ssh/id_ed25519）', type: 'text' },
+    { key: 'vmShareDir', label: '共享目录在本机的路径（留空表示不用共享盘中转）', type: 'text' },
   ],
 
   setup(api) {
@@ -524,35 +538,6 @@ export default {
       return Math.round(minutes);
     }
 
-    /**
-     * 命令看起来没写完：引号不配对、结尾停在 | && || \ 、heredoc 没闭合、
-     * 或者压根不是命令（只有中文描述）、或者她自己多套了一层 base64。
-     * 这类「半截命令」交给 bash 只会变成乱七八糟的报错，不如直接退回让她重写。
-     */
-    function looksBroken(cmd) {
-      const s = String(cmd || '').trim();
-      if (!s) return '空命令';
-      const sq = (s.match(/'/g) || []).length;
-      const dq = (s.match(/"/g) || []).length;
-      if (sq % 2 === 1) return '单引号没闭合（命令写到一半断了）';
-      if (dq % 2 === 1) return '双引号没闭合（命令写到一半断了）';
-      if (/(\|\||&&|\||>|>>|=|\\)$/.test(s)) return '命令结尾停在 ' + s.slice(-2) + '（没写完）';
-      const hd = s.match(/<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/);
-      if (hd) {
-        const tag = hd[1];
-        const lines = s.split('\n').map((x) => x.trim());
-        if (!lines.includes(tag)) return `heredoc ${tag} 没有闭合`;
-      }
-      if (/[\u4e00-\u9fa5]/.test(s) && !/[;&|><=$`]/.test(s)) {
-        return '这写的是一句描述，不是能执行的命令';
-      }
-      if (/printf\s+%s\s+[A-Za-z0-9+/=]{20,}/.test(s)) {
-        return '不用自己套 base64，直接写要跑的命令就行';
-      }
-      return '';
-    }
-
-
     function phoneAdbPath() {
       try {
         const cfg = readJson(path.join(aurabotDir, 'config.json'), {});
@@ -604,6 +589,84 @@ export default {
             resolve({ ok: true, out: out.slice(0, 1500) });
           },
         );
+      });
+    }
+
+    /** 私钥路径：设置里给的最优先，其次常见位置（~/.ssh/id_ed25519 等） */
+    function vmKeyFile() {
+      return resolveKeyFile(api.settings());
+    }
+
+    /**
+     * 进虚拟机之前先看她连不连得上。
+     * 返回 { ok } 或 { ok:false, off:true }（机器没开机）或 { ok:false, message }。
+     */
+    async function vmProbe() {
+      const c = cfg();
+      const host = String(c.vmHost || '127.0.0.1');
+      const port = Number(c.vmPort) || 2222;
+      // 先只测 TCP：整台机器没开机时端口转发根本不存在，ssh 只会回 Connection refused，
+      // 看起来像「钥匙/sshd 坏了」，她会一轮轮去查错的方向——白查。
+      const tcp = await tcpProbe(host, port, 2500);
+      if (!tcp) {
+        // 再等一次，避开正好在开机的那几秒
+        const again = await tcpProbe(host, port, 2500);
+        if (!again) {
+          return {
+            ok: false,
+            off: true,
+            message: `虚拟机没开机（${host}:${port} 连不上，VirtualBox 里那台大概没启动）——ssh/密钥都没问题，先别去查 sshd`,
+          };
+        }
+      }
+      const r = await runVM('true', { silent: true });
+      return r.ok ? { ok: true } : { ok: false, message: r.message };
+    }
+
+    /**
+     * 把当前公钥写进共享盘。
+     * 虚拟机里有一个每分钟跑的 cron（~/bin/aur-key-sync.sh），会把它装回 ~/.ssh/authorized_keys。
+     * 宿主这边换过钥匙之后，靠这条链路自己长回来，不用再人肉进去修。
+     */
+    function syncVmKeyToShare() {
+      try {
+        const dir = String(cfg().vmShareDir || '').trim();
+        if (!dir) return false;
+        const keyFile = vmKeyFile();
+        if (!keyFile) return false;
+        const pub = fs.readFileSync(keyFile + '.pub', 'utf8').trim();
+        if (!pub) return false;
+        const target = path.join(dir, 'authorized_keys');
+        fs.mkdirSync(dir, { recursive: true });
+        const cur = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
+        if (cur.trim() === pub) return true;
+        fs.writeFileSync(target, pub + '\n', 'utf8');
+        api.log.info('已把当前公钥写进虚拟机共享盘（虚拟机里的 cron 会自己装上去）');
+        return true;
+      } catch (error) {
+        api.log.warn('同步公钥到共享盘失败：' + error.message);
+        return false;
+      }
+    }
+
+    /**
+     * 在虚拟机里跑一条命令（SSH 免密）。
+     * 具体的三道闸（半截命令 / 危险命令 / argv 形状）全在 lib/vm.mjs 里，
+     * 这里只把宿主的东西（配置、私钥路径、api.log）喂进去。
+     *
+     * 注意：**没有** trusted 之类的「跳过检查」参数。曾经留过一个，
+     * 而它是从模型决策里读的（d.trusted）——现在虽然 parseDecision 只透传白名单字段、
+     * 这个值恒为 undefined，但哪天做一次「字段透传」重构就会被接通。
+     * 现在任何命令一律过闸，不设例外。
+     */
+    function runVM(command, opts = {}) {
+      return runVmCommand({
+        cmd: command,
+        cfg: cfg(),
+        settings: api.settings(),
+        exec: execFile,
+        log: api.log,
+        silent: !!opts.silent,
       });
     }
 
@@ -873,6 +936,49 @@ export default {
       if (d.action === 'rest') return { note: `歇着：${d.why || '今天想做的都做过了'}`, extra: { rest: true } };
       if (d.action === 'idle') return { note: d.why || '什么都不干，发了会儿呆', extra: {} };
 
+      if (d.action === 'vm') {
+        // 进虚拟机 = 在本机之外跑任意命令，所以挂在权限门后面：
+        // 没授权就当作这个动作不存在，连探活都不做。
+        if (!isGranted(api.settings(), 'vm')) {
+          return { note: '想进虚拟机折腾，但「操作虚拟机」这项还没授权（面板 → 自主生活 → 权限）', extra: { ok: false } };
+        }
+        const cmds = d.steps && d.steps.length ? d.steps : [d.detail || d.why];
+        const probe0 = await vmProbe();
+        if (!probe0.ok) {
+          if (probe0.off) {
+            return {
+              note: `${probe0.message}——这轮去不成，改天它开了再说`,
+              extra: { ok: false, failed: true, vmOff: true },
+            };
+          }
+          // 钥匙对不上：公钥进共享盘 → 等虚拟机里 cron 装回去 → 再试一次
+          syncVmKeyToShare();
+          api.log.warn('虚拟机钥匙可能对不上：已把公钥放进共享盘，等虚拟机里 cron 同步（最多 1 分钟）');
+          await new Promise((z) => setTimeout(z, 20_000));
+          const again = await vmProbe();
+          if (!again.ok) {
+            return {
+              note: `虚拟机连不上（${String(again.message).replace(/\s+/g, ' ').slice(0, 100)}）——这轮没去成`,
+              extra: { ok: false, failed: true },
+            };
+          }
+        }
+
+        // 编排逻辑在 vm.mjs 里（可注入，行为测试能直接驱动）：
+        // 一条一条跑，第一条失败就停，record 第几步断的
+        const step = await execSteps({
+          cmds,
+          run: (c) => runVM(c),
+        });
+        const ok = step.ok;
+        const outs = step.outs;
+        const failWhy = step.failWhy;
+        return {
+          note: `vm${ok ? '' : '（中途失败）'}：${ok ? label : failWhy}`,
+          extra: { ok, failAt, output: outs.join('\n───\n').slice(0, 1500) },
+        };
+      }
+
       // 发布版没有命令执行器：认不出来的动作只记录，不跑任何命令
       return {
         note: `${d.action}：这个动作没有配套执行器，这一轮跳过`,
@@ -937,6 +1043,8 @@ export default {
       const plan = s.plan.length ? `你今天自己定的计划：${s.plan.join('、')}` : '你今天还没给自己定计划';
       const now = `${new Date().toLocaleDateString('zh-CN', { weekday: 'long' })} ${clock()}`;
       const moodNote = String(c.moodNote || '').trim();
+      // 虚拟机这一项没授权时，提示词里连提都不提——免得她反复想去一个去不了的地方
+      const vmOK = isGranted(api.settings(), 'vm');
       const invented = Object.entries(s.customActions || {})
         .filter(([k]) => !STANDARD_ACTIONS.has(k))
         .filter(([k]) => timesToday(s, k) < ACTION_MAX_PER_DAY)
@@ -1018,6 +1126,9 @@ export default {
         '- bili：去 B 站看看，找点有趣的',
         '- diary：写点只有自己看得见的日记',
         '- phone：拿起手机玩——手机就在桌上连着线。上面装的东西你都能用：B站、知乎、QQ、高德、DeepSeek、笔记、相册、日历、相机。**别只盯着 B站刷推荐**——那是最没营养的玩法。多换地方：高德看看地图上的世界、DeepSeek 问点自己真想知道的、在笔记里写两句、翻翻相册，或者打开一个你还没怎么用过的系统应用试试',
+        vmOK
+          ? '- vm：进虚拟机里折腾——那是另一台属于你的 Linux（桌面、家目录、以前的痕迹都在里面）。可以在里面写东西、整理目录、跑脚本、做个小工具；detail 写一条能直接执行的 bash 命令（多步用 steps 数组）'
+          : '',
         '- draw：给自己画一张图',
         thinkAllowed ? '- think：认真想一件具体的、让你好奇的事' : '- think：（这一轮关掉了，别选）',
         '- rest：今天没什么想做的了，歇着——不是发呆，是把下次醒推迟两三个小时',
@@ -1026,9 +1137,12 @@ export default {
         '只回一个 JSON：',
         '{"action":"上面某一个动作","kind":"soft/learn/build/other 之一","why":"一句话理由","detail":"想做什么的简短描述","nextMinutes":45}',
         'kind 要老实填：软的自娱自乐写 soft，学东西写 learn，造东西写 build，其余写 other。',
-        'detail 只写一句话描述，不要写命令——系统不会执行任何 shell 命令。',
+        vmOK
+          ? 'vm 的 detail 可以写一条能在 Linux 上直接跑的 bash 命令（多步用 steps 数组，最多 6 条）；其余动作的 detail 只写一句话描述，不要写命令。'
+          : 'detail 只写一句话描述，不要写命令——系统不会执行任何 shell 命令。',
         '手机上的红线：别碰小红书（风控会把账号踢下线）、别打开淘宝（已经卸载了，也没权限）、别动系统设置；别给真人发消息。',
         '唯一的红线：非破坏性——别删别人的东西、别关机、别改系统配置、别联网乱发东西。',
+        vmOK ? '虚拟机里也一样：不 sudo、不关机、不删自己的家目录，别把机器弄坏。' : '',
         '手机上的红线：别碰小红书（风控会把账号踢下线）、别打开淘宝（已经卸载了，也没权限）、别动系统设置；别给真人发消息。别的随你——搜索、点开看、记东西、在手机上留痕，都可以。',
       ].filter(Boolean).join('\n');
 
@@ -1139,8 +1253,10 @@ export default {
       }
       // 手机上做的活动也写进记忆库，这样 QQ 上聊起来能接上
       // 节流 20 分钟：她一天醒上百次，不节流会把记忆库灌爆
+      // 这些动作的产出要写进记忆库，QQ 上聊起来才能接上。vm 曾经漏在这里，
+      // 于是「在虚拟机里做了一下午的事」第二天她自己想不起来。
       const isVmAction =
-        d.action === 'draw' || d.action === 'phone';
+        d.action === 'draw' || d.action === 'phone' || d.action === 'vm';
       if (isVmAction && !(result.extra && result.extra.ok === false) && Date.now() - (s.lastMemoAt || 0) > 20 * 60_000) {
         try {
           const mem = api.use('memory');
@@ -1362,8 +1478,16 @@ export default {
       },
     })
 
-    api.route('/state', async () => ({ ok: true, ...snapshot() }));
-    api.route('/activity', async (req) => ({ ok: true, items: readLog(200) }));
+    // access:'panel' —— 宿主对 /ext/* 不做面板校验，不加这一条就等于公网可读。
+    // /state 还要脱敏：snapshot 里有明文 phoneLock，不能原样吐出去。
+    api.route('/state', async () => {
+      const snap = snapshot();
+      const safeConfig = { ...(snap.config || {}) };
+      if (safeConfig.phoneLock !== undefined) safeConfig.phoneLock = safeConfig.phoneLock ? '••••••' : '';
+      return { ok: true, ...snap, config: safeConfig };
+    }, { access: 'panel' });
+    api.route('/activity', async (req) => ({ ok: true, items: readLog(200) }), { access: 'panel' });
+    // 这条能直接触发一次「醒来」，而醒来可能进虚拟机跑命令——必须只让面板点。
     api.route('/wake', async () => {
       if (waking) return { ok: false, message: '正在醒着呢，等这一轮跑完', state: snapshot() };
       waking = true;
@@ -1374,7 +1498,7 @@ export default {
         fs.writeFileSync(logFile(), '', 'utf8');
       } catch (error) {}
       return { ok: true };
-    });
+    }, { access: 'panel' });
 
     return { wake, state: snapshot, activity: () => readLog(200) };
   },

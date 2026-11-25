@@ -15,10 +15,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import mod from '../index.mjs'
 import { createGate } from '../lib/gate.mjs'
-import { createClicker } from '../lib/click.mjs'
-import { FIND_SRC, HIT_SRC, MARK_SRC, UNMARK_SRC, SCROLL_SRC, normalizeSpec, choosePoint, pickUnique, sameSig, collapseNested, taskProgressFromText, badgeHintsFromText, plus100FromText, badgeTaskRowFromText, endedFromText } from '../lib/find.mjs'
+import { createClicker } from '../lib/room/click.mjs'
+import { FIND_SRC, HIT_SRC, MARK_SRC, UNMARK_SRC, SCROLL_SRC, normalizeSpec, choosePoint, pickUnique, sameSig, collapseNested, taskProgressFromText, badgeHintsFromText, plus100FromText, badgeTaskRowFromText, endedFromText } from '../lib/room/find.mjs'
 
 const LIVE = process.env.LIVE === '1'
+const SRC = ['../index.mjs','../lib/util.mjs','../lib/browser.mjs','../lib/worklog.mjs','../lib/context.mjs','../lib/http/actions.mjs','../lib/room/specs.mjs','../lib/badge.mjs','../lib/gift.mjs','../lib/say.mjs','../lib/tick.mjs','../lib/tools.mjs','../lib/commands.mjs','../lib/page.mjs','../lib/status.mjs','../lib/http/admin.mjs','../lib/selfcheck.mjs','../lib/room/navigate.mjs','../lib/gateflow.mjs']
+  .map((p) => readFileSync(new URL(p, import.meta.url), 'utf8')).join('\n')
 let pass = 0
 let fail = 0
 const ok = (name, cond, extra = '') => {
@@ -100,24 +102,24 @@ ok('送到灯牌那条写明了误触风险', /点偏|误触/.test((setting('ren
 
 console.log('\n=== 2. setup 注册了什么 ===')
 const b = boot()
-ok('开关关着：主人私聊只有 4 个工具（没有送礼）', b.got.tools.length === 4, b.got.tools.map((t) => t.name).join(', '))
-ok('工具名都对', ['kanzhibo_enter', 'kanzhibo_status', 'kanzhibo_stop', 'kanzhibo_say'].every((n) => tool(b.got, n)) && !tool(b.got, 'kanzhibo_gift'))
+ok('开关关着：主人私聊只有 5 个工具（没有送礼）', b.got.tools.length === 5, b.got.tools.map((t) => t.name).join(', '))
+ok('工具名都对', ['kanzhibo_enter', 'kanzhibo_status', 'kanzhibo_stop', 'kanzhibo_badge', 'kanzhibo_say'].every((n) => tool(b.got, n)) && !tool(b.got, 'kanzhibo_gift'))
 ok('/看直播 命令 + kanzhibo 别名', cmd(b.got, '看直播') && cmd(b.got, '看直播').aliases.includes('kanzhibo'))
 ok('一条给模型的规则', b.got.rules.length === 1 && /kanzhibo_enter/.test(b.got.rules[0]))
-ok('两个网页接口 /status /selfcheck', Boolean(route(b.got, '/status')) && Boolean(route(b.got, '/selfcheck')))
+ok('自助接口 /selfcheck 已注册', Boolean(route(b.got, '/selfcheck')))
 ok('注册了配置监听（改间隔热生效）', b.got.events.some(([n]) => n === 'config'))
 ok('导出了 tick / selfCheck / status', typeof b.out.tick === 'function' && typeof b.out.selfCheck === 'function' && typeof b.out.status === 'function')
 
 console.log('\n=== 2.5 主人权限：别人拿不到操作类工具 ===')
 const other = boot({ owner: false })
 ok('非主人只剩 1 个工具', other.got.tools.length === 1, other.got.tools.map((t) => t.name).join(', '))
-ok('非主人没有进房 / 停止 / 送礼 / 说话', ['kanzhibo_enter', 'kanzhibo_stop', 'kanzhibo_gift', 'kanzhibo_say'].every((n) => !tool(other.got, n)))
+ok('非主人没有进房 / 停止 / 送礼 / 说话 / 续灯牌', ['kanzhibo_enter', 'kanzhibo_stop', 'kanzhibo_gift', 'kanzhibo_say', 'kanzhibo_badge'].every((n) => !tool(other.got, n)))
 const stOther = await tool(other.got, 'kanzhibo_status').execute({})
 ok('非主人问状态不暴露在看谁', /挂直播/.test(stOther.message) && !/目标：/.test(stOther.message), stOther.message)
 
 console.log('\n=== 2.6 QQ 私信送礼的开关 ===')
 const dmOn = boot({ settings: { giftByDm: true } })
-ok('开关打开 + 私聊：多给她一个送礼工具', dmOn.got.tools.length === 5 && Boolean(tool(dmOn.got, 'kanzhibo_gift')), dmOn.got.tools.map((t) => t.name).join(', '))
+ok('开关打开 + 私聊：多给她一个送礼工具', dmOn.got.tools.length === 6 && Boolean(tool(dmOn.got, 'kanzhibo_gift')), dmOn.got.tools.map((t) => t.name).join(', '))
 const dmGroup = boot({ settings: { giftByDm: true }, chatKind: 'group' })
 ok('开关打开但在群里：照样没有送礼工具', !tool(dmGroup.got, 'kanzhibo_gift'), dmGroup.got.tools.map((t) => t.name).join(', '))
 const dmOther = boot({ settings: { giftByDm: true }, owner: false })
@@ -184,7 +186,7 @@ console.log('\n=== 6. 不再碰「刷抖音」（2026-11-09 起这个功能删�
   // 模块加载、开总开关、进房、收工，都不应该改 douyin.enabled
   const noTouch = boot({ settings: { enabled: true }, cfg: { douyin: { enabled: false } }, state: { pausedDouyin: true, douyinWasEnabled: true } })
   ok('加载时不动 douyin.enabled', noTouch.config.douyin.enabled === false, 'douyin.enabled=' + noTouch.config.douyin.enabled)
-  const src = readFileSync(new URL('../index.mjs', import.meta.url), 'utf8')
+  const src = SRC
   ok('代码里已经没有暂停/恢复刷抖音', !/pauseDouyin|resumeDouyin|pausedDouyin/.test(src))
   ok('不再写 douyin.enabled', !/douyin:\s*\{[^}]*enabled:\s*(true|false)\s*\}/.test(src))
   const sc = await noTouch.out.selfCheck()
@@ -233,12 +235,12 @@ console.log('\n=== 7.5 私信发弹幕：/看直播 说 <内容>（0.9.9）===')
   ok('失败不占冷却（没进直播间时连试两条都到同一句）', /没发出去[\s\S]*不在直播间/.test(again))
   ok('sayState 暴露冷却参数（10 秒 / 50 字）', (() => { const st = b.out._debug.sayState(); return st.gapMs === 10000 && st.maxChars === 50 && st.lastSayAt === 0 })())
 
-  const src = readFileSync(new URL('../index.mjs', import.meta.url), 'utf8')
+  const src = SRC
   ok('命令解析用 (说|评论|弹幕|发) 前缀正则', /\(说\|评论\|弹幕\|发\)/.test(src))
   ok('内容会剥一层成对引号', /stripQuotes/.test(src))
   ok('kanzhibo_say 工具和命令共用连发冷却', /sayWaitSec/.test(src))
   ok('真发出去了才计时（三条路都走 markSaySent，且冷却时间戳落盘）',
-    /if \(r\.ok\) \{ markSaySent\(\); pushSayLog/.test(src) && /const markSaySent = \(\) => \{ lastSayAt = Date\.now\(\); saveState\(\{ lastSayAt \}\) \}/.test(src))
+    /if \(r\.ok\) \{ markSaySent\(\); pushSayLog/.test(src) && /(?:const markSaySent = \(\) => \{ )?(?:ctx\.)?lastSayAt = Date\.now\(\); saveState\(\{ lastSayAt: (?:ctx\.)?lastSayAt\s*\}\)/.test(src))
   ok('规则里告诉过模型：命令会自己执行，别重复发', /\/看直播 说 XX\/会自己执行|那条命令会自己执行/.test(src))
 }
 
@@ -378,14 +380,14 @@ console.log('\n=== 11.5 tick 与 commitBadge 结论一致 ===')
 {
   // commitBadge 认「今日任务 / 飘屏 / 余额」，badgeSent 只认「今日任务」。
   // 修复前：tick 用 badgeSent 二次否决，日志自相矛盾，还会走 badgeReject 累计失败。
-  const src = readFileSync(new URL('../index.mjs', import.meta.url), 'utf8')
+  const src = SRC
   ok('tick 采信 commitBadge 的结论，不再用 badgeSent 覆盖', /sent = r2\.pending \? false : Boolean\(r2\.ok\)/.test(src))
   ok('tick 失败分支不再多跑一遍 badgeSent（那会再点一次入口）', !/await badgeSent\(\)\)/.test(src))
 }
 
 console.log('\n=== 11.51 0.9.6 修复的回归检查 ===')
 {
-  const src = readFileSync(new URL('../index.mjs', import.meta.url), 'utf8')
+  const src = SRC
   const panelSrc0 = readFileSync(new URL('../panel.js', import.meta.url), 'utf8')
   ok('r2 提升到外层作用域（原来声明在内层块，半自动每轮都会 ReferenceError 炸掉 tick）', /let r2 = null/.test(src) && !/const r2 = await doBadge\(\)/.test(src))
   ok('不再调用已删除的 myNickname（炸在真点之后，会导致下一轮重复送）', !/await myNickname\(\)/.test(src))
@@ -417,16 +419,16 @@ ok('认得出任务行「送1个基础灯牌 …」', badgeTaskRowFromText('送1
   ok('认得出「点亮粉丝团恢复勋章」面板', restore.hasRestoreMedal === true && restore.hasStash === true)
   const renew = badgeHintsFromText('送1个基础灯牌 今日第32位送灯牌，连续2天 +100')
   ok('普通续灯牌面板不会被当成恢复勋章', renew.hasRestoreMedal === false && renew.hasStash === false)
-  const src = readFileSync(new URL('../index.mjs', import.meta.url), 'utf8')
+  const src = SRC
   ok('prepareBadge 会因恢复勋章面板放行', /const isRestore = hints\.hasRestoreMedal \|\| hints\.hasStash/.test(src))
   ok('两种面板都会带 kind', /kind: isRestore \? 'restore' : 'renew'/.test(src))
 }
 {
-  const src = readFileSync(new URL('../index.mjs', import.meta.url), 'utf8')
+  const src = SRC
   // 2026-11-09 改：粉丝团面板是 Lynx iframe，读不到 +100，所以证据扩成三条（+100 / 聊天播报 / 进度）
   ok('点之后仍以 +100 为首要证据', /if \(plus\.count > base\)/.test(src))
   ok('聊天区播报也算成功证据（Lynx 面板读不到时靠它）', /seenLines/.test(src) && /hits\.length > chatBefore/.test(src))
-  ok('进度变化是最后兜底', /from === null \|\| p > from/.test(src))
+  ok('进度上涨不再单独判成功（B4：只作旁证）', !/if \(p !== null && \(from === null \|\| p > from\) && p >= 1\)/.test(src))
 }
 }
 
@@ -436,7 +438,7 @@ console.log('\n=== 11.7 总开关：关掉就整个停摆 ===')
   ok('总开关关着：连状态查询都用「关着」那句话', offBoot.got.tools.length === 1 && offBoot.got.tools[0].name === 'kanzhibo_status')
   const r = await tool(offBoot.got, 'kanzhibo_status').execute({})
   ok('关着时不显示目标/地址', /关着/.test(r.message) && !/目标：/.test(r.message), r.message)
-  const src = readFileSync(new URL('../index.mjs', import.meta.url), 'utf8')
+  const src = SRC
   ok('关掉时会停定时器 + 撤待确认 + 关浏览器', /const stopAll = async[\s\S]{0,400}disarmTick\(\)[\s\S]{0,200}dropPending[\s\S]{0,200}closeBrowser/.test(src))
   ok('config 事件里同步总开关', /api\.on\('config', \(\) => \{ syncEnabled/.test(src))
   ok('开总开关时会立刻跑一轮 tick（不等周期）', /tick\(true\)\.catch\(\(e\) => note\('开开关后第一轮出错/.test(src))
@@ -455,7 +457,7 @@ console.log('\n=== 11.8 复刻「刷抖音」那三行：登录 / 窗口 / 浏�
   const r1 = await route(b.got, '/login/state')({})
   ok('/login/state 有返回（浏览器没开时说明白）', r1.ok === true && r1.state === 'closed' && /浏览器没开/.test(r1.message || ''), r1.message)
   ok('/login 与 /window 接口都注册了', Boolean(route(b.got, '/login')) && Boolean(route(b.got, '/window')))
-  const src = readFileSync(new URL('../index.mjs', import.meta.url), 'utf8')
+  const src = SRC
   ok('窗口用 Browser.setWindowBounds 挪进/挪出屏幕', /Browser\.setWindowBounds/.test(src) && /left: -2400/.test(src))
   ok('填错浏览器路径时说得清', /面板里填的浏览器路径不对/.test(src))
   const panelSrc2 = readFileSync(new URL('../panel.js', import.meta.url), 'utf8')
@@ -465,7 +467,7 @@ console.log('\n=== 11.8 复刻「刷抖音」那三行：登录 / 窗口 / 浏�
 
 console.log('\n=== 11.9 直播间地址与「下播」判据（2026-11-09 真机踩到）===')
 {
-  const src = readFileSync(new URL('../index.mjs', import.meta.url), 'utf8')
+  const src = SRC
   const reText = /const LIVE_RE = (\/.*?\/i)\n/.exec(src)
   const LIVE_RE = reText ? new Function('return ' + reText[1])() : null
   ok('认 live.douyin.com/<房间号>', LIVE_RE && LIVE_RE.test('https://live.douyin.com/123456789'))
@@ -483,33 +485,33 @@ console.log('\n=== 11.9 直播间地址与「下播」判据（2026-11-09 真机
 
 console.log('\n=== 11.95 面板里同时有「赠送」和「送灯牌」（2026-11-09 主人截图）===')
 {
-  const src = readFileSync(new URL('../index.mjs', import.meta.url), 'utf8')
+  const src = SRC
   ok('确认按钮改成按优先级逐个试', /BADGE_CONFIRM_TEXTS/.test(src) && /async function findBadgeConfirm/.test(src))
   ok('「送灯牌」排在「赠送」前面（先试正常续灯牌）', (() => {
     const i1 = src.indexOf("'^送灯牌$'")
     const i2 = src.indexOf("'^赠送$'")
     return i1 > 0 && i2 > 0 && i1 < i2
   })())
-  ok('prepareBadge 用 findBadgeConfirm 而不是单一 prepare', /let prep = await findBadgeConfirm\(2\)/.test(src))
+  ok('prepareBadge 用 findBadgeConfirm 而不是单一 prepare', /let prep = await findBadgeConfirm\(10\)/.test(src))
   // 同一条失败不该用旧口径再报一次
   ok('tick 不再用「已完成」旧口径重复报错', !/送完还是没判到「已完成」/.test(src))
 }
 
 console.log('\n=== 11.97 聊天区结构化读取（2026-11-09 修「被页面大小挡住」）===')
 {
-  const src = readFileSync(new URL('../index.mjs', import.meta.url), 'utf8')
-  const find = readFileSync(new URL('../lib/find.mjs', import.meta.url), 'utf8')
+  const src = SRC
+  const find = readFileSync(new URL('../lib/room/find.mjs', import.meta.url), 'utf8')
   ok('聊天区优先用 webcast-chatroom 定位（不是靠猜容器）', /webcast-chatroom/.test(find))
   ok('有 chatLines() 直接读聊天容器', /const chatLines = async/.test(src))
   ok('badgeEvidence 里是「边读边累积」的循环（虚拟列表会丢节点）', /const seenLines = new Set/.test(src) && /seenLines\.add/.test(src))
   ok('badgeEvidence 用累积聊天判「送出了 点亮粉丝团 / 粉丝团灯牌」', /seenLines/.test(src) && /BADGE_CHAT_RE/.test(src))
   ok('聊天证据认得抖音现在的文案「送出了 点亮粉丝团」', /点亮粉丝团/.test(find))
-  ok('聊天读不到时仍保留进度兜底', /from === null \|\| p > from/.test(src))
+  ok('聊天读不到时不再拿进度当成功（B4）', !/if \(p !== null && \(from === null \|\| p > from\) && p >= 1\)/.test(src))
 }
 
 console.log('\n=== 11.98 浏览器最大化（2026-11-09 提高准确性）===')
 {
-  const src = readFileSync(new URL('../index.mjs', import.meta.url), 'utf8')
+  const src = SRC
   ok('启动参数带 --start-maximized', /--start-maximized/.test(src))
   ok('启动参数不再带 --window-size（它会覆盖最大化）', !/^\s*'--window-size=/m.test(src))
   ok('启动前会改 profile 的 window_placement（Chrome/Edge 都认这个）', /forceMaximizedInProfile\(dir\)/.test(src))
@@ -525,7 +527,7 @@ console.log('\n=== 11.98 浏览器最大化（2026-11-09 提高准确性）===')
 
 console.log('\n=== 11.99 页面文字取「尾部」（2026-11-09 修内容被 footer 挤掉）===')
 {
-  const find = readFileSync(new URL('../lib/find.mjs', import.meta.url), 'utf8')
+  const find = readFileSync(new URL('../lib/room/find.mjs', import.meta.url), 'utf8')
   ok('PAGE_TEXT 取末尾而不是开头', /all\.slice\(all\.length - lim\)/.test(find))
   ok('不再逐段 slice 导致配额被 footer 吃光', !/out\.push\(t\.length > max/.test(find))
   ok('返回 full 长度便于排查', /full: all\.length/.test(find))
@@ -533,7 +535,7 @@ console.log('\n=== 11.99 页面文字取「尾部」（2026-11-09 修内容被 f
 
 console.log('\n=== 11.999 代码体检（2026-11-09）===')
 {
-  const src = readFileSync(new URL('../index.mjs', import.meta.url), 'utf8')
+  const src = SRC
   ok('readBalance 不再取右下角数字的最大值（会读成在线人数）', true)
   ok('等待时长抽成常量 EVIDENCE_WAIT_MS，文案从它算', /EVIDENCE_WAIT_MS/.test(src) && /Math\.round\(EVIDENCE_WAIT_MS \/ 1000\)/.test(src))
   ok('删掉了没人用的 chatWatch', !/chatWatch/.test(src))
@@ -543,9 +545,9 @@ console.log('\n=== 11.999 代码体检（2026-11-09）===')
 
 console.log('\n=== 11.9997 0.9.7 优化与加固（2026-11-09）===')
 {
-  const src = readFileSync(new URL('../index.mjs', import.meta.url), 'utf8')
-  const find = readFileSync(new URL('../lib/find.mjs', import.meta.url), 'utf8')
-  const click = readFileSync(new URL('../lib/click.mjs', import.meta.url), 'utf8')
+  const src = SRC
+  const find = readFileSync(new URL('../lib/room/find.mjs', import.meta.url), 'utf8')
+  const click = readFileSync(new URL('../lib/room/click.mjs', import.meta.url), 'utf8')
   // —— 高优先级 ——
   ok('CDP 断开后 send 立即拒绝（不再每个调用干等 20s 超时）', /this\.closed = true/.test(src) && /浏览器连接已断开（' \+ method/.test(src))
   ok('hasRecharge 不再认「充值」二字（礼物面板常驻充值入口会误杀送礼）', (() => {
@@ -560,7 +562,7 @@ console.log('\n=== 11.9997 0.9.7 优化与加固（2026-11-09）===')
   ok('合并扫描保留按优先级分组判唯一', /BADGE_CONFIRM_TEXTS\.map/.test(src) && /pickUnique\(group\)/.test(src))
   ok('DOM 扫描跳过 script/style/svg 等无用节点', /var SKIP = \{ SCRIPT: 1, STYLE: 1/.test(find) && find.split('var SKIP').length >= 3, 'roots 两处都要有')
   ok('badgeSent 读完不再点开关收面板（少两次点击）', /if \(first === 'todo'\) return false/.test(src))
-  ok('prepareBadge 面板开着时不再点入口（入口是开关，点了反而关掉）', /panelOpen[\s\S]{0,60}findBadgeConfirm\(6\)/.test(src))
+  ok('prepareBadge 面板开着时不再点入口（入口是开关，点了反而关掉）', /panelOpen[\s\S]{0,60}findBadgeConfirm\(12\)/.test(src))
   ok('closeTaskPanel 确认面板真的开着才点（防止把入口点开）', /async function closeTaskPanel/.test(src) && /if \(!open\) return false/.test(src))
   ok('半自动红框按候选 rect 画（不再依赖 data-ab-pick 序号）', /clicker\.markRect\(prepared\.cand \? prepared\.cand\.rect : null\)/.test(src) && /async function markRect/.test(click))
   // —— 健壮性 ——
@@ -576,10 +578,10 @@ console.log('\n=== 11.9997 0.9.7 优化与加固（2026-11-09）===')
 
 console.log('\n=== 11.9999 0.9.8 真机实测修复（2026-11-10）===')
 {
-  const src = readFileSync(new URL('../index.mjs', import.meta.url), 'utf8')
-  const find = readFileSync(new URL('../lib/find.mjs', import.meta.url), 'utf8')
+  const src = SRC
+  const find = readFileSync(new URL('../lib/room/find.mjs', import.meta.url), 'utf8')
   const cli = readFileSync(new URL('../lib/cli.mjs', import.meta.url), 'utf8')
-  const axSrc = readFileSync(new URL('../lib/ax.mjs', import.meta.url), 'utf8')
+  const axSrc = readFileSync(new URL('../lib/room/ax.mjs', import.meta.url), 'utf8')
 
   // —— 命中校验：祖先命中（2026-11-10 真机实测）——
   ok('命中校验认「命中点是目标的祖先」', /ancestorHit/.test(find) && /node\.contains\(pickEl\)/.test(find))
@@ -625,7 +627,7 @@ console.log('\n=== 11.9999 0.9.8 真机实测修复（2026-11-10）===')
 
   // —— /probe：会花钱的分支必须显式 open=1 ——
   const probeSeg = src.slice(src.indexOf("api.route('/probe'"), src.indexOf("api.route('/probe'") + 6000)
-  ok('/probe 的 ask/ok/click 要求 ?open=1', /needOpen/.test(probeSeg) && /这一步会真的点下去/.test(probeSeg))
+  ok('/probe 只读 + 动作分支停用', /const ALLOWED = \[/.test(src) && /disabled: true, what/.test(src))
   ok('/probe 有只读的 AX 通道（what=ax）', /what === 'ax'/.test(src) && /api\.route\('\/probe'/.test(src))
 
   // —— 定时器 ——
@@ -634,7 +636,7 @@ console.log('\n=== 11.9999 0.9.8 真机实测修复（2026-11-10）===')
 
   // —— CLI ——
   ok('cli verify 指向改名后的 verify.test.mjs', /verify\.test\.mjs/.test(cli) && !/'verify\.mjs'/.test(cli))
-  ok('cli confirm/cancel 带上 open=1（/probe 现在要求）', /what=.*open=1/.test(cli))
+  ok('cli confirm/cancel 走 /confirm|/cancel + 面板令牌', /confirm/.test(cli) && /cancel/.test(cli) && /probeToken/.test(cli))
 
   // —— 聊天证据文案 ——
   ok('聊天证据认得「送出了 点亮粉丝团」（抖音现在的文案）', /点亮粉丝团/.test(find))
@@ -654,7 +656,7 @@ ok('连不上面板时退出码 2 并说清楚', cliFail.code === 2 && /找不�
 
 console.log('\n=== 12.5 1.0.2 灯牌放弃标记绑房间（换直播间/换主播就作废）===')
 {
-  const src = readFileSync(new URL('../index.mjs', import.meta.url), 'utf8')
+  const src = SRC
   const d = boot().out._debug
   const today = '2026-11-09'
   ok('roomKeyOf 优先取房间号', d.roomKeyOf('https://live.douyin.com/467135990812?anchor_id=4107408219578990') === '467135990812')
@@ -666,19 +668,19 @@ console.log('\n=== 12.5 1.0.2 灯牌放弃标记绑房间（换直播间/换主�
   ok('房间号缺失时不乱清（维持旧行为，宁可不动）',
     d.giveUpRoomsDiffer(today, '', today, '467135990812') === false && d.giveUpRoomsDiffer(today, '835225251778', today, '') === false)
   ok('tick 在「今天已放弃」判定之前先按房间清标记',
-    /const curRoom = roomKeyOf\(url\)[\s\S]{0,300}giveUpRoomsDiffer\(badgeGiveUpDay, giveUpRoom, today, curRoom\)[\s\S]{0,500}badgeGiveUpDay = ''/.test(src))
+    /const curRoom = roomKeyOf\(url\)[\s\S]{0,300}giveUpRoomsDiffer\((?:ctx\.)?badgeGiveUpDay, giveUpRoom, today, curRoom\)[\s\S]{0,500}badgeGiveUpDay = ''/.test(src))
   ok('放弃时记下是在哪个房间放弃的',
-    /badgeGiveUpRoom = String\(room \|\| badgeGiveUpRoom \|\| roomKeyOf\(badgeUrl\)\)/.test(src) && /saveState\(\{ badgeGiveUpDay: today, badgeGiveUpRoom \}\)/.test(src))
+    /(?:ctx\.)?badgeGiveUpRoom = String\(room \|\| (?:ctx\.)?badgeGiveUpRoom \|\| roomKeyOf\((?:ctx\.)?badgeUrl\)\)/.test(src) && /saveState\(\{ badgeGiveUpDay: today, badgeGiveUpRoom: (?:ctx\.)?badgeGiveUpRoom\s*\}\)/.test(src))
   ok('手动 /看直播 灯牌 把房间标记和连续失败计数一起清掉',
-    /cmd === '灯牌'[\s\S]{0,500}badgeGiveUpRoom = ''/.test(src) && /cmd === '灯牌'[\s\S]{0,500}badgeRejectStreak = 0/.test(src))
+    /\/\^灯牌\/[\s\S]{0,1200}badgeGiveUpRoom = ''/.test(src) && /\/\^灯牌\/[\s\S]{0,1200}badgeRejectStreak = 0/.test(src))
   ok('/selfcheck 能看到 badgeGiveUpRoom', /badgeGiveUpRoom,\r?\n/.test(src))
 }
 
 console.log('\n=== 12.6 1.0.3 认得「送1个基础灯牌」，并挡掉星守护那排同名「点亮」===')
 {
-  const src = readFileSync(new URL('../index.mjs', import.meta.url), 'utf8')
-  const find = readFileSync(new URL('../lib/find.mjs', import.meta.url), 'utf8')
-  const arrText = (src.match(/const BADGE_CONFIRM_TEXTS = (\[[\s\S]*?\n    \])/) || [])[1]
+  const src = SRC
+  const find = readFileSync(new URL('../lib/room/find.mjs', import.meta.url), 'utf8')
+  const arrText = (src.match(/(?:export )?const BADGE_CONFIRM_TEXTS = (\[[\s\S]*?\n\s*\])/) || [])[1]
   const TEXTS = arrText ? new Function('return ' + arrText)() : []
   const pick = (text) => TEXTS.find((t) => { try { return new RegExp(t, 'u').test(text) } catch { return false } })
   ok('抖音现在的按钮文案「送1个基础灯牌」有对应规则', Boolean(pick('送1个基础灯牌')), pick('送1个基础灯牌') || '没有')

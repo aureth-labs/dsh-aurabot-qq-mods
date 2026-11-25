@@ -1,0 +1,1965 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f8f5f1">
+<title>栖 Roost · 控制台</title>
+<!-- 主题脚本必须外置：CSP 的 script-src 'self' 会拦掉内联脚本 -->
+<script src="/theme-boot.js"></script>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <button class="nav-toggle" id="navToggle" aria-label="打开导航" aria-expanded="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <path d="M4 7h16M4 12h16M4 17h16"/>
+    </svg>
+  </button>
+  <div class="brand" title="栖 Roost · 倦飞之鸟，终有一栖">
+    <span class="logo" aria-hidden="true">栖</span>
+    <div>
+      <div class="title">栖<span class="brand-en">Roost</span></div>
+      <div class="sub" id="botName">未连接</div>
+    </div>
+  </div>
+  <div class="bot-switch" id="botSwitch">
+    <!--
+      这里原来有一个 8px 的红/绿点表示在线状态。去掉的原因：顶栏这个位置
+      是「我是谁」的标识，不是状态灯；而状态点只有颜色、没有文字，绿点/红点
+      对色弱用户等于没有，旁边还有「在线 · 离线」四个字在页面里，重复且容易误读。
+      下拉列表里仍保留点（那是列表里快速扫视用的，和「在线 / 离线」文字并存）。
+    -->
+    <button class="bot-trigger" id="botTrigger" aria-haspopup="listbox" aria-expanded="false">
+      <span class="bot-name" id="botNameLabel">加载中…</span>
+      <svg class="bot-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 9l6 6 6-6"/>
+      </svg>
+    </button>
+    <div class="bot-menu" id="botMenu" hidden role="listbox">
+      <input class="bot-search" id="botSearch" placeholder="搜索机器人" hidden>
+      <div class="bot-list" id="botList"></div>
+      <div class="bot-empty" id="botEmpty" hidden>没有匹配的机器人</div>
+      <div class="bot-menu-foot">
+        <button type="button" id="botAddBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+          新建机器人
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!--
+    导航：三档布局共用这一份 DOM，靠 CSS 变形（侧栏 / 图标条 / 底部导航 + 抽屉）。
+    不要复制出第二套 [data-tab] 按钮 —— activateTab() 用 `b === btn` 高亮，
+    重复 data-tab 会导致只有第一处亮。
+    .tab-group / .tab-parent / .tab-menu 三件套和 #pluginPageItems 是
+    closeTabMenus()、loadPluginPages() 的硬依赖，类名与 id 一律不能改。
+  -->
+  <nav class="app-nav" id="mainNav" aria-label="主导航">
+    <div class="nav-head">
+      <span class="nav-brand">栖 <span>Roost</span></span>
+      <button class="nav-close" id="navClose" aria-label="收起导航">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M6 6l12 12M18 6L6 18"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="nav-scroll">
+      <div class="tab-group" data-group="run">
+        <button class="tab tab-parent" data-icon="运" aria-label="运行" aria-haspopup="true" aria-expanded="false">
+          <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/>
+            <rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>
+          </svg>
+          <span class="nav-label">运行</span>
+          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6 9l6 6 6-6"/>
+          </svg>
+        </button>
+        <div class="tab-menu" hidden>
+          <button class="tab-item active" data-tab="overview" data-primary>概览</button>
+          <button class="tab-item" data-tab="stats">统计</button>
+          <button class="tab-item" data-tab="logs" data-primary>日志</button>
+        </div>
+      </div>
+
+      <div class="tab-group" data-group="diagnose">
+        <button class="tab tab-parent" data-icon="诊" aria-label="诊断" aria-haspopup="true" aria-expanded="false">
+          <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2 12h4l3-7 4 14 3-7h6"/>
+          </svg>
+          <span class="nav-label">诊断</span>
+          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6 9l6 6 6-6"/>
+          </svg>
+        </button>
+        <div class="tab-menu" hidden>
+          <button class="tab-item" data-tab="events">事件</button>
+          <button class="tab-item" data-tab="reach">可达性</button>
+          <button class="tab-item" data-tab="delivery">投递</button>
+          <button class="tab-item" data-tab="ledger">账本</button>
+          <button class="tab-item" data-tab="search">查询</button>
+        </div>
+      </div>
+
+      <div class="tab-group" data-group="manage">
+        <button class="tab tab-parent" data-icon="管" aria-label="管理" aria-haspopup="true" aria-expanded="false">
+          <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h9M17 18h3"/>
+            <circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="15" cy="18" r="2"/>
+          </svg>
+          <span class="nav-label">管理</span>
+          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6 9l6 6 6-6"/>
+          </svg>
+        </button>
+        <div class="tab-menu" hidden>
+          <button class="tab-item" data-tab="config" data-primary>配置</button>
+          <!-- 开放平台：开发者后台里的机器人配置（资料/回调/白名单），
+               和「配置」页不是一回事——那边改的是本机运行时 -->
+          <button class="tab-item" data-tab="dev">开放平台</button>
+          <!-- 身份：QQ号 / 群号 ↔ openid。常用页而不是设置项 -->
+          <button class="tab-item" data-tab="identity">身份</button>
+          <button class="tab-item" data-tab="groups">群组</button>
+          <button class="tab-item" data-tab="roles">权限</button>
+          <!-- 通知：SMTP 邮箱配置 + 普通成员自助绑定 -->
+          <button class="tab-item" data-tab="notify">通知</button>
+          <!-- 外接：上=自有宿主协议，下=OneBot v11，共用按需依赖 -->
+          <button class="tab-item" data-tab="onebot">外接</button>
+        </div>
+      </div>
+
+      <div class="tab-group" data-group="plugins">
+        <button class="tab tab-parent" data-icon="扩" aria-label="扩展" aria-haspopup="true" aria-expanded="false">
+          <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 4h6v2a2 2 0 1 0 4 0V4h6v6h-2a2 2 0 1 0 0 4h2v6h-6v-2a2 2 0 1 0-4 0v2H4v-6h2a2 2 0 1 0 0-4H4V4z"/>
+          </svg>
+          <span class="nav-label">扩展</span>
+          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6 9l6 6 6-6"/>
+          </svg>
+        </button>
+        <div class="tab-menu" hidden>
+          <button class="tab-item" data-tab="plugins" data-primary>插件管理</button>
+          <!-- 插件注册的页面挂到这里，见 loadPluginPages() -->
+          <div class="tab-menu-sep" id="pluginPageSep" hidden></div>
+          <div class="tab-menu-label" id="pluginPageLabel" hidden>插件页面</div>
+          <div class="tab-menu-sub" id="pluginPageItems"></div>
+        </div>
+      </div>
+
+      <div class="tab-group" data-group="system">
+        <button class="tab tab-parent" data-icon="系" aria-label="系统" aria-haspopup="true" aria-expanded="false">
+          <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5h.01"/>
+          </svg>
+          <span class="nav-label">系统</span>
+          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6 9l6 6 6-6"/>
+          </svg>
+        </button>
+        <div class="tab-menu" hidden>
+          <!-- 外观：明暗 / 底色 / 配色 / 导入导出。纯本机浏览器偏好，不碰服务端 -->
+          <button class="tab-item" data-tab="appearance">外观</button>
+          <button class="tab-item" data-tab="about">关于</button>
+        </div>
+      </div>
+    </div>
+
+    <button class="nav-more" id="navMore" aria-label="全部功能" aria-expanded="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/>
+      </svg>
+      <span>更多</span>
+    </button>
+  </nav>
+
+  <div class="topbar-spacer"></div>
+  <div class="crumb" id="navCrumb">概览</div>
+  <button class="icon-btn icon-btn-text" id="btnPalette" title="配色：归巢暖琥珀（点击轮换）" aria-label="更换配色主题">
+    更换主题
+  </button>
+  <button class="icon-btn" id="btnTheme" title="切换日间 / 夜间" aria-label="切换主题">
+    <svg class="ic-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>
+    </svg>
+    <svg class="ic-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="1.8" stroke-linecap="round">
+      <circle cx="12" cy="12" r="4.2"/>
+      <path d="M12 2.5v2M12 19.5v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M2.5 12h2M19.5 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/>
+    </svg>
+  </button>
+
+  <button class="icon-btn icon-btn-danger" id="btnShutdown" title="关闭程序" aria-label="关闭程序">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="1.8" stroke-linecap="round">
+      <path d="M12 3.2v8.4"/>
+      <path d="M6.6 6.6a8 8 0 1 0 10.8 0"/>
+    </svg>
+  </button>
+
+  <button class="status-pill" id="connPill" title="点击上线 / 下线">
+    <span class="dot" id="connDot"></span>
+    <span id="connText">连接中</span>
+    <span class="pill-sep"></span>
+    <span id="connAction">上线</span>
+  </button>
+</header>
+
+<main>
+  <!-- 概览 -->
+  <section id="tab-overview" class="panel active">
+    <div class="cards">
+      <div class="card"><div class="k">连接状态</div><div class="v" id="c-conn">-</div></div>
+      <div class="card"><div class="k">运行时长</div><div class="v" id="c-uptime">-</div></div>
+      <div class="card"><div class="k">凭证有效期</div><div class="v" id="c-cred">-</div></div>
+      <div class="card"><div class="k">内存占用</div><div class="v" id="c-mem">-</div></div>
+      <div class="card"><div class="k">收到消息</div><div class="v" id="c-recv">0</div></div>
+      <div class="card"><div class="k">发出消息</div><div class="v" id="c-sent">0</div></div>
+      <div class="card"><div class="k">命令命中</div><div class="v" id="c-cmd">0</div></div>
+      <div class="card"><div class="k">错误 / 拦截</div><div class="v" id="c-err">0</div></div>
+      <div class="card" title="开着时消息不真发，只记下本来会发什么（只影响内建插件；点击切换）">
+        <div class="k">dry 模式</div><div class="v" id="c-dry">-</div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="box grow">
+        <div class="box-hd">
+          <h3>活跃会话</h3>
+          <span class="hint">按消息数排序，最多 20 条</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>openid</th><th>类型</th><th class="num">消息数</th><th>最后活跃</th></tr></thead>
+            <tbody id="chatBody"><tr><td colspan="4" class="empty">暂无数据</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="box">
+        <div class="box-hd"><h3>运行信息</h3></div>
+        <dl class="kv">
+          <dt>机器人 ID</dt><dd id="i-botid">-</dd>
+          <dt>网关</dt><dd id="i-gw" class="mono">-</dd>
+          <dt>会话 ID</dt><dd id="i-session" class="mono">-</dd>
+          <dt>intents</dt><dd id="i-intents">-</dd>
+          <dt>命令前缀</dt><dd id="i-prefix">-</dd>
+          <dt>重连次数</dt><dd id="i-reconn">0</dd>
+          <dt>事件统计</dt><dd id="i-events">-</dd>
+          <dt>Node</dt><dd id="i-node">-</dd>
+        </dl>
+        <div class="btn-row">
+          <button class="btn" id="btnReconnect">重连网关</button>
+          <button class="btn" id="btnRefreshCred">刷新凭证</button>
+        </div>
+      </div>
+    </div>
+
+    <!--
+      暂停闸：唯一的刹车，所以放在「发送消息（调试）」之前。
+
+      放在概览而不是单开一页：暂停是个紧急操作，要能在打开面板的第一屏
+      就找到。藏在二级菜单里的刹车，出事时想不起来。
+    -->
+    <div class="box" id="gateBox">
+      <div class="box-hd">
+        <h3>暂停闸</h3>
+        <span class="hint">关着就不对任何人说话。消息照样进账本，恢复后能补看</span>
+      </div>
+      <div class="form-inline">
+        <button class="btn" id="btnGateGlobal">全局暂停</button>
+        <button class="btn" id="btnGateBot">暂停这只鸟</button>
+        <span class="hint" id="gateState">-</span>
+      </div>
+      <div class="hint" id="gateReasons" hidden></div>
+    </div>
+
+    <div class="box">
+      <div class="box-hd"><h3>发送消息（调试）</h3></div>
+      <div class="form-inline">
+        <select id="sendScene"><option value="group">群聊</option><option value="c2c">私聊</option></select>
+        <input id="sendTarget" placeholder="群 openid 或用户 openid">
+        <input id="sendContent" placeholder="要发送的内容">
+        <button class="btn primary" id="btnSend">发送</button>
+      </div>
+      <div class="hint" id="sendHint">主动消息有频次限制，仅建议调试用。</div>
+    </div>
+
+    <div class="box">
+      <div class="box-hd">
+        <h3>后台服务</h3>
+        <span class="hint">健康巡检、文件清理、配置热加载、定时重启、检查更新</span>
+      </div>
+      <div id="serviceList" class="service-list">
+        <div class="empty">加载中…</div>
+      </div>
+    </div>
+
+    <!-- 体检：放最后。它是排查工具，不是每次都要看的指标 -->
+    <div class="box" id="doctorBox">
+      <div class="box-hd">
+        <h3>体检</h3>
+        <span class="hint" id="doctorSummary">点一下，看看哪里还没通</span>
+        <button class="btn small" id="btnDoctor">检查</button>
+      </div>
+      <div id="doctorList" class="doctor-list" hidden></div>
+    </div>
+  </section>
+
+  <!-- 身份：QQ号 / 群号 ↔ openid -->
+  <section id="tab-identity" class="panel">
+    <div class="box">
+      <div class="box-hd">
+        <h3>为什么要在这一页绑</h3>
+        <span class="hint">openid 换机器人就变，号码不会</span>
+      </div>
+      <ul class="tips">
+        <li>官方只给 <b>openid</b>，而且<b>每个机器人一套</b>——换 AppID 之后，同一个人在系统里就变成了另一个人，
+          记忆、权限、群档案全都对不上</li>
+        <li><b>QQ号 / 群号</b>不会变，但官方<b>没有任何「号码 → openid」的查询接口</b>，
+          所以只能在这里人工指认一次</li>
+        <li>绑好之后插件和 AI 都能用号码代替 openid；读旧记忆时，框架会把这个号码名下的
+          <b>所有</b> openid 一起读进来</li>
+        <li>一个号码可以挂多个 openid（换机器人用）。<b>解绑只影响当前这只鸟</b>，
+          旧记录留痕不删——它是读旧记忆唯一的线索</li>
+      </ul>
+    </div>
+
+    <div class="box">
+      <div class="box-hd">
+        <h3>还没认出来的人</h3>
+        <span class="hint" id="identUserHint">说过话、但还没绑 QQ号 的</span>
+        <div class="btn-row" style="margin:0">
+          <button class="btn small" id="btnIdentReload">刷新</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>用户</th>
+              <th>活跃</th>
+              <th>消息</th>
+              <th>最近说过</th>
+              <th style="width:200px">绑 QQ号</th>
+            </tr>
+          </thead>
+          <tbody id="identUserBody">
+            <tr><td colspan="5" class="empty">加载中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="hint" style="margin-top:8px">
+        列表按最近发言排序。前几条会显示「在哪个群说过什么」，方便认出是谁。
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="box-hd">
+        <h3>还没认出来的群</h3>
+        <span class="hint" id="identGroupHint">机器人加入过、但还没绑群号的</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>群</th>
+              <th>最近活跃</th>
+              <th style="width:200px">绑群号</th>
+            </tr>
+          </thead>
+          <tbody id="identGroupBody">
+            <tr><td colspan="3" class="empty">加载中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="box-hd">
+        <h3>已绑定</h3>
+        <span class="hint" id="identBoundHint">这张表跨机器人共享，换机器人也认得出</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>类型</th>
+              <th>号码</th>
+              <th>这只鸟下的 openid</th>
+              <th>全部 openid</th>
+              <th>最近</th>
+              <th style="width:100px">操作</th>
+            </tr>
+          </thead>
+          <tbody id="identBoundBody">
+            <tr><td colspan="6" class="empty">还没有绑定</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- 通知 -->
+  <section id="tab-notify" class="panel">
+    <form id="notifyForm">
+      <div class="box">
+        <div class="box-hd">
+          <h3>邮箱通知</h3>
+          <label class="switch"><input type="checkbox" name="enabled"> 启用邮箱通知</label>
+        </div>
+        <div class="hint">
+          账号密码只保存在本机 <span class="mono">config/bot.json</span>，不会上传。
+          QQ 邮箱 / 163 邮箱等需要用<b>授权码</b>而不是登录密码，并先在邮箱网页端开启 SMTP 服务。
+          SMTP 用户名留空表示不做认证（内网中继）。
+        </div>
+        <div class="grid2">
+          <label>SMTP 服务器<input name="host" placeholder="smtp.qq.com / smtp.163.com"></label>
+          <label>SMTP 服务器端口<input name="port" type="number" min="1" max="65535" placeholder="一般为 587"></label>
+          <label>SMTP 用户名<input name="user" placeholder="一般是完整邮箱地址"></label>
+          <label>SMTP 密码 / 授权码<input name="pass" type="password" placeholder="留空则不修改"></label>
+          <label>发件人邮箱<input name="from" placeholder="通常与登录账号一致"></label>
+          <label>发件人姓名<input name="fromName" placeholder="栖"></label>
+          <label>主人邮箱<input name="ownerEmail" placeholder="测试邮件发到这里"></label>
+        </div>
+        <div class="hint" id="notifySecurityHint">
+          加密方式默认「自动」：465 走隐式 TLS、587 走 STARTTLS、25 走明文，其它端口按服务器能力协商；
+          网易系（163 / 126 / yeah）的 587 会自动改走隐式 TLS。
+          <span id="notifySecurityNow"></span>
+        </div>
+        <div class="cred-actions">
+          <span class="hint" id="notifyMsg"></span>
+          <button type="submit" class="btn primary">保存配置</button>
+        </div>
+      </div>
+    </form>
+
+    <div class="box">
+      <div class="box-hd">
+        <h3>测试邮件通知</h3>
+        <span class="hint">发送一封测试邮件到「主人邮箱」</span>
+      </div>
+      <div class="cred-actions">
+        <span class="hint" id="notifyTestMsg"></span>
+        <button type="button" class="btn" id="btnNotifyTest">发送</button>
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="box-hd"><h3>普通成员自助绑定</h3></div>
+      <div class="hint">
+        成员发 <b>绑定QQ 自己的QQ号</b> → 验证码发到 <b>QQ号@qq.com</b> → 再发
+        <b>QQ验证码 6位数字</b> 即完成绑定。收件邮箱由 QQ 号自动拼接，不需要在这里配置。
+        QQ 号已被别人绑定时会直接拒绝；未开通数字邮箱的 QQ 号请找主人用「绑定成员」代绑。
+      </div>
+    </div>
+  </section>
+
+  <!-- 外观：明暗 / 底色 / 配色 / 背景图 / 导入导出。只存在这个浏览器 -->
+  <section id="tab-appearance" class="panel">
+    <div class="box">
+      <div class="box-hd">
+        <h3>明暗</h3>
+        <span class="hint">只影响这台设备上的这个浏览器</span>
+      </div>
+      <div class="ap-row">
+        <span class="ap-label">模式</span>
+        <div class="ap-seg" id="apMode" role="group" aria-label="明暗模式">
+          <button type="button" class="btn small" data-mode="auto">跟随系统</button>
+          <button type="button" class="btn small" data-mode="light">白天</button>
+          <button type="button" class="btn small" data-mode="dark">黑夜</button>
+        </div>
+      </div>
+      <p class="hint">
+        黑夜是固定的黑白配色，不跟下面的主色走——暗底上的品牌色不是发脏就是刺眼，
+        所以只给一套中性色。白天模式下才换配色。
+      </p>
+    </div>
+
+    <div class="box" id="apColors">
+      <div class="box-hd">
+        <h3>配色</h3>
+        <span class="hint">仅在白天模式下生效</span>
+      </div>
+      <p class="hint" id="apDarkNote" hidden>
+        现在是黑夜模式：固定黑白，配色与主色都不可调。切到「白天」或「跟随系统（当前为白天）」即可调整。
+      </p>
+      <div class="ap-presets" id="apPresets" role="group" aria-label="配色"></div>
+      <!-- 取色器不再单独占一行：点「自定义」才弹出来 -->
+      <input type="color" id="apSeed" class="ap-seed-input" aria-label="自定义主色" tabindex="-1">
+      <p class="hint" id="apSeedHint"></p>
+      <p class="hint">点「自定义」自己挑主色——背景、边框和文字会跟着主色的色相一起生成；选预设则用该预设设计好的底色。</p>
+    </div>
+
+    <div class="box">
+      <div class="box-hd">
+        <h3>背景图片</h3>
+        <span class="hint">白天 / 黑夜都生效</span>
+      </div>
+      <div class="ap-row">
+        <input type="file" id="apBgFile" accept="image/*" hidden>
+        <button type="button" class="btn small" id="apBgPick">选择图片</button>
+        <button type="button" class="btn small" id="apBgClear" disabled>清除</button>
+        <span class="hint" id="apBgMsg">未设置</span>
+      </div>
+      <div class="ap-row">
+        <span class="ap-label">模糊</span>
+        <input type="range" class="ap-range" id="apBgBlur" min="0" max="24" step="1" aria-label="背景模糊">
+        <span class="hint" id="apBgBlurVal"></span>
+      </div>
+      <div class="ap-row">
+        <span class="ap-label">亮度</span>
+        <input type="range" class="ap-range" id="apBgBright" min="40" max="100" step="1" aria-label="背景亮度">
+        <span class="hint" id="apBgBrightVal"></span>
+      </div>
+      <div class="ap-row">
+        <span class="ap-label">面板</span>
+        <input type="range" class="ap-range" id="apBgAlpha" min="60" max="96" step="1" aria-label="面板不透明度">
+        <span class="hint" id="apBgAlphaVal"></span>
+      </div>
+      <p class="hint">
+        图片存在这台浏览器的 IndexedDB 里（不进 localStorage，也不上传到任何地方）；
+        换浏览器或清缓存会丢。启用后面板转成<b>中性玻璃</b>——底色不再染色到照片上，
+        只用明暗对比保证文字可读。
+      </p>
+    </div>
+
+    <div class="box">
+      <div class="box-hd">
+        <h3>导入 / 导出</h3>
+        <span class="hint">一份 JSON，可以直接发给别人</span>
+      </div>
+      <textarea id="apJson" class="ap-json" rows="6" spellcheck="false" aria-label="外观配置 JSON" placeholder='{"v":1,"mode":"auto","preset":"a",...}'></textarea>
+      <div class="btn-row">
+        <button type="button" class="btn small" id="apExport">导出到上面</button>
+        <button type="button" class="btn small" id="apImport">从上面导入</button>
+        <button type="button" class="btn small" id="apReset">恢复默认</button>
+      </div>
+      <p class="hint" id="apMsg"></p>
+      <p class="hint">
+        配色只存在这个浏览器的 localStorage；导出的 JSON 不含背景图。
+        插件页的 iframe 用的是服务端下发的固定配色，<b>不跟随</b>这里的自定义主色。
+      </p>
+    </div>
+  </section>
+
+  <!-- 关于 -->
+  <section id="tab-about" class="panel">
+    <div class="box">
+      <div class="about-hero">
+        <span class="logo about-logo" aria-hidden="true">栖</span>
+        <div>
+          <div class="about-name">栖 Roost</div>
+          <div class="hint">倦飞之鸟，终有一栖 · 零依赖的 QQ 官方机器人框架</div>
+          <div class="hint">当前版本 v<span id="updCurrent">-</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="box-hd">
+        <h3>版本更新</h3>
+        <div class="box-hd-right">
+          <button class="btn small" id="btnCheckUpdate">检查更新</button>
+          <button class="btn small primary" id="btnApplyUpdate" hidden>立即更新</button>
+        </div>
+      </div>
+      <div class="hint" id="updMsg">
+        从 GitHub 检查新版本。更新只替换代码目录，<strong>配置、存档、日志、插件都不会动</strong>，更新后需重启程序。
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="box-hd">
+        <h3>联系方式</h3>
+        <span class="hint">反馈问题、提建议都欢迎</span>
+      </div>
+      <dl class="kv">
+        <dt>QQ</dt><dd class="mono">2014433751</dd>
+        <dt>邮箱</dt><dd class="mono">jfzn9594@outlook.com</dd>
+        <dt>项目主页</dt>
+        <dd>
+          <a href="https://github.com/tdcq9594/qq-bot-roost" target="_blank" rel="noopener">GitHub</a>
+          ·
+          <a href="https://gitee.com/tdcq9594/qq-bot-roost" target="_blank" rel="noopener">Gitee</a>
+        </dd>
+      </dl>
+    </div>
+
+    <div class="box">
+      <div class="box-hd"><h3>许可</h3></div>
+      <div class="hint">采用 GNU AGPL-3.0-only（OSI 开源许可）：可自由使用、修改、分发，包括商业用途与收费；但分发或通过网络提供服务时须同样以 AGPL-3.0-only 开源并提供对应源码。详见根目录 LICENSE。</div>
+    </div>
+  </section>
+
+  <!-- 配置 -->
+  <section id="tab-dev" class="panel">
+    <div class="box">
+      <div class="box-hd"><h3>登录开放平台</h3>
+        <span class="hint">开发者账号级 · 票据只在本机</span>
+      </div>
+      <p class="hint" id="devLoginState">正在读取状态…</p>
+
+      <div id="devScanBox">
+        <div class="btn-row">
+          <button type="button" class="btn" id="devScanBtn">扫码登录</button>
+          <button type="button" class="btn small" id="devScanCancelBtn" hidden>取消扫码</button>
+          <button type="button" class="btn small" id="devRecheckBtn" title="扫完码面板没反应时点一下：立刻读一次窗口里的票据，并真向平台核一次">检查登录状态</button>
+          <button type="button" class="btn small" id="devOpenDashBtn">打开开发平台</button>
+          <button type="button" class="btn small" id="devLogoutBtn">退出登录</button>
+        </div>
+        <!--
+          「记住登录」默认勾上，而且**勾/取消会立刻落盘**（走 /api/dev/remember）。
+          以前这个勾只在点「扫码登录」那一刻读一次，已登录时勾它等于没勾，
+          刷新又空回去，看着就像「缺个保存按钮」。
+        -->
+        <label class="switch small" style="margin-top:8px">
+          <input type="checkbox" id="devScanRemember" checked> 记住登录（默认开启，改完立即生效）
+        </label>
+        <p class="hint" id="devRememberMsg"></p>
+        <!--
+          自动续期说明放在这里：票据一过期，框架会用扫码窗口那个 profile
+          自己开一次浏览器换新票、拿到就关。不写清楚的话，用户只会看到
+          「浏览器自己弹出来了」，还以为中毒了。
+        -->
+        <p class="hint" id="devAutoMsg"></p>
+        <p class="hint" id="devScanMsg">点「扫码登录」会在这台机器上开一个独立浏览器窗口，用手机 QQ 扫一下就好。登录成功后窗口会停在机器人设置页，<b>留着看或随手关掉都行</b>——后续请求由框架自己发，不依赖这个窗口。</p>
+        <p class="hint">扫之前先确认手机 QQ 登的是<b>管着这台机器人（<span id="devBoundInline">appid 未知</span>）的那个号</b>：这个页面只会改它，登错账号会直接告诉你。</p>
+
+        <details id="devBrowserBox" style="margin-top:10px">
+          <summary class="hint" style="cursor:pointer">没找到浏览器，或装在自定义路径？手动指定</summary>
+          <div class="full" style="margin-top:10px">
+            <p class="hint" style="margin:0 0 8px">只认 Chromium 内核（Edge / Chrome / Chromium / Brave / Vivaldi）。Firefox 和 Safari 不支持调试协议，用不了扫码登录，只能走下面的备选。</p>
+            <label>浏览器可执行文件路径
+              <input id="devBrowserPath" placeholder="例如 C:\Program Files\Chromium\Application\chrome.exe">
+            </label>
+            <div class="btn-row">
+              <button type="button" class="btn small" id="devBrowserSave">保存路径</button>
+              <button type="button" class="btn small" id="devBrowserClear">改回自动探测</button>
+            </div>
+            <p class="hint" id="devBrowserMsg"></p>
+          </div>
+        </details>
+      </div>
+
+      <details id="devFallback" style="margin-top:14px">
+        <summary class="hint" style="cursor:pointer">备选：从已登录的浏览器复制一个请求（没装 Edge / Chrome，或扫码被安全软件拦住时用）</summary>
+        <div class="full" style="margin-top:10px">
+          <!--
+            这里以前是「复制控制台脚本」，已删掉，原因是它根本不可能成功：
+            登录票据里的 `b-token` / `p_skey` 是 httpOnly，页面里的 JS（含控制台）
+            一律读不到 document.cookie 里的它们，脚本只能抄到 qticket_lite 这几个
+            半串的，导入必然 401。DevTools 的「Copy as cURL」是浏览器自己导出的，
+            带 httpOnly，所以这条才是能用的路。
+          -->
+          <ol class="hint" style="margin:0 0 10px 18px;padding:0;line-height:1.7">
+            <li>在你要用来登录的浏览器里打开 <code>q.qq.com/qqbot/dashboard/</code>，扫码登录</li>
+            <li>按 <b>F12</b> → 切到 <b>Network</b>（网络）标签 → 刷新一下页面</li>
+            <li>筛选框里输入 <code>bot.q.qq.com</code>，在结果里点<b>任意一条</b>请求</li>
+            <li>右键那条请求 → <b>Copy</b> → <b>Copy as cURL</b>（bash / cmd / PowerShell 都行）</li>
+            <li>回到这里 <b>Ctrl+V</b> 粘到下面输入框，点「导入并验证」</li>
+          </ol>
+          <pre id="devCurlHow" style="max-height:180px;overflow:auto;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:10px;margin:8px 0;font-size:12px;line-height:1.5;white-space:pre-wrap;color:var(--text-2)">粘进来的应该长这样，关键是里面有 -H 'cookie: ...'（这一行带 httpOnly 票据）：
+
+curl 'https://bot.q.qq.com/cgi-bin/v2/info/list_bots' \
+  -H 'cookie: p_skey=...; b-token=...; qticket_lite=...; developer_id_lite=...' \
+  -H 'content-type: application/json' \
+  --data-raw '{"developer_id":"...","filter":{"page_limit":100}}'</pre>
+          <label>粘贴 cURL（或 cookie 串）
+            <textarea id="devCookieInput" rows="4"
+              placeholder="curl 'https://bot.q.qq.com/...' -H 'cookie: ...'"></textarea>
+          </label>
+          <label class="switch small" style="margin-top:8px">
+            <input type="checkbox" id="devRemember" checked> 记住登录（和上面那个是同一个开关）
+          </label>
+          <div class="btn-row">
+            <button type="button" class="btn" id="devImportBtn">导入并验证</button>
+          </div>
+          <p class="hint" id="devLoginMsg"></p>
+        </div>
+      </details>
+    </div>
+
+    <div class="box" id="devBotsBox" hidden>
+      <div class="box-hd"><h3>当前机器人</h3><span class="hint" id="devBotCount"></span></div>
+      <div class="grid2">
+        <div>
+          <div id="devBoundName" style="font-weight:600"></div>
+          <div class="hint" id="devBoundAppid"></div>
+        </div>
+        <div class="hint" id="devBotMeta" style="align-self:end"></div>
+      </div>
+      <p class="hint" id="devBoundMsg"></p>
+    </div>
+
+    <div class="box" id="devEditBox" hidden>
+      <div class="box-hd"><h3>机器人配置</h3><span class="hint" id="devEditHint"></span></div>
+
+      <!-- 每个框配一个自己的保存按钮：平台按「资料 / 连接 / 白名单」分别计次数，
+           一次改一堆会出现「一半成功」，用户也说不清是哪条没生效 -->
+      <div class="dev-field">
+        <label>头像
+          <div class="dev-avatar">
+            <img id="devAvatarImg" alt="当前头像" referrerpolicy="no-referrer" title="当前头像">
+            <div class="dev-avatar-pick">
+              <input id="devAvatarSrc" placeholder="本地图片 / 图片地址 / 官方页面的 avatar_id">
+              <div class="btn-row" style="margin:6px 0 0">
+                <button type="button" class="btn small" id="devAvatarPick">选本地图片</button>
+                <input type="file" id="devAvatarFile" accept="image/*" hidden>
+                <span class="hint" id="devAvatarMsg"></span>
+              </div>
+              <div class="hint" style="margin-top:4px">
+                官方限制：<b>png / bmp / jpeg / jpg / gif</b>，不超过 <b>2 MB</b>，必须正方形（官方页面建议 144×144）。
+                选本地图片会先居中裁成正方形、缩到 512×512 的 PNG 再上传，透明底不会变黑。
+              </div>
+            </div>
+          </div>
+        </label>
+        <button type="button" class="btn small" id="devSaveAvatar">保存头像</button>
+      </div>
+
+      <div class="dev-field">
+        <label>昵称<input id="devName" maxlength="20" placeholder="机器人昵称"></label>
+        <button type="button" class="btn small" id="devSaveName">保存昵称</button>
+      </div>
+
+      <div class="dev-field">
+        <label>简介<textarea id="devDesc" rows="3" maxlength="100" placeholder="公开展示的简介"></textarea></label>
+        <button type="button" class="btn small" id="devSaveDesc">保存简介</button>
+      </div>
+
+      <div class="dev-field">
+        <label>Webhook 地址<input id="devWebhook" placeholder="https://example.com/callback"></label>
+        <button type="button" class="btn small" id="devSaveWebhook">保存 Webhook</button>
+      </div>
+
+      <div class="dev-field">
+        <label>连接动作
+          <select id="devConnectAction">
+            <option value="1">保存 Webhook</option>
+            <option value="2">校验 Webhook</option>
+            <option value="3">切换 WebSocket</option>
+          </select>
+        </label>
+        <button type="button" class="btn small" id="devSaveConnect">执行</button>
+      </div>
+
+      <div class="dev-field">
+        <label>IP 白名单（每行一个）<textarea id="devIps" rows="3" placeholder="1.2.3.4"></textarea></label>
+        <button type="button" class="btn small" id="devSaveIps">保存白名单</button>
+      </div>
+
+      <p class="hint" id="devEditMsg"></p>
+      <p class="hint">每个框各存各的：平台按「资料 / 连接 / 白名单」分别计次数，一次改一堆容易「一半成功」。改连接方式会立即生效，机器人可能短暂掉线。</p>
+    </div>
+
+    <!--
+      体验白名单：机器人「正式发布」之前能用它的人/群。
+
+      这两块和上面的配置分开放，是因为它们改的是**谁有权用**，不是机器人长什么样；
+      混在一起容易一点「保存」就把名单也提交一遍。每条都是即时生效的单独动作。
+    -->
+    <div class="box" id="devScopeBox" hidden>
+      <div class="box-hd"><h3>白名单</h3><span class="hint" id="devScopeHint"></span></div>
+
+      <div class="dev-scope-block">
+        <div class="dev-scope-head">
+          <span class="dev-scope-title">测试用户</span>
+          <span class="hint" id="devUserCount"></span>
+        </div>
+        <p class="hint" style="margin:0 0 8px">
+          填 <b>QQ 号</b>（5~11 位数字）。名单里的人可以在机器人发布前私聊调试；
+          移除后该用户就不能继续体验了。
+        </p>
+        <div id="devUserList" class="dev-scope-list"></div>
+        <div class="dev-field" style="margin-top:8px">
+          <label>QQ 号<input id="devUserInput" inputmode="numeric" maxlength="11" placeholder="例如 10001"></label>
+          <button type="button" class="btn small" id="devAddUser">添加用户</button>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="dev-scope-block">
+        <div class="dev-scope-head">
+          <span class="dev-scope-title">白名单群</span>
+          <span class="hint" id="devGroupCount"></span>
+        </div>
+        <p class="hint" style="margin:0 0 8px">
+          填 <b>群号</b>（5~10 位数字），最多 20 个。白名单群可以用一套独立的群管能力配置，
+          常用来给新功能做小范围测试；机器人不在群里也能先加，但会标出来。
+        </p>
+        <div id="devGroupList" class="dev-scope-list"></div>
+        <div class="dev-field" style="margin-top:8px">
+          <label>群号<input id="devGroupInput" inputmode="numeric" maxlength="10" placeholder="例如 123456789"></label>
+          <button type="button" class="btn small" id="devAddGroup">添加群</button>
+        </div>
+      </div>
+
+      <p class="hint" id="devScopeMsg"></p>
+      <p class="hint">加/删都是立刻生效的单个动作，没有「保存」这一步；改动会同步到开放平台后台。</p>
+    </div>
+  </section>
+
+  <section id="tab-config" class="panel">
+    <form id="cfgForm">
+      <div class="box" data-cfg="creds">
+        <div class="box-hd"><h3>连接凭证</h3>
+          <span class="hint">只保存本区块；下面的设置都是改动即生效</span>
+        </div>
+        <div class="grid2">
+          <label>AppID<input name="appId" placeholder="机器人 AppID"></label>
+          <label>AppSecret<input name="appSecret" type="password" placeholder="留空则不修改"></label>
+          <label>API 地址<input name="baseUrl"></label>
+          <label>命令前缀<input name="commandPrefix" maxlength="3"></label>
+          <label>收事件方式
+            <select name="connectionMode">
+              <option value="websocket">WebSocket 长连接（本地推荐）</option>
+              <option value="webhook">Webhook 回调（公网 / Serverless）</option>
+            </select>
+          </label>
+        </div>
+        <!--
+          扫码换凭证：AppSecret 会被重置、或者整只机器人换了账号时，
+          与其去 q.qq.com 后台翻两个值再复制，不如扫一下。
+          和「新建机器人」用的是同一个官方绑定接口，区别只是扫完**不建新机器人**，
+          把 AppID / AppSecret 填进当前这张表单里——仍然要点「保存设置」才生效。
+        -->
+        <div class="nb-qr" id="cfgQr" hidden>
+          <div class="nb-qr-code" id="cfgQrCode"></div>
+          <div class="nb-qr-tip" id="cfgQrTip"></div>
+        </div>
+        <div class="cred-actions">
+          <span class="hint" id="cfgMsgTop"></span>
+          <button type="button" class="btn" id="cfgQrStart">扫码更新凭证</button>
+          <button type="submit" class="btn primary" id="cfgSaveTop">保存凭证</button>
+        </div>
+        <div class="full intents-block">
+          <div class="intents-head">
+            <span class="intents-title">事件订阅（intents）</span>
+            <span class="intents-stat" id="intentsStat">已选 <b>0</b> 项</span>
+          </div>
+
+          <!-- 吸顶工具条：应用订阅必须一直在视野里，别让人滚到最后才找到 -->
+          <div class="intent-bar">
+            <!-- 属性名用 data-intent-preset，不能和外观页配色块的 data-preset 撞：
+                 撞了之后 bindIntentsUI 会把配色块也绑上「清空订阅」的逻辑 -->
+            <button type="button" class="btn small" data-intent-preset="chat">群聊 + 私聊</button>
+            <button type="button" class="btn small" data-intent-preset="guild">频道基础</button>
+            <button type="button" class="btn small" data-intent-preset="all">全部基础</button>
+            <button type="button" class="btn small" data-intent-preset="none">清空</button>
+            <label class="btn small intent-adv" title="手动填写 intents 数值">
+              <input type="checkbox" id="intentsAdvanced"> 高级
+            </label>
+            <span class="spacer"></span>
+            <span class="hint" id="intentsStatus"></span>
+            <button type="button" class="btn small primary" id="intentsApply" disabled>应用订阅</button>
+          </div>
+
+          <div class="intent-adv-row" id="intentsAdvRow" hidden>
+            <input name="intents" id="intentsManual" type="number" placeholder="intents 数值，例如 33554432">
+            <span class="hint">直接写数值；含未识别的位时会原样保留</span>
+          </div>
+
+          <!-- 两组共用一个网格：intent-list 用 display:contents，
+               既保住 #intentGroupChat / #intentGroupGuild 两个 id（契约基线），
+               又让 12 张卡片排成同一片 -->
+          <div class="intent-grid">
+            <div id="intentGroupChat" class="intent-list"></div>
+            <div id="intentGroupGuild" class="intent-list"></div>
+          </div>
+
+          <div class="intent-warn" id="intentsWarn"></div>
+          <div class="hint intents-foot">
+            勾选只是改配置；点「应用订阅」才生效，生效会重连一次网关（几秒内收不到消息）。
+            <span class="hint">当前值 <b class="mono" id="intentsValue">33554432</b> · <span id="intentsDesc">群聊与私聊</span></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="box">
+        <div class="box-hd"><h3>行为控制</h3></div>
+        <div class="grid2">
+          <label class="switch"><input type="checkbox" name="whitelistEnabled"> 启用白名单</label>
+          <label class="switch"><input type="checkbox" name="rateLimitEnabled"> 启用限流</label>
+          <label>每分钟每会话上限<input name="perChatPerMinute" type="number" min="1"></label>
+          <label>去重窗口（秒）<input name="dedupWindowSec" type="number" min="0"></label>
+        </div>
+        <div class="divider"></div>
+        <div class="intent-group-title">消息日志</div>
+        <label class="switch">
+          <input type="checkbox" name="messageLogEnabled">
+          把收到的每一条消息写进日志（便于排查"为什么没反应"）
+        </label>
+        <div class="mute-row">
+          <span class="hint">屏蔽以下来源，不记录也不显示：</span>
+          <label class="switch small"><input type="checkbox" name="muteGroup"> 群聊</label>
+          <label class="switch small"><input type="checkbox" name="muteC2c"> 私聊</label>
+          <label class="switch small"><input type="checkbox" name="muteGuild"> 频道</label>
+          <label class="switch small"><input type="checkbox" name="muteDm"> 频道私信</label>
+        </div>
+
+        <label class="full">白名单群 openid（每行一个）
+          <textarea name="whitelistGroups" rows="2"></textarea>
+        </label>
+        <label class="full">白名单用户 openid（每行一个）
+          <textarea name="whitelistUsers" rows="2"></textarea>
+        </label>
+      </div>
+
+      <div class="box">
+        <div class="box-hd"><h3>发图兼容</h3><span class="hint">默认关闭</span></div>
+        <label class="switch">
+          <input type="checkbox" name="mediaPlaceholderSpace" id="mediaPlaceholderSpace">
+          发图片时带一个空格（v1.0.6 之前的行为）
+        </label>
+        <div class="hint" id="mediaSpaceMsg" style="margin-top:4px"></div>
+        <div class="hint" style="margin-top:8px">
+          只发一张图时，框架本来不带正文，QQ 里就是干净的一张图。打开后会在富媒体消息里
+          补一个空格当正文，回到旧版排版：图片被挤向一侧、外面多出一块空白文字区。<br>
+          可能有奇妙的作用（），<b>勾选后立即生效、不用点保存也不用重启</b>。
+          带说明文字的图片（<code>replyImage(..., { text })</code>）不受影响；
+          视频 / 语音 / 文件的 content 官方会忽略，勾上也没有副作用。
+        </div>
+      </div>
+
+      <div class="box">
+        <div class="box-hd"><h3>群管能力</h3><span class="hint">禁言 / 撤回已开放；群成员与踢人需官方白名单</span></div>
+        <label class="switch">
+          <input type="checkbox" name="groupInvited">
+          我已申请到群管内邀资格（群成员列表 / 踢人 / 群黑名单）
+        </label>
+        <div class="hint" style="margin-top:8px">
+          官方群管理接口分两档：<b>禁言、撤回、群基本信息</b>对所有机器人开放；
+          <b>群成员列表、批量移除（踢人）、群黑名单</b>只对白名单机器人开放，
+          没申请就调会返回 <code>11253</code>。<br>
+          所以这里默认关闭。去开放平台申请通过后再勾上，点「保存设置」后生效、不用重启。
+          没申请而勾上，只会让机器人每次调用都白跑一趟报错。
+        </div>
+      </div>
+
+      <div class="box">
+        <div class="box-hd"><h3>面板与日志</h3></div>
+        <div class="grid2">
+          <label>监听地址<input name="webuiHost" placeholder="127.0.0.1"></label>
+          <label>端口<input name="webuiPort" type="number"></label>
+          <label>面板访问密钥（留空则不校验；已设置时不会回显，想改就重填）<input name="webuiAccessKey" type="password" autocomplete="new-password"></label>
+          <label>日志级别
+            <select name="logLevel">
+              <option value="debug">debug</option>
+              <option value="info">info</option>
+              <option value="warn">warn</option>
+              <option value="error">error</option>
+            </select>
+          </label>
+        </div>
+        <div class="hint">修改监听地址或端口需要重启进程才生效。</div>
+      </div>
+
+      <div class="box">
+        <div class="box-hd"><h3>自更新签名校验</h3></div>
+        <label class="switch">
+          <input type="checkbox" name="trustEnforce">
+          强制校验框架自更新的签名
+          <span class="beta-tag" title="签名文件刚铺开，还没经过一轮完整发版验证">Beta</span>
+          <span class="hint">默认关闭</span>
+        </label>
+        <div class="hint" id="trustHint">
+          开启后，面板里「更新框架」会检查 Release 里的 SHA256SUMS 签名，签名不符或缺失时拒绝更新。
+          只影响框架自身升级；<b>插件市场不再做签名校验</b>，插件照常安装（下载内容仍校验 sha256）。
+          需要框架内置信任公钥——没内置时这个开关不起作用。
+        </div>
+        <div class="hint">
+          <b>Beta：</b>签名流程还没跟着一次正式发版走完，现在打开可能让自更新被误拒。
+          <b>建议先保持关闭</b>，等发版验证过一轮再考虑。
+        </div>
+      </div>
+
+    </form>
+
+    <!--
+      实例锁：同一个 AppID 只允许一个进程连网关。
+      平时不用看，出现「已有实例在运行」时才来这里。
+      放在 form 外面：这里的按钮不能触发「保存配置」。
+    -->
+    <div class="box">
+      <div class="box-hd">
+        <h3>实例锁</h3>
+        <div class="plugin-tools">
+          <button class="btn small" type="button" id="btnRefreshInstances">刷新</button>
+        </div>
+      </div>
+      <div class="hint">
+        每个机器人被哪个进程（PID）占着。机器人已经退出了却还提示「已有实例在运行」时，
+        把那条「已退出」的记录清掉就行——不需要自己去翻文件。
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>AppID</th><th>PID</th><th>状态</th><th>登记时间</th><th></th></tr></thead>
+          <tbody id="instancesBody"><tr><td colspan="5" class="empty">读取中…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="hint" id="instancesFoot"></div>
+    </div>
+  </section>
+
+  <!-- 统计 -->
+  <section id="tab-stats" class="panel">
+    <div class="box">
+      <div class="box-hd">
+        <h3>消息统计</h3>
+        <div class="plugin-tools">
+          <select id="statsDays" class="mini-select" aria-label="统计范围">
+            <option value="7">最近 7 天</option>
+            <option value="14">最近 14 天</option>
+            <option value="30">最近 30 天</option>
+          </select>
+          <button class="btn small" id="btnRefreshStats">刷新</button>
+          <button class="btn small" id="btnExportStats" title="导出汇总 CSV（不含消息正文）">导出</button>
+        </div>
+      </div>
+      <div id="statsUnavailable" class="empty" hidden></div>
+      <div class="cards" id="statsCards"></div>
+      <div class="stat-chart" id="statsChart"></div>
+      <div class="hint" id="statsFoot"></div>
+    </div>
+
+    <div class="row">
+      <div class="box grow">
+        <div class="box-hd">
+          <h3>命令排行</h3>
+          <span class="hint">按调用次数</span>
+        </div>
+        <div id="statsTopCommands" class="stat-list"></div>
+      </div>
+      <div class="box grow">
+        <div class="box-hd">
+          <h3>会话排行</h3>
+          <span class="hint">按消息数</span>
+        </div>
+        <div id="statsTopChats" class="stat-list"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 插件 -->
+  <section id="tab-plugins" class="panel">
+    <div class="box">
+      <div class="box-hd">
+        <h3>已安装插件</h3>
+        <div class="plugin-tools">
+          <span class="hint">往 plugins/ 里放了新插件，点「刷新」即可加载，不用重启</span>
+          <button class="btn small" id="btnRescanPlugins">刷新</button>
+          <button class="btn small" id="btnLoadMarket">插件市场</button>
+        </div>
+      </div>
+      <div class="upd-tip" id="pluginUpdateTip"></div>
+      <div id="pluginList" class="plugin-list"></div>
+    </div>
+
+    <div class="box" id="marketBox" hidden>
+      <div class="box-hd">
+        <h3>插件市场</h3>
+        <div class="plugin-tools">
+          <span class="hint" id="marketMeta">加载中…</span>
+          <button class="btn small" id="btnRefreshMarket">重新获取</button>
+        </div>
+      </div>
+
+      <!-- 下载源：国内直连 GitHub 经常超时，这里可以换镜像 -->
+      <div class="mirror-bar">
+        <span class="hint">下载源</span>
+        <select id="mirrorSelect" class="mini-select" aria-label="下载源"></select>
+        <input
+          id="mirrorCustom"
+          class="mini-input"
+          placeholder="自定义前缀，如 https://gh.example/"
+          hidden
+        />
+        <input
+          id="mirrorGiteeToken"
+          class="mini-input"
+          type="password"
+          placeholder="Gitee 私人令牌（选填，留空走匿名）"
+          hidden
+        />
+        <button class="btn small" id="btnMirrorTest" title="并发测一遍，按你这边实际网络选">测速</button>
+        <span class="hint" id="mirrorTip"></span>
+
+        <!--
+          npm 源：装插件依赖 / 外接依赖（ws / silk-wasm / ffmpeg）时用。
+          和上面的「下载源」是两回事——那个管 GitHub 地址，这个管 npm registry。
+          留空 = 跟随系统（npm config set 过的值 / ~/.npmrc），不覆盖用户自己的设置。
+        -->
+        <span class="hint">npm 源</span>
+        <select id="npmRegistrySelect" class="mini-select" aria-label="npm 源">
+          <option value="">跟随系统</option>
+          <option value="npmmirror">npmmirror 镜像</option>
+          <option value="official">npm 官方源</option>
+          <option value="custom">自定义</option>
+        </select>
+        <input
+          id="npmRegistryCustom"
+          class="mini-input"
+          placeholder="https://registry.example.com"
+          aria-label="npm 源地址"
+          hidden
+        />
+
+        <!--
+          代理。Node 的 fetch 既不读系统代理也不读 HTTPS_PROXY，所以下载默认是
+          「直连」——浏览器能打开 GitHub、这里却报连不上，就是这一层没接上。
+        -->
+        <span class="hint">代理</span>
+        <select id="proxySelect" class="mini-select" aria-label="代理">
+          <option value="auto">自动（跟随系统）</option>
+          <option value="off">直连（不用代理）</option>
+          <option value="custom">手动填写</option>
+        </select>
+        <input
+          id="proxyCustom"
+          class="mini-input"
+          placeholder="http://127.0.0.1:7890"
+          aria-label="代理地址"
+          hidden
+        />
+        <span class="hint" id="proxyTip"></span>
+      </div>
+
+      <!-- 插件一多就得能找 -->
+      <div class="market-filter">
+        <input id="marketSearch" class="mini-input" placeholder="搜索插件名 / 描述 / 标签" />
+        <select id="marketCat" class="mini-select" aria-label="分类"></select>
+      </div>
+
+      <div id="marketList" class="plugin-list"></div>
+    </div>
+  </section>
+
+  <!-- 事件 -->
+  <section id="tab-events" class="panel">
+    <div class="box">
+      <div class="box-hd">
+        <h3>事件订阅与接收</h3>
+        <span class="hint">
+          官方事件全部可接收并转交插件。灰掉的是当前 intents 没订阅，
+          去「配置 → 事件订阅」勾上才会推送
+        </span>
+      </div>
+      <div id="eventSummary" class="event-summary"></div>
+      <div class="event-legend">
+        <span><b class="ev-dot on"></b>已订阅</span>
+        <span><b class="ev-dot off"></b>未订阅</span>
+        <span><b class="ev-dot hit"></b>收到过</span>
+      </div>
+      <div id="eventGroups" class="event-groups"></div>
+    </div>
+  </section>
+
+  <!-- 投递账本 -->
+  <section id="tab-delivery" class="panel">
+    <div class="box">
+      <div class="box-hd">
+        <h3>投递账本</h3>
+        <span class="hint">带幂等键的消息发没发出去，这里查得到</span>
+      </div>
+      <ul class="tips">
+        <li><b>已发送</b>确认送达；<b>审核中</b>是主动消息进了审核——既不是成功也不是失败，
+          等审核事件回来才会落定</li>
+        <li><b>结果未知</b>：超时或进程崩了，我们<b>不知道服务端收没收到</b>。
+          这种<b>不会自动重发</b>——宁可让人核对一次，也不重复打扰</li>
+        <li><b>失败</b>：确定没发出去（离线 / 超窗 / 额度 / 限流），可以重试</li>
+        <li>只有<b>带幂等键</b>的发送才记账（`qq_send` 那类「一次调用 = 一段话」的）。
+          插件直接回一句话不记账，靠 `msg_seq` 天然去重</li>
+      </ul>
+      <div class="cards" id="deliveryStats"></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>时间</th><th>会话</th><th>状态</th><th>摘要</th><th class="num">重试</th><th>原因码</th></tr>
+          </thead>
+          <tbody id="deliveryBody"><tr><td colspan="6" class="empty">暂无数据</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- 事件账本 -->
+  <section id="tab-ledger" class="panel">
+    <div class="box">
+      <div class="box-hd">
+        <h3>事件账本</h3>
+        <span class="hint">每条消息的原文都在这——她翻记录、查上下文都靠它</span>
+      </div>
+      <ul class="tips">
+        <li>默认<b>永久保留</b>。全文落库意味着这台机器会一直留着群聊原文（含别人的私聊）——
+          要控制占用就改保留期，或者手动删。</li>
+        <li><b>删除不可逆</b>，但会先让你核对条数。删完文件<b>不会立刻变小</b>，
+          点「压缩数据库」才会（压缩在下次清理时做，约每小时一次，期间不影响收发）。</li>
+        <li><b>导出 JSON 是给导回用的</b>：一行一条、不带转义，导回去重复的会自动跳过。
+          导出 CSV 是给人看的，Excel 能直接打开，但正文里的换行会让它没法原样导回。</li>
+      </ul>
+      <div class="cards" id="ledgerStats"></div>
+      <div class="btn-row" style="align-items:center">
+        <label for="ledgerRetention" class="hint" style="margin:0">保留</label>
+        <select id="ledgerRetention" style="width:150px">
+          <option value="0">永久</option>
+          <option value="7">7 天</option>
+          <option value="30">30 天</option>
+          <option value="custom">自定义…</option>
+        </select>
+        <input id="ledgerRetentionDays" type="number" min="1" max="36500" placeholder="天数"
+               style="width:110px;display:none">
+        <button id="ledgerRetentionSave" class="btn small">保存</button>
+        <span style="flex:1"></span>
+        <button id="ledgerExport" class="btn small">导出 CSV</button>
+        <button id="ledgerExportJson" class="btn small">导出 JSON</button>
+      </div>
+      <div class="btn-row">
+        <button id="ledgerImport" class="btn small">导入…</button>
+        <input id="ledgerImportFile" type="file" accept=".jsonl,.json,application/x-ndjson" hidden>
+        <button id="ledgerVacuum" class="btn small">压缩数据库</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>会话</th><th>类型</th><th class="num">条数</th><th>时间范围</th><th>操作</th></tr>
+          </thead>
+          <tbody id="ledgerChats"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
+        </table>
+      </div>
+      <div id="ledgerRowsBox" hidden style="margin-top:14px">
+        <div class="box-hd">
+          <h3 id="ledgerRowsTitle">记录</h3>
+          <span class="hint" id="ledgerRowsHint"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>时间</th><th>发言人</th><th>内容</th></tr></thead>
+            <tbody id="ledgerRows"></tbody>
+          </table>
+        </div>
+        <div class="btn-row">
+          <button id="ledgerMore" class="btn small">下一页</button>
+        </div>
+        <!-- 删会话记录不可逆，单独成块并写清后果，别和「下一页」混排 -->
+        <div class="danger-zone">
+          <div class="danger-hd">危险操作</div>
+          <div class="danger-desc">删掉这个会话的全部记录，不可撤销，导出过的才有备份。</div>
+          <button id="ledgerDelChat" class="btn small btn-danger">删掉这个会话的记录</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="box" style="margin-top:14px">
+      <div class="box-hd">
+        <h3>openid 变更</h3>
+        <span class="hint">换 AppID / 重新绑定之后，把旧 openid 下的记录改到新的</span>
+      </div>
+      <ul class="tips">
+        <li>一个号码可能同时挂着<b>多条</b> openid——绑定是<b>有意不撤销旧的</b>
+          （旧 openid 是读旧记忆唯一的线索）。所以这里要你手动指定「从哪条改到哪条」，
+          代码猜不出来。</li>
+        <li>只改「会话」和「发送者」两列；去重键不动（老消息本来也不会重推）。</li>
+        <li>openid 从「身份」页复制：那里每个号码下面列着它的全部 openid 和最后出现时间。</li>
+      </ul>
+      <div class="btn-row" style="align-items:center">
+        <input id="ledgerRemapFrom" placeholder="旧 openid" style="width:250px">
+        <span class="hint" style="margin:0">→</span>
+        <input id="ledgerRemapTo" placeholder="新 openid" style="width:250px">
+        <select id="ledgerRemapScope" style="width:130px">
+          <option value="both">会话 + 发送者</option>
+          <option value="chat">只改会话</option>
+          <option value="user">只改发送者</option>
+        </select>
+        <button id="ledgerRemapGo" class="btn small">预览并执行</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 查询页：跨会话检索账本。词法参考 dsh-roost/journal 与 clickclack：多词全中优先，空了自动放宽 -->
+  <section id="tab-search" class="panel" hidden>
+    <div class="btn-row" style="margin:0 0 12px">
+      <button class="btn small active" id="srchModeMsg">消息</button>
+      <button class="btn small" id="srchModeWho">人物</button>
+      <span class="hint" style="margin-left:6px">消息：查聊天内容 · 人物：给昵称 / QQ号 / openid 反查</span>
+    </div>
+    <div class="box" id="srchMsgBox">
+      <div class="box-hd">
+        <h3>消息查询</h3>
+        <span class="hint">跨会话查账本 · 关键词空格分隔（默认全部命中，没有结果时自动放宽为任一）</span>
+      </div>
+      <div class="form-inline srch-form">
+        <input id="srchQ" placeholder="关键词，空格分隔多个词" autocomplete="off" />
+        <input id="srchPerson" placeholder="发言人：昵称 / openid / QQ 号" autocomplete="off" />
+        <select id="srchKind">
+          <option value="">全部类型</option>
+          <option value="group">群聊</option>
+          <option value="c2c">私聊</option>
+        </select>
+        <select id="srchDays">
+          <option value="">全部时间</option>
+          <option value="1">近 1 天</option>
+          <option value="7">近 7 天</option>
+          <option value="30">近 30 天</option>
+          <option value="90">近 90 天</option>
+        </select>
+        <button id="btnSearch" class="btn">查询</button>
+        <button id="btnSearchReset" class="btn btn-ghost">清空</button>
+      </div>
+      <div class="hint" id="srchHint" style="margin-top:10px">输入条件后回车。结果按时间倒序，命中词会高亮。</div>
+      <div class="table-wrap" style="margin-top:10px">
+        <table>
+          <thead><tr><th>时间</th><th>会话</th><th>发言人</th><th>内容</th></tr></thead>
+          <tbody id="srchRows"><tr><td colspan="4" class="empty">还没有查询</td></tr></tbody>
+        </table>
+      </div>
+      <div class="btn-row">
+        <button id="srchMore" class="btn small" disabled>下一页</button>
+        <span class="hint" id="srchMoreHint"></span>
+      </div>
+    </div>
+
+    <!-- 人物反查：昵称 / 群名片 / QQ 号 / openid 任一 → 这个人的全部可认字段 -->
+    <div class="box" id="srchWhoBox" hidden>
+      <div class="box-hd">
+        <h3>人物反查</h3>
+        <span class="hint">给昵称、群名片、QQ 号或 openid，查出这个人的其它字段（头像只作为结果，不能当条件）</span>
+      </div>
+      <div class="form-inline srch-form">
+        <input id="whoQ" placeholder="昵称 / 群名片 / QQ 号 / openid" autocomplete="off" />
+        <button id="btnWho" class="btn">查人</button>
+      </div>
+      <div class="hint" id="whoHint" style="margin-top:10px">输入后回车。openid 右侧可一键复制。</div>
+      <div class="table-wrap" style="margin-top:10px">
+        <table>
+          <thead><tr><th>头像</th><th>昵称 / 群名片</th><th>QQ 号</th><th>openid</th><th style="width:88px">操作</th></tr></thead>
+          <tbody id="whoRows"><tr><td colspan="5" class="empty">还没有查询</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- 外接页：上=自有宿主协议（主推），下=OneBot v11（第三方客户端） -->
+  <section id="tab-onebot" class="panel" hidden>
+    <div class="box">
+      <div class="box-hd">
+        <h3>宿主协议 roost-host/1</h3>
+        <span class="hint">框架自己的协议 · 主推</span>
+      </div>
+      <ul class="tips">
+        <li><b>不翻译</b>：事件直接用框架原生结构，openid / 身份 / 群号 / 附件 / @ 原样给，
+          没有 OneBot 的合成号，也没有一长串「不支持」</li>
+        <li><b>全能力</b>：方法表能调官方接口全部方法（<code>qq.call</code>，按读/写/危险分级授权）、
+          启停与配置插件、调用插件注册的工具、更改框架设置、查暂停闸与消息账本，
+          还能跨进程传图/文件/语音、管理官方 Markdown 素材图床</li>
+        <li>客户端连 <code>ws://host:port/</code>；也能用 <code>POST /rpc</code> 直接调方法、
+          <code>GET /events</code> 收 SSE 事件流，<code>GET /health</code> 探活</li>
+        <li>依赖<b>按需安装</b>，和下面的 OneBot 共用同一份，装一次两边都能用</li>
+      </ul>
+    </div>
+
+    <div class="box">
+      <div class="box-hd">
+        <h3>宿主协议设置</h3>
+        <span class="hint" id="hostStateHint">未开启</span>
+      </div>
+      <div class="form-inline">
+        <label class="switch-slider">
+          <input type="checkbox" id="hostEnabled">
+          <span class="track"></span>
+          <span class="label">开启宿主协议（<b>并行</b>：只旁路推事件，不影响插件回话）</span>
+        </label>
+      </div>
+      <div class="form-inline" style="margin-top:12px">
+        <input id="hostListenHost" placeholder="127.0.0.1" style="width:150px">
+        <input id="hostPort" inputmode="numeric" placeholder="端口（留空=自动 6800+）" style="width:190px">
+        <input id="hostMaxConnections" inputmode="numeric" placeholder="最大连接数" style="width:130px">
+      </div>
+      <div class="form-inline" style="margin-top:12px">
+        <input id="hostToken" type="password" placeholder="access token（留空=不改）" style="width:220px">
+        <button class="btn small" id="btnHostGenToken">生成</button>
+        <button class="btn small" id="btnHostCopyToken" hidden>复制</button>
+        <button class="btn small" id="btnHostClearToken">清除</button>
+      </div>
+      <div class="form-inline" style="margin-top:12px">
+        <label class="hint" style="display:flex;flex-direction:row;align-items:center;gap:6px">
+          <input type="checkbox" id="hostScopeMessage" style="flex:0 0 auto;min-width:0;width:auto"> 允许发消息
+        </label>
+        <label class="hint" style="display:flex;flex-direction:row;align-items:center;gap:6px">
+          <input type="checkbox" id="hostScopeManage" style="flex:0 0 auto;min-width:0;width:auto"> 申请管理权限
+        </label>
+        <label class="hint" style="display:flex;flex-direction:row;align-items:center;gap:6px">
+          <input type="checkbox" id="hostForwardAll" style="flex:0 0 auto;min-width:0;width:auto"> 推送全量群消息
+        </label>
+        <label class="hint" style="display:flex;flex-direction:row;align-items:center;gap:6px">
+          <input type="checkbox" id="hostAllowRemote" style="flex:0 0 auto;min-width:0;width:auto"> 允许非回环监听
+        </label>
+      </div>
+      <div class="form-inline" style="margin-top:12px">
+        <label class="hint" style="display:flex;flex-direction:row;align-items:center;gap:6px">
+          <input type="checkbox" id="hostAllowManage" style="flex:0 0 auto;min-width:0;width:auto">
+          <b style="color:var(--err)">打开管理总闸</b>
+        </label>
+        <span class="hint">不开时，改配置 / 启停插件 / 写级与危险级官方接口一律拒绝；只读接口仍可用，token 泄漏也不等于框架被接管</span>
+      </div>
+      <div class="form-inline" style="margin-top:12px">
+        <button class="btn primary" id="btnHostSave">保存并应用</button>
+        <button class="btn small" id="btnHostReload">刷新状态</button>
+      </div>
+      <div class="hint" id="hostConnHint" style="margin-top:8px"></div>
+    </div>
+
+    <div class="box">
+      <div class="box-hd">
+        <h3>宿主协议方法表</h3>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="hint" id="hostCapHint">—</span>
+          <button class="btn small" id="btnHostCapToggle">展开</button>
+        </div>
+      </div>
+      <div class="table-wrap" id="hostCapWrap" style="margin-top:10px" hidden>
+        <table>
+          <thead><tr><th>方法</th><th>所需权限</th><th>说明</th></tr></thead>
+          <tbody id="hostCapBody"><tr><td colspan="3" class="empty">正在读取…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 两条出口共用一份 ws：这张卡放在中间，谁都不用重复装 -->
+    <div class="box">
+      <div class="box-hd">
+        <h3>依赖（两条出口共用）</h3>
+        <div class="btn-row" style="margin:0;align-items:center">
+          <!--
+            安装源：ws / silk-wasm / ffmpeg 都是从 npm 拉的。
+            和「插件」页那个 npm 源是**同一个配置**（两处联动），放这里是为了
+            让「装不上 → 换个源 → 再装一次」不用来回切页找开关。
+            留空 = 跟随系统（npm config set / ~/.npmrc），不覆盖用户自己的设置。
+          -->
+          <span class="hint">安装源</span>
+          <select id="onebotNpmRegistry" class="mini-select" aria-label="npm 安装源">
+            <option value="">跟随系统</option>
+            <option value="npmmirror">npmmirror 镜像</option>
+            <option value="official">npm 官方源</option>
+            <option value="custom">自定义</option>
+          </select>
+          <input
+            id="onebotNpmRegistryCustom"
+            class="mini-input"
+            placeholder="https://registry.example.com"
+            aria-label="npm 安装源地址"
+            hidden
+          />
+          <!-- 只验不装：真 require 一次、真跑一次 ffmpeg -version -->
+          <button class="btn small" id="btnOnebotCheckDeps">手动检查</button>
+          <button class="btn small" id="btnOnebotReloadDeps">刷新</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>包</th><th>用途</th><th>状态</th><th>版本</th><th>操作</th></tr>
+          </thead>
+          <tbody id="onebotDepsBody">
+            <tr><td colspan="5" class="empty">正在读取…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="hint" id="onebotDepsHint" style="margin-top:8px"></div>
+      <!-- 「手动检查」的结果单独一块：不跟着每次刷新重绘，用户能对照着看 -->
+      <div class="hint" id="onebotDepsCheck" style="margin-top:6px" hidden></div>
+    </div>
+
+    <div class="box" style="border-style:dashed">
+      <div class="box-hd">
+        <h3>下面这一段是 OneBot v11 兼容层</h3>
+        <span class="hint">给 aurobot / NoneBot 这类第三方客户端；不是主推通道</span>
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="box-hd">
+        <h3>OneBot v11 兼容</h3>
+        <span class="hint">对外说 OneBot，后端仍然是官方接口</span>
+      </div>
+      <ul class="tips">
+        <li>开启后 aurobot / NoneBot 这类程序能直接连上来，<b>不再需要 SnowLuma、NapCat</b>
+          这种登录小号的网关</li>
+        <li>官方接口没有的能力（空间、改资料、拍一拍、历史消息、好友列表）<b>不会假装有</b>，
+          会按能力表如实拒绝，而不是静默失败</li>
+        <li>依赖<b>按需安装</b>：点按钮才装，装到 <code>data/deps/ext/</code>，
+          不进仓库、不动系统环境；<b>第一次发语音时会自动补装 silk-wasm</b>，
+          需要转码的语音（mp3/ogg）还会补装 ffmpeg（约 62MB，只有真遇到才会装），
+          装好这一条就能发</li>
+      </ul>
+    </div>
+
+    <div class="box">
+      <div class="box-hd">
+        <h3>兼容模式</h3>
+        <span class="hint" id="onebotStateHint">未开启</span>
+      </div>
+      <div class="form-inline">
+        <label class="switch-slider">
+          <input type="checkbox" id="onebotEnabled">
+          <span class="track"></span>
+          <span class="label">开启 OneBot 兼容（<b>独占</b>：本机器人的插件不再回话，由客户端全权收发）</span>
+        </label>
+      </div>
+      <div class="form-inline" style="margin-top:12px">
+        <input id="onebotHost" placeholder="127.0.0.1" style="width:150px">
+        <input id="onebotPort" inputmode="numeric" placeholder="端口（留空=自动）" style="width:150px">
+        <input id="onebotSelfUin" placeholder="机器人 QQ 号" style="width:150px">
+      </div>
+      <div class="form-inline" style="margin-top:12px">
+        <input id="onebotToken" type="password" placeholder="access token（留空=不改）" style="width:220px">
+        <button class="btn small" id="btnOnebotGenToken">生成</button>
+        <button class="btn small" id="btnOnebotCopyToken" hidden>复制</button>
+        <button class="btn small" id="btnOnebotClearToken">清除</button>
+        <select id="onebotMode" class="mini-select">
+          <option value="exclusive">独占</option>
+          <option value="parallel">并行（会双回）</option>
+          <option value="mirror">只观测</option>
+        </select>
+      </div>
+      <div class="form-inline" style="margin-top:12px">
+        <button class="btn primary" id="btnOnebotSave">保存并应用</button>
+        <button class="btn small" id="btnOnebotReload">刷新状态</button>
+        <button class="btn small" id="btnOnebotPinPort" hidden>固定为当前端口</button>
+      </div>
+      <div class="hint" id="onebotConnHint" style="margin-top:8px"></div>
+    </div>
+
+    <div class="box">
+      <div class="box-hd">
+        <h3>OneBot 动作能力</h3>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="hint" id="onebotCapHint">—</span>
+          <button class="btn small" id="btnOnebotCapToggle">展开</button>
+        </div>
+      </div>
+      <div class="table-wrap" id="onebotCapWrap" style="margin-top:10px" hidden>
+        <table>
+          <thead>
+            <tr><th>动作</th><th>状态</th><th>说明</th></tr>
+          </thead>
+          <tbody id="onebotCapBody">
+            <tr><td colspan="3" class="empty">正在读取…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-reach" class="panel">
+    <div class="box">
+      <div class="box-hd">
+        <h3>能不能主动找到人</h3>
+        <span class="hint">两道门：先得是好友，还得开着主动推送</span>
+      </div>
+      <ul class="tips">
+        <li><b>好友</b>是用户把机器人加为好友；<b>主动推送</b>是用户在机器人资料卡里单独开的开关——
+          <b>有好友也可能被关掉</b>，关了就发不出去</li>
+        <li>官方<b>没有查询好友的接口</b>，这里的值全部来自事件推送。机器人启动之前就存在的老关系拿不到事件，
+          会一直是「未知」</li>
+        <li><b>未知不等于不可达</b>——未知会照常尝试发送，失败了才记下来。把未知当成「不能」，
+          所有老用户就都被静音了</li>
+      </ul>
+    </div>
+
+    <div class="box">
+      <div class="box-hd">
+        <h3>单聊</h3>
+        <div class="btn-row" style="margin:0">
+          <button class="btn small" id="btnReloadReach">刷新</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>用户</th>
+              <th>好友</th>
+              <th>主动推送</th>
+              <th>结论</th>
+              <th>依据</th>
+              <th>更新</th>
+            </tr>
+          </thead>
+          <tbody id="reachUserBody">
+            <tr><td colspan="6" class="empty">还没有记录。收到私聊消息、或被加好友之后才会出现。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="hint" style="margin-top:8px">
+        每行的两个下拉框就是<b>人工标注</b>，改完立刻生效并覆盖事件推断的值；选「未知」等于撤销标注。
+      </div>
+      <div class="form-inline" style="margin-top:12px">
+        <input id="reachOpenidInput" placeholder="openid（列表里没有的人可以直接登记）">
+        <select id="reachFriendSel" class="mini-select">
+          <option value="">好友：未知</option>
+          <option value="1">好友：是</option>
+          <option value="0">好友：否</option>
+        </select>
+        <select id="reachPushSel" class="mini-select">
+          <option value="">推送：未知</option>
+          <option value="1">推送：开</option>
+          <option value="0">推送：关</option>
+        </select>
+        <button class="btn primary" id="btnReachSave">登记</button>
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="box-hd">
+        <h3>群主动推送</h3>
+        <span class="hint">群管理员可以整个群关掉机器人的主动消息</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>群</th>
+              <th>主动推送</th>
+              <th>操作人</th>
+              <th>依据</th>
+              <th>更新</th>
+            </tr>
+          </thead>
+          <tbody id="reachGroupBody">
+            <tr><td colspan="5" class="empty">还没有记录。群管理员改过推送开关之后才会出现。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="hint" style="margin-top:8px">
+        没记录过的群按「未知」处理，照常尝试推送。
+      </div>
+    </div>
+  </section>
+
+  <!-- 群组 -->
+  <section id="tab-groups" class="panel">
+    <div class="box">
+      <div class="box-hd">
+        <h3>机器人主人</h3>
+        <span class="hint">主人可以使用全部管理命令</span>
+      </div>
+      <div id="ownerChips" class="chips"></div>
+      <div class="form-inline" style="margin-top:12px">
+        <input id="ownerInput" placeholder="填 openid，回车添加">
+        <button class="btn primary" id="btnAddOwner">添加</button>
+      </div>
+      <div class="hint" style="margin-top:8px">
+        不知道 openid？在群里 @机器人 发 /whoami，或用上面的「活跃会话」看。
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="box-hd"><h3>入群后自动授予的权限</h3></div>
+      <ul class="tips">
+        <li><b>邀请人</b> → 该群管理员（1 级），只影响这一个群</li>
+        <li><b>群主</b> → 该群管理员（1 级）。群主发过言才能识别（报文里 member_role=owner）</li>
+        <li>两者都<b>不会</b>获得全局主人或全局管理员</li>
+      </ul>
+      <div class="hint" style="margin-top:8px">
+        要调整或撤销，去「权限」页改对应的 <code>group:xxx</code> 作用域。
+        全局主人只能在 config.json 的 owners 里配，或首次启动时用认领码认领。
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="box-hd">
+        <h3>手动登记群</h3>
+        <span class="hint">官方没有「列出机器人所在的群」的接口，群只能靠事件发现</span>
+      </div>
+      <ul class="tips">
+        <li>机器人被拉进群、或在群里被 @ 过一次，下面列表里就会自动出现</li>
+        <li><b>一直不出现</b>：多半是没开「群聊与私聊」intent——去概览页点「检查」能看到</li>
+        <li>已经知道群 openid 的话，可以手动登记，方便提前配 <code>group:xxx</code> 权限</li>
+      </ul>
+      <div class="form-inline" style="margin-top:12px">
+        <input id="groupOpenidInput" placeholder="群 openid" />
+        <input id="groupNoteInput" placeholder="备注（可选）" style="width:200px" />
+        <button class="btn primary" id="btnAddGroup">登记</button>
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="box-hd">
+        <h3>群列表</h3>
+        <div class="btn-row" style="margin:0">
+          <button class="btn small" id="btnReloadGroups">刷新</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>群 openid</th>
+              <th>邀请者</th>
+              <th>群主（识别）</th>
+              <th>状态</th>
+              <th>最后活跃</th>
+              <th class="num">操作</th>
+            </tr>
+          </thead>
+          <tbody id="groupBody">
+            <tr><td colspan="6" class="empty">还没有群。把机器人拉进群后这里会自动出现。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="hint" style="margin-top:8px">
+        这里只显示群档案。谁能在这个群做什么，统一在「权限」页按
+        <code>group:&lt;群openid&gt;</code> 作用域配置。
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="hint" style="margin-bottom:8px">
+        <b>看不到你的群？</b>官方没有「查询机器人所在群列表」的接口，
+        群只能靠事件被动发现。请按顺序排查：
+      </div>
+      <ol class="tips">
+        <li>在群里 <b>@机器人</b> 发一句话（不 @ 不会推送消息）</li>
+        <li>确认这个群在开放平台「沙箱配置」里（开发中的机器人只收沙箱群消息）</li>
+        <li>确认机器人是在它<b>运行期间</b>被拉进群的——离线时入群的事件会丢</li>
+        <li>看上面「事件统计」：全是 0 说明平台一条都没推过来</li>
+      </ol>
+      <div class="form-inline" style="margin-top:12px">
+        <input id="groupInput" placeholder="已知群 openid 时可直接登记">
+        <button class="btn" id="btnAddGroupManual">手动登记</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 权限 -->
+  <section id="tab-roles" class="panel">
+    <div class="box">
+      <div class="box-hd">
+        <h3>权限等级</h3>
+        <span class="hint">作用域决定「在哪管」，等级决定「能管谁」；数字越小权限越高，只能授予数字更大的等级</span>
+      </div>
+      <div class="perm-legend">
+        <span class="hint" style="margin-right:6px">数字越小权限越高：</span>
+        <span><b>0</b> 主人（config.json）</span>
+        <span><b>1</b> 管理员</span>
+        <span><b>2</b> 群管</span>
+        <span><b>3</b> 助手</span>
+        <span><b>4-9</b> 框架预留</span>
+        <span><b>10+</b> 插件区</span>
+        <span><b>9999</b> 无权限</span>
+      </div>
+      <div class="perm-legend" style="margin-top:6px">
+        <span><b>global</b> 全局</span>
+        <span><b>group:xxx</b> 某个群</span>
+        <span><b>channel:xxx</b> 频道</span>
+        <span><b>user:xxx</b> 私聊</span>
+        <span><b>feature:插件</b> 功能</span>
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="box-hd"><h3>添加 / 修改</h3></div>
+      <div class="form-inline">
+        <input id="roleScope" list="scopeList" placeholder="作用域，如 group:xxx / global">
+        <datalist id="scopeList"></datalist>
+        <input id="roleOpenid" placeholder="openid">
+        <input id="roleLevel" type="number" min="1" max="998" value="2"
+               style="width:120px" title="数字越小权限越高">
+        <span class="hint">等级（1 管理员 / 2 群管 / 3 助手 / 10+ 插件区，最大 998）</span>
+        <button class="btn primary" id="btnAddRole">保存</button>
+      </div>
+      <div class="hint" style="margin-top:8px">
+        面板操作视为本机管理员行为，不受等级限制；聊天里请用 /admin set。
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="box-hd">
+        <h3>最近说过话的人</h3>
+        <span class="hint">点一下自动填好 openid 和作用域，不用去日志里翻</span>
+        <button class="btn small" id="btnReloadPeople">刷新</button>
+      </div>
+      <div id="peopleList" class="people-list">
+        <div class="empty">还没有收到消息。让要授权的人在群里说句话，这里就会出现。</div>
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="box-hd">
+        <h3>已授权列表</h3>
+        <button class="btn small" id="btnReloadRoles">刷新</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>作用域</th><th>openid</th><th>等级</th><th class="num">操作</th></tr></thead>
+          <tbody id="roleBody"><tr><td colspan="4" class="empty">还没有配置权限</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- 日志 -->
+  <section id="tab-logs" class="panel">
+    <div class="box">
+      <div class="box-hd">
+        <h3>实时日志</h3>
+        <span class="hint">按来源和关键词筛选，不影响实时接收</span>
+      </div>
+      <div class="log-toolbar">
+          <input id="logSearch" class="log-search" placeholder="搜索日志" autocomplete="off">
+          <select id="logSourceFilter">
+            <option value="all">全部来源</option>
+            <option value="core">框架</option>
+            <option value="net">网关 / 接口</option>
+            <option value="plugin">插件</option>
+          </select>
+          <select id="logLevelFilter">
+            <option value="debug">全部</option>
+            <option value="info">info 及以上</option>
+            <option value="warn">warn 及以上</option>
+            <option value="error">仅 error</option>
+          </select>
+          <label class="switch small"><input type="checkbox" id="autoScroll" checked> 自动滚动</label>
+          <button class="btn small" id="btnClearLog">清屏</button>
+      </div>
+      <div class="log-legend">
+        <span><b class="lg-dot in"></b>收到消息</span>
+        <span><b class="lg-dot ok"></b>成功 / 已就绪</span>
+        <span><b class="lg-dot err"></b>失败 / 错误</span>
+        <span><b class="lg-dot cmd"></b>指令</span>
+        <span class="lg-sep"></span>
+        <span><b class="lg-chip info">INFO</b>普通</span>
+        <span><b class="lg-chip warn">WARN</b>警告</span>
+        <span><b class="lg-chip error">ERROR</b>错误</span>
+        <span class="lg-sep"></span>
+        <span class="hint">模块标签按来源上色：gateway / api / core / plugins / roles …</span>
+      </div>
+      <div id="logView" class="log-view"></div>
+    </div>
+  </section>
+</main>
+
+<!-- 通用确认弹窗 -->
+<div class="modal-mask" id="modalMask" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <h3 class="modal-title" id="modalTitle">确认</h3>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="modalCancel">取消</button>
+      <button class="btn danger" id="modalOk">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- 分群插件开关：这个群能用哪些插件 -->
+<div class="modal-mask" id="gplugMask" hidden>
+  <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="gplugTitle">
+    <h3 class="modal-title" id="gplugTitle">分群插件开关</h3>
+    <div class="hint" id="gplugSub" style="margin-bottom:10px"></div>
+
+    <div class="gplug-mode">
+      <label class="gplug-radio">
+        <input type="radio" name="gplugMode" value="global" checked>
+        <span>跟随全局<em id="gplugGlobalHint"></em></span>
+      </label>
+      <label class="gplug-radio">
+        <input type="radio" name="gplugMode" value="custom">
+        <span>本群单独配置</span>
+      </label>
+    </div>
+
+    <div class="gplug-list" id="gplugList" hidden></div>
+
+    <div class="modal-actions">
+      <button class="btn" id="gplugCancel">取消</button>
+      <button class="btn primary" id="gplugSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新建机器人 -->
+<div class="modal-mask" id="newBotMask" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="newBotTitle">
+    <h3 class="modal-title" id="newBotTitle">新建机器人</h3>
+
+    <!-- 扫码一键创建：手机 QQ 扫一下，AppID / AppSecret 自动填好 -->
+    <div class="nb-qr-wrap">
+      <button class="btn primary" id="nbQrStart" type="button">扫码一键创建</button>
+      <i class="nb-qr-hint">推荐：不用去 q.qq.com 手动建机器人</i>
+    </div>
+    <div class="nb-qr" id="nbQr" hidden>
+      <div class="nb-qr-code" id="nbQrCode"></div>
+      <div class="nb-qr-tip" id="nbQrTip"></div>
+    </div>
+
+    <div class="nb-or">或者手动填（已有机器人、或扫码用不了时）</div>
+
+    <div class="bot-form">
+      <label>
+        <span>ID</span>
+        <input id="nbId" placeholder="main-bot，小写字母数字短横线" autocomplete="off">
+        <i>用来做文件夹名，创建后不能改</i>
+      </label>
+      <label>
+        <span>显示名</span>
+        <input id="nbName" placeholder="留空则用 ID" autocomplete="off">
+      </label>
+      <label>
+        <span>AppID</span>
+        <input id="nbAppId" placeholder="q.qq.com 开发设置里的 AppID" autocomplete="off">
+      </label>
+      <label>
+        <span>AppSecret</span>
+        <input id="nbSecret" type="password" placeholder="AppSecret" autocomplete="off">
+      </label>
+      <div class="bot-form-err" id="nbErr" hidden></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="nbCancel">取消</button>
+      <button class="btn primary" id="nbOk">创建并连接</button>
+    </div>
+  </div>
+</div>
+
+<!-- 插件设置：配置 + 玩家数据 -->
+<div class="modal-mask" id="pluginPanelMask" hidden>
+  <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="ppTitle">
+    <h3 class="modal-title" id="ppTitle">插件设置</h3>
+    <div class="pp-tabs">
+      <button type="button" class="pp-tab active" data-pp="config">配置</button>
+      <button type="button" class="pp-tab" data-pp="data">玩家数据</button>
+      <button type="button" class="pp-tab" data-pp="dash">运行数据</button>
+      <button type="button" class="pp-tab" data-pp="groups">分群开关</button>
+    </div>
+    <div id="ppConfig" class="pp-body"></div>
+    <div id="ppData" class="pp-body" hidden></div>
+    <div id="ppDash" class="pp-body" hidden></div>
+    <div id="ppGroups" class="pp-body" hidden></div>
+    <div class="modal-actions">
+      <button class="btn danger act-left" id="ppReset" title="把所有配置项恢复成插件声明的默认值">恢复默认</button>
+      <button class="btn" id="ppClose">关闭</button>
+      <button class="btn primary" id="ppSave">保存配置</button>
+    </div>
+  </div>
+</div>
+
+<script src="/vendor/qrcode.js"></script>
+<script src="/app.js"></script>
+
+</body>
+</html>
