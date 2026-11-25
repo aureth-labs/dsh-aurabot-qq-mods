@@ -1,0 +1,43 @@
+name: catalog
+
+# 模块目录表（modules/README.md）由 npm run catalog 生成，PR 里禁止手改。
+# 合并完新模块后手动跑这个 workflow，它会重新生成目录表并直接开一张 PR；
+# 这样脏活不再落到每个提交者身上，也就不会出现「几十张 PR 抢同一张表」的冲突。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  regen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: 重新生成 modules/README.md
+        run: npm run catalog
+      - name: 有变化就开 PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if git diff --quiet -- modules/README.md; then
+            echo "目录表已是最新"
+            exit 0
+          fi
+          git config user.name  "aurabot-catalog"
+          git config user.email "catalog@users.noreply.github.com"
+          branch="chore/catalog-$(date -u +%Y%m%d%H%M%S)"
+          git checkout -q -b "$branch"
+          git add modules/README.md
+          git commit -q -m "chore(catalog): 重新生成 modules/README.md"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push -q origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "chore(catalog): 重新生成 modules/README.md" \
+            --body "catalog 工作流自动生成：目录表只跟 modules/<id>/ 走，不再让每张 PR 手改（见 ci.yml 里的同名检查）。"
