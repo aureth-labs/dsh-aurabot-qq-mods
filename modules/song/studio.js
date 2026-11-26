@@ -242,7 +242,11 @@ export function listDrives() {
 export function checkRoot(path) {
   const p = String(path || '').trim()
   if (!p) return { ok: true, path: '', message: '', warn: '', freeGB: null }
-  if (!isAbsolute(p) || !/^[A-Za-z]:\\/.test(p.replace(/\//g, '\\'))) return { ok: false, path: p, message: '要写完整路径，比如 D:\\Aurabot\\rvc', warn: '', freeGB: null }
+  // 宿主可能是 Windows 也可能是 Linux/macOS：两种写法的绝对路径都要认。
+  // 只靠 node:path 的 isAbsolute 在 POSIX 上会把 D:\Aurabot\rvc 判成相对路径。
+  const winAbs = /^[A-Za-z]:[\\/]/.test(p)
+  const posixAbs = p.startsWith('/')
+  if (!winAbs && !posixAbs) return { ok: false, path: p, message: '要写完整路径，比如 D:\\Aurabot\\rvc', warn: '', freeGB: null }
   const warn = /[^\x21-\x7e]/.test(p) ? '路径里有中文或空格，个别工具可能出问题，最好换成全英文、不带空格的路径' : ''
   let freeGB = null
   try {
