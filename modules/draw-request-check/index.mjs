@@ -51,9 +51,9 @@ function speakerRows(current) {
     return {uid:header?.[1], direct:Boolean(header?.[2]), text:body.split('（引用')[0].trim()}
   })
 }
-export function spokenLines(current) {
+export function spokenLines(current, requesterId) {
   const rows = speakerRows(current)
-  const direct = new Set(rows.filter(r => r.direct).map(r => r.uid))
+  const direct = requesterId ? new Set([requesterId]) : new Set(rows.filter(r => r.direct).map(r => r.uid))
   return rows.filter(r => !direct.size || direct.has(r.uid)).map(r => r.text).filter(text => /[\p{L}\p{N}\p{S}]/u.test(text))
 }
 // A drawing may depend on several requester messages (e.g. an image followed
@@ -72,7 +72,7 @@ export function parseDecision(text, speakerCount) {
   return {verdict:'DRAW'}
 }
 export async function check(api, chatId, input, signal, drawing) {
-  const speakers = spokenLines(input.current)
+  const speakers = spokenLines(input.current, input.requesterId)
   if (!speakers.length) return 'UNCLEAR'
   const [kind, id] = chatId.split(':')
   const {provider, model, reasoningEffort} = api.core.hub.modelFor({kind, chatId, groupId:kind==='group' ? id : '', userId:kind==='private' ? id : ''}) || {}
@@ -101,7 +101,7 @@ export async function check(api, chatId, input, signal, drawing) {
 }
 
 export default {
-  id:'draw-request-check', name:'画图前核对请求', version:'1.0.4', api:1,
+  id:'draw-request-check', name:'画图前核对请求', version:'1.0.5', api:1,
   setup(api) {
     const lifetime = new AbortController()
     const bySession = new WeakMap()
@@ -130,11 +130,20 @@ export default {
       const key = JSON.stringify(drawing)
       let turn = bySession.get(session)
       if (!turn || turn.id !== input.id) {
-        turn = {id:input.id, decisions:new Map(), followup:[]}
+        const rows = speakerRows(input.current)
+        const direct = new Set(rows.filter(row => row.direct).map(row => row.uid))
+        // Name wakes and replies need not contain a visible @. Reuse the host's
+        // admitted sender rather than detecting wake words a second time.
+        const senders = new Set((api.core.hub.turnSenders?.(session.id) || []).map(String))
+        const admitted = senders.size === 1 ? [...senders][0] : ''
+        const requesterId = direct.size === 1 ? [...direct][0]
+          : !direct.size && admitted && rows.some(row => row.uid === admitted) ? admitted : ''
+        // The requester belongs to this input, even if the host queues more
+        // senders while parallel tools are reviewing it.
+        turn = {id:input.id, requesterId, decisions:new Map(), followup:[]}
         bySession.set(session,turn)
       }
-      const direct = new Set(speakerRows(input.current).filter(row => row.direct).map(row => row.uid))
-      const uid = chatId.startsWith('private:') ? chatId.slice(8) : direct.size === 1 ? [...direct][0] : ''
+      const uid = chatId.startsWith('private:') ? chatId.slice(8) : turn.requesterId
       // Only overlapping executions for the same chat turn share this inbox.
       let entries = waiting.get(chatId)
       if (!entries) waiting.set(chatId, entries = new Set())
@@ -152,7 +161,7 @@ export default {
           let entry = turn.decisions.get(key)
           if (!entry || entry.revision !== revision || (entry.pending && entry.signal !== exec.signal)) {
             const signal = AbortSignal.any([lifetime.signal,AbortSignal.timeout(12000),exec.signal])
-            entry = {revision, pending:true, signal:exec.signal, result:check(api,chatId,{...input,followup:turn.followup.slice()},signal,drawing)}
+            entry = {revision, pending:true, signal:exec.signal, result:check(api,chatId,{...input,requesterId:chatId.startsWith('group:') ? turn.requesterId : undefined,followup:turn.followup.slice()},signal,drawing)}
             turn.decisions.set(key,entry)
           }
           const verdict = await entry.result
