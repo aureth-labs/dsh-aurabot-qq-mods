@@ -37,7 +37,7 @@ return function Panel({ settings, draftSettings, setSettings, toast }) {
   const ready = status?.providers?.filter(x => x.enabled && x.ready) || [];
   return h('div', { className: 'ss-panel', style: { display: 'grid', gap: 16, minWidth: 0, gridColumn: '1 / -1', fontSize: 15 } },
     h('style', null, '.ss-panel .ss-hint{font-size:14px;line-height:1.65;color:var(--ab-sub,#667085)}.ss-panel .ab-desc{font-size:14px}.ss-panel .ab-input,.ss-panel .ab-btn{font-size:14px}.ss-sources{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));column-gap:28px}.ss-source{padding:14px 0;border-bottom:1px solid var(--ab-line,#e5e7eb);min-width:0}.ss-source>label{font-weight:600}.ss-source summary{font-size:14px;color:var(--ab-deep,#245a94)}'),
-    h(ui.Card, { title: '需要时，自己查一查', desc: '照常聊天。遇到拿不准、需要核实或有时效性的问题，模型会按需搜索，回答附上来源。' },
+    h(ui.Card, { title: '需要时，自己查一查', desc: '照常聊天。遇到拿不准、需要核实或有时效性的问题，模型会按需搜索，需要核验时提供原文链接。' },
       checkbox('启用联网搜索', s.enabled, value => set({ enabled: value })),
       h('div', { role: 'status', className: 'ss-hint', style: { marginTop: 12, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' } },
         h('span', null, error || (!status ? '正在检查…' : !status.enabled ? '已关闭' : ready.length ? '已配置 · ' + ready.map(x => x.name).join('、') : '还没有可用的搜索源，请先完成下面的配置。')),
