@@ -218,3 +218,194 @@ def greet_is_silent(line: str) -> bool:
     if not line:
         return False
     return line.strip().strip("[]（）() ").strip() == "安静"
+
+
+# ---------- 来电：她要不要接这通电话 ----------
+
+# 来电窗标题里的动作词。长词在前，先剥长的，免得「语音通话」把「邀请你语音通话」剥成半截
+_TITLE_NOISE = (
+    "邀请你进行语音通话",
+    "邀请你语音通话",
+    "正在向你发起语音通话",
+    "向你发起语音通话",
+    "邀请你发起语音通话",
+    "语音通话来电",
+    "邀请你通话",
+    "语音通话",
+    "通话邀请",
+    "正在呼叫",
+    "来电",
+)
+
+
+def caller_from_title(title: str, unknown: str = "未知号码") -> str:
+    """从来电窗口标题里认人。
+
+    QQ 的来电窗标题一般是「<昵称> 邀请你语音通话」这类；剥掉动作词剩下的就是昵称。
+    认不出来就返回 unknown —— 决策时按「未知号码」处理，不能因此就把人电话挂了。
+    """
+    t = (title or "").strip()
+    if not t:
+        return unknown
+    for word in _TITLE_NOISE:
+        t = t.replace(word, " ")
+    t = " ".join(t.split())
+    t = t.strip(" -—·:：()（）[]【】")
+    if not t or t.lower() in ("qq", "腾讯qq", "腾讯 qq"):
+        return unknown
+    return t[:24]
+
+
+def parse_verdict(text: str, wait_max: float = 5.0) -> dict | None:
+    """把她那一行回话解析成决定。
+
+    只认三种：接 / 不接 / 等N（秒）；后面可用「｜」接一句理由。
+    返回 {"answer": True | False | None, "delay": 秒, "reason": 理由}；
+    完全看不懂（空、闲聊、一大段解释）返回 None，交给兜底策略。
+    """
+    line = ""
+    for raw in (text or "").splitlines():
+        if raw.strip():
+            line = raw.strip()
+            break
+    if not line:
+        return None
+
+    reason = ""
+    for sep in ("｜", "|"):
+        if sep in line:
+            head, _, tail = line.partition(sep)
+            line, reason = head.strip(), " ".join(tail.split())
+            break
+    low = line.lower()
+
+    # 「不接」要先于「接」判，否则会被「接」抢走
+    if any(k in line for k in ("不接", "挂断", "挂掉", "别接", "不接听")) or "no" in low or "decline" in low:
+        return {"answer": False, "delay": 0.0, "reason": reason}
+
+    for token in ("等", "wait"):
+        idx = line.find(token)
+        if idx < 0:
+            continue
+        digits = ""
+        for ch in line[idx + len(token):]:
+            if ch.isdigit() or ch == ".":
+                digits += ch
+            elif digits:
+                break
+        if digits:
+            try:
+                sec = float(digits)
+            except ValueError:
+                continue
+            return {"answer": None, "delay": max(0.0, min(sec, float(wait_max))), "reason": reason}
+
+    if any(k in line for k in ("接",)) or "yes" in low or "ok" in low or "answer" in low:
+        return {"answer": True, "delay": 0.0, "reason": reason}
+    return None
+
+
+def decide_answer(policy: str = "decide", verdict: dict | None = None, on_error: str = "answer") -> dict:
+    """策略 + 她的判断 → 动作。
+
+    policy:
+        always   总是接（模块原来的行为）
+        never    一律不接
+        decide   让她自己决定（默认）
+    on_error: decide 时模型没回 / 回得看不懂怎么办 —— answer 先接上，skip 先不接
+    返回 {"action": "answer" | "decline" | "wait", "delay": 秒, "why": 人话}
+    """
+    p = (policy or "decide").strip().lower()
+    if p == "always":
+        return {"action": "answer", "delay": 0.0, "why": "策略：总是接"}
+    if p == "never":
+        return {"action": "decline", "delay": 0.0, "why": "策略：都不接"}
+
+    fallback_skip = (on_error or "answer").strip().lower() == "skip"
+    if not verdict:
+        return {"action": "decline" if fallback_skip else "answer", "delay": 0.0,
+                "why": "她没给出判断，按兜底" + ("不接" if fallback_skip else "接上")}
+    if verdict.get("answer") is True:
+        return {"action": "answer", "delay": 0.0, "why": verdict.get("reason") or "她想接"}
+    if verdict.get("answer") is False:
+        return {"action": "decline", "delay": 0.0, "why": verdict.get("reason") or "她没接"}
+    if float(verdict.get("delay") or 0) > 0:
+        return {"action": "wait", "delay": float(verdict["delay"]),
+                "why": verdict.get("reason") or "她想再响一会儿"}
+    return {"action": "decline" if fallback_skip else "answer", "delay": 0.0,
+            "why": "她的回答看不懂，按兜底" + ("不接" if fallback_skip else "接上")}
+
+
+class AnswerDecider:
+    """一通电话只问她一次，答案按窗口记住。
+
+    状态：
+        ask       这一帧第一次看到来电，调用方该去问她（调模型）
+        pending   她说「等几秒」，还没到点
+        answer    决定接了（points 由调用方真点）
+        decline   决定不接，别再问
+    """
+
+    ASK = "ask"
+    PENDING = "pending"
+    ANSWER = "answer"
+    DECLINE = "decline"
+
+    def __init__(self, policy: str = "decide", on_error: str = "answer", wait_max: float = 5.0):
+        self.policy = policy
+        self.on_error = on_error
+        self.wait_max = float(wait_max)
+        self._by_hwnd: dict[int, dict] = {}
+
+    def begin(self, hwnd: int, caller: str, now: float) -> str:
+        """看一眼这个窗口现在是什么状态；第一次看到就返回 ask。"""
+        cur = self._by_hwnd.get(hwnd)
+        if cur:
+            return cur["state"]
+        self._by_hwnd[hwnd] = {
+            "caller": caller, "asked_at": float(now), "state": self.ASK,
+            "due": None, "action": None, "why": "", "decided_at": None,
+        }
+        return self.ASK
+
+    def resolve(self, hwnd: int, verdict: dict | None, now: float) -> dict:
+        """把她的判断落成状态；返回 {action, delay, why, caller}。"""
+        cur = self._by_hwnd.get(hwnd)
+        if not cur:
+            self.begin(hwnd, "", now)
+            cur = self._by_hwnd[hwnd]
+        d = decide_answer(self.policy, verdict, self.on_error)
+        cur["action"], cur["why"], cur["decided_at"] = d["action"], d["why"], float(now)
+        if d["action"] == "wait":
+            cur["state"] = self.PENDING
+            cur["due"] = float(now) + float(d["delay"])
+        else:
+            cur["state"] = self.ANSWER if d["action"] == "answer" else self.DECLINE
+        return {**d, "caller": cur["caller"]}
+
+    def tick(self, hwnd: int, now: float) -> bool:
+        """等够没：只有 pending 到点这一下返回 True（调用方据此真点）。"""
+        cur = self._by_hwnd.get(hwnd)
+        if not cur or cur["state"] != self.PENDING:
+            return False
+        if float(cur["due"] or 0) <= float(now):
+            cur["state"] = self.ANSWER
+            return True
+        return False
+
+    def state(self, hwnd: int) -> str:
+        cur = self._by_hwnd.get(hwnd)
+        return cur["state"] if cur else ""
+
+    def result(self, hwnd: int) -> dict | None:
+        cur = self._by_hwnd.get(hwnd)
+        if not cur:
+            return None
+        return {"caller": cur["caller"], "action": cur["action"], "why": cur["why"],
+                "asked_at": cur["asked_at"], "decided_at": cur["decided_at"]}
+
+    def clear(self, hwnd: int | None = None) -> None:
+        if hwnd is None:
+            self._by_hwnd.clear()
+        else:
+            self._by_hwnd.pop(hwnd, None)
