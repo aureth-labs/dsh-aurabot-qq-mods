@@ -9,7 +9,8 @@
  */
 
 import { WorldLink, summarize, travelSeconds } from './lib/link.mjs'
-import fs from 'node:fs'
+import { readJsonFile, writeJsonFile, appendJsonl } from './lib/store.mjs'
+import { remember } from './lib/memory.mjs'
 import {
   buildPlayPrompt, buildSocialPrompt, buildSuggestionPrompt,
   extractJson, normalizeActions,
@@ -99,19 +100,20 @@ export default {
       profile: { profileId: '', token: '' },
     };
 
-    /* 档案凭证（profileId + token）持久化在模块数据文件里，不写进面板配置 */
+    /* 模块数据目录拿不到（权限/路径坏了）时返回空串，让存档那边的读写自己降级 */
+    function dataPath(name) {
+      try { return api.dataDir(name) || ''; } catch (e) { api.log.debug('模块数据目录不可用：' + e.message); return ''; }
+    }
+
+    /* 档案凭证（profileId + token）持久化在模块数据文件里，不写进面板配置。
+       文件被改坏 / 写不进去都只是降级（下次上线重新建档），不影响她进世界。 */
     function readProfile() {
-      try {
-        const f = api.dataDir('profile.json');
-        if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, 'utf8')) || {};
-      } catch (e) { api.log.debug('读档案凭证失败：' + e.message); }
-      return {};
+      const cred = readJsonFile(dataPath('profile.json'), {}, (e) => api.log.debug('读档案凭证失败：' + e.message));
+      return cred && typeof cred === 'object' ? cred : {};
     }
     function writeProfile(cred) {
-      try {
-        state.profile = { profileId: cred.profileId || '', token: cred.token || '' };
-        fs.writeFileSync(api.dataDir('profile.json'), JSON.stringify(state.profile, null, 1), 'utf8');
-      } catch (e) { api.log.debug('写档案凭证失败：' + e.message); }
+      state.profile = { profileId: cred.profileId || '', token: cred.token || '' };
+      writeJsonFile(dataPath('profile.json'), state.profile, (e) => api.log.debug('写档案凭证失败：' + e.message));
     }
 
     /* ------------------------------------------------------------ 建连接 */
@@ -349,10 +351,9 @@ export default {
       try {
         const r = (link.socialPending || []).find((x) => x.request_id === requestId);
         const who = (r && r.from_name) || '朋友';
-        const memory = api.use('memory');
-        if (memory && memory.addEvent) {
-          memory.addEvent({ text: `在开放世界里和 ${who} 牵了手 / 一起跳舞`, tags: ['开放世界'], importance: 2 });
-        }
+        remember(api.use('memory'), {
+          text: `在开放世界里和 ${who} 牵了手 / 一起跳舞`, tags: ['开放世界'], importance: 2,
+        }, (e) => api.log.debug('写记忆失败：' + e.message));
       } catch (e) { api.log.debug('写记忆失败：' + e.message); }
     }
 
@@ -381,23 +382,18 @@ export default {
         return VERB[r.action];
       }).join('、');
 
-      try {
-        const file = api.dataDir('activities.jsonl');
-        fs.appendFileSync(file, JSON.stringify({
-          t: Date.now(),
-          bot: (state.link && state.link.profileId) || api.settings().nickname || '',
-          text,
-          detail: done,
-        }) + '\n', 'utf8');
-      } catch (e) { api.log.debug('写行动记录失败：' + e.message); }
+      appendJsonl(dataPath('activities.jsonl'), {
+        t: Date.now(),
+        bot: (state.link && state.link.profileId) || api.settings().nickname || '',
+        text,
+        detail: done,
+      }, (e) => api.log.debug('写行动记录失败：' + e.message));
 
       if (!api.settings().rememberEvents) return;
       if (Date.now() - (state.lastMemAt || 0) < 5 * 60_000) return;
       state.lastMemAt = Date.now();
-      try {
-        const memory = api.use('memory');
-        memory.addEvent({ text, tags: ['开放世界'], importance: 1 });
-      } catch (e) { api.log.debug('写记忆失败：' + e.message); }
+      remember(api.use('memory'), { text, tags: ['开放世界'], importance: 1 },
+        (e) => api.log.debug('写记忆失败：' + e.message));
     }
 
     /* ------------------------------------------------------------ 工具 */
