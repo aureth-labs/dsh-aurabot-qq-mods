@@ -880,6 +880,6 @@ test('自定义入睡窗口生效（时间落在设定的窗口附近）', async
   await env.handle.tell()
   const d = new Date(env.readState().sleepAt)
   const mins = d.getHours() * 60 + d.getMinutes()
-  // 窗口本身 23:00-23:59，允许 ±60 分钟抖动 + 心情偏移
-  assert.ok(mins >= 22 * 60 && mins <= 24 * 60 + 59, `实际 ${d.toLocaleString()}`)
+  // 窗口本身 23:00-23:59，允许 ±60 分钟抖动：22:00 ~ 次日 01:00（跨零点，按分钟数要分两段判断）
+  assert.ok(mins >= 22 * 60 || mins <= 60, `实际 ${d.toLocaleString()}`)
 })

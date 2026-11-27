@@ -114,7 +114,8 @@ function windowAtHuman(win, nowMs, minLeadMs, jitterMin = 0, nightOnly = true) {
     // 只允许夜间：夹到前一天 20:00 ~ 当天 11:00
     if (nightOnly) {
       const nightStart = day - 4 * HOUR   // 前一天 20:00
-      const nightEnd = day + 11 * HOUR    // 当天 11:00
+      // 23 点之后的窗口属于「当天晚上」，结束边界要顺延到次日 11:00，否则会被当天 11:00 截断
+      const nightEnd = day + (win.from >= 20 * 60 ? DAY : 0) + 11 * HOUR
       start = Math.max(start, nightStart)
       end = Math.min(end, nightEnd)
     }
@@ -208,7 +209,7 @@ function cleanText(text) {
 export default {
   id: 'dream-sleep',
   name: '做梦睡觉',
-  version: '3.0.0',
+  version: '3.0.1',
   api: 1,
   description: '按真人的睡眠周期睡：一晚分几段做梦、梦里有时间轴和选择、会忘、早上只记得一点；梦的余韵会渗进人格；桌宠会真的躺下',
 

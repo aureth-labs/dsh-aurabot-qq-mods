@@ -126,6 +126,28 @@ test('Windows：调用 PowerShell 并清理临时文件', async () => {
   assert.ok(files.includes('raw-print.ps1'))
   assert.ok(!files.some((f) => f.startsWith('job-')), '临时 job 文件应该被删掉')
   assert.ok((await readFile(join(dir, 'raw-print.ps1'), 'utf8')).includes('WritePrinter'))
+  const script = await readFile(join(dir, 'raw-print.ps1'))
+  assert.equal(script.subarray(0, 3).toString('hex'), 'efbbbf', 'PowerShell 5.1 需要 UTF-8 BOM 才能正确解析')
+  assert.match(script.subarray(3).toString('utf8'), /^[\x00-\x7F]+$/, 'PS1 正文必须是纯 ASCII：中文 Windows 按 GBK 读会把中文字符串拆断')
+})
+
+test('Windows：脚本 ASCII 化后仍能把失败翻成中文提示', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'receipt-win-'))
+  const printer = normalizePrinter({ name: 'usb', transport: 'windows', target: 'DL' })
+  const spawnFail = (command, args) => {
+    const child = new EventEmitter()
+    child.stderr = new EventEmitter()
+    child.kill = () => {}
+    child.stdin = { end() {} }
+    setImmediate(() => {
+      child.stderr.emit('data', Buffer.from('Exception: WritePrinter failed: DL'))
+      child.emit('close', 1)
+    })
+    return child
+  }
+  const result = await sendBytes(printer, Buffer.from('x'), { platform: 'win32', dataDir: dir, spawnImpl: spawnFail })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /写打印机失败：DL/)
 })
 
 test('Windows：非 Windows 平台直接拒绝', async () => {

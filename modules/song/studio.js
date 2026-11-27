@@ -6,7 +6,7 @@ const __lib = globalThis.aurabot.lib // 插件内部源码（复制出来后靠�
 
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, statSync, statfsSync, writeFileSync, readFileSync, rmSync, linkSync, copyFileSync, renameSync, openSync, readSync, closeSync } from 'node:fs'
-import { join, basename, dirname, isAbsolute, resolve } from 'node:path'
+import { join, basename, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
 import { createHash } from 'node:crypto'
@@ -242,7 +242,8 @@ export function listDrives() {
 export function checkRoot(path) {
   const p = String(path || '').trim()
   if (!p) return { ok: true, path: '', message: '', warn: '', freeGB: null }
-  if (!isAbsolute(p) || !/^[A-Za-z]:\\/.test(p.replace(/\//g, '\\'))) return { ok: false, path: p, message: '要写完整路径，比如 D:\\Aurabot\\rvc', warn: '', freeGB: null }
+  // 这里只接受 Windows 盘符路径；用平台相关的 isAbsolute 会在 Linux 上误判，导致测试和预览环境全被拒
+  if (!/^[A-Za-z]:\\/.test(p.replace(/\//g, '\\'))) return { ok: false, path: p, message: '要写完整路径，比如 D:\\Aurabot\\rvc', warn: '', freeGB: null }
   const warn = /[^\x21-\x7e]/.test(p) ? '路径里有中文或空格，个别工具可能出问题，最好换成全英文、不带空格的路径' : ''
   let freeGB = null
   try {

@@ -1,7 +1,7 @@
 {
   "name": "shangxue-tell-owner",
   "displayName": "转告主人反馈",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "群里/私聊里有人托话，记成工单送达主人；主人处理完，机器人自己找对工单回群引用原消息告诉本人。转述由主模型用自然口吻完成",
   "type": "module",
   "private": true,

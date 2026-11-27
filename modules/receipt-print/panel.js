@@ -12,7 +12,7 @@ const TRIGGER_LABELS = {
   unknown: '未知',
 }
 const TRANSPORTS = [
-  ['windows', 'Windows 打印队列（USB）'],
+  ['windows', 'Windows 打印队列（USB，推荐）'],
   ['tcp', '网口 / WiFi（9100）'],
   ['cups', 'macOS / Linux CUPS'],
   ['preview', '只预览'],
@@ -236,7 +236,7 @@ return function Panel({ settings, toast }) {
     ),
 
     h(ui.Card, { title: '打印机' },
-      h('p', { className: 'ab-note' }, `全局纸宽 ${live?.paperWidthMm ?? settings.paperWidthMm ?? 58} mm，有效宽度 ${live?.effectiveWidthMm > 0 ? live.effectiveWidthMm + ' mm' : '自动'}；改有效宽度和自检指令请到「设置」页。USB 打印机填 Windows「设备和打印机」里的队列名，网口填 IP（可带 :9100），没接打印机选「只预览」。`),
+      h('p', { className: 'ab-note' }, `全局纸宽 ${live?.paperWidthMm ?? settings.paperWidthMm ?? 58} mm，有效宽度 ${live?.effectiveWidthMm > 0 ? live.effectiveWidthMm + ' mm' : '自动'}；改有效宽度和自检指令请到「设置」页。建议优先用系统打印队列：Windows 填「设备和打印机」里的队列名，macOS / Linux 用 CUPS；网口填 IP（可带 :9100），没接打印机选「只预览」。`),
       h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
         h('input', { style: { ...field, flex: '1 1 120px' }, placeholder: '名字', value: pform.name, onChange: (e) => setPform({ ...pform, name: e.target.value }) }),
         h('select', { style: field, value: pform.transport, onChange: (e) => setPform({ ...pform, transport: e.target.value }) },
