@@ -11,5 +11,5 @@
   "api": 1,
   "minPluginVersion": "1.2.0",
   "requires": [],
-  "capabilities": ["process", "network", "filesystem", "plugin-config", "plugin-internals"]
+  "capabilities": ["process", "network", "filesystem", "plugin-internals"]
 }
