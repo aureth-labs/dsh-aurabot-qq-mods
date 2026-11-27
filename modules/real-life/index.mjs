@@ -2,7 +2,8 @@
 // 四合一全自研：三餐饥饿与饮水 + 睡眠阶段与做梦概率唤醒 + 上厕所/洗澡吹头发暂离攒消息 + 生理周期（前两天明显痛感需哄照顾）
 
 import { join } from 'node:path'
-import { DEFAULTS, createRealLifeEngine } from './lib/engine.mjs'
+import { wallTime, shiftYmd, daysBetweenYmd } from './lib/clock.mjs'
+import { DEFAULTS, createRealLifeEngine, normalizeAutonomyMode } from './lib/engine.mjs'
 
 function sameOriginOk(req) {
   const h = req?.headers || {}
@@ -59,13 +60,13 @@ const SCENARIO_ALIASES = {
 }
 
 const MODULE_DESC =
-  '让你的bot拥有真人一般的作息和生理状态！目前支持：一日三餐饥饿与讨食、喝水与上厕所暂离、晚间洗澡吹头发、困倦入睡与做梦概率唤醒、28天生理周期（痛经怕冷与投喂哄人互动），以及日常自主/被动听令双模式。'
+  '让你的bot拥有真人一般的作息和生理状态！目前支持：任意昼夜作息睡眠与AI动态做梦、一日三餐饥饿与自主加餐、喝水与上厕所暂离、洗澡吹头发、28天生理周期（痛经怕冷与投喂哄人互动），以及全自动自主/日常自主/被动听令三模式。'
 
 /** @type {import('../aurabot').AurabotModule} */
 export default {
   id: 'real-life',
   name: '生理模块',
-  version: '1.1.0',
+  version: '1.2.0',
   api: 1,
   description: MODULE_DESC,
   flag: 'enabled',
@@ -182,12 +183,153 @@ export default {
       return pushed
     }
 
+    let dreamInFlight = false
+
+    function collectRecentOwnerChatSnippets(timeZone) {
+      try {
+        const chatLogOf = api.core?.hub?.chatLogOf
+        if (typeof chatLogOf !== 'function') return []
+        const cfg = api.config() || {}
+        const ownerChatId = cfg.ownerQQ ? `private:${cfg.ownerQQ}` : ''
+        const wt = wallTime(Date.now(), timeZone)
+        const days = [wt.ymd, shiftYmd(wt.ymd, -1)]
+        const lines = []
+        for (const ymd of days) {
+          const rows = chatLogOf(ymd) || []
+          for (let i = rows.length - 1; i >= 0; i--) {
+            const row = rows[i]
+            if (!row || !row.text) continue
+            const cid = String(row.chatId || '')
+            if (ownerChatId ? cid !== ownerChatId : !cid.startsWith('private:')) continue
+            const txt = String(row.text)
+              .replace(/\[(?:图片|表情|sticker|语音|文件)\]/gi, '')
+              .replace(/\s+/g, ' ')
+              .trim()
+            if (!txt || txt.length < 2) continue
+            const who = String(row.who || '').slice(0, 12)
+            lines.unshift(`${who ? `${who}: ` : ''}${txt.slice(0, 64)}`)
+            if (lines.length >= 8) return lines
+          }
+        }
+        return lines
+      } catch {
+        return []
+      }
+    }
+
+    function cleanAiDreamText(raw) {
+      if (!raw) return ''
+      const firstLine =
+        String(raw)
+          .split(/\r?\n/)
+          .map((l) => l.trim())
+          .find((l) => l && !/^```/.test(l)) || ''
+      let s = firstLine
+        .replace(/^[-*•\d.)、\s]+/, '')
+        .replace(/^(梦境|今日梦境|昨晚梦境|梦)\s*[:：]\s*/, '')
+        .replace(/^["'「『“”]+|["'」』“”]+$/g, '')
+        .trim()
+      if (s.length < 8) return ''
+      if (!/^梦[到见]/.test(s)) s = `梦到${s}`
+      if (s.length > 96) s = `${s.slice(0, 94)}…`
+      return s
+    }
+
+    async function generateAiDream(act = {}) {
+      const settings = api.settings()
+      const sleepId = act.sleepId || 0
+      const replaceSleepDream = Boolean(act.replaceSleepDream)
+      const motif = act.motif || engine.pickDreamMotif()
+      const recentDreams = Array.isArray(act.recentDreams)
+        ? act.recentDreams
+        : (engine.state.dreams || []).slice(0, 10).map((d) => d.summary)
+
+      if (dreamInFlight) return null
+      if (!settings.aiDream || typeof api.ask !== 'function') {
+        return engine.recordDream(Date.now(), '', { source: 'pool', sleepId, replaceSleepDream })
+      }
+      dreamInFlight = true
+      try {
+        let personaHint = ''
+        try {
+          const p = api.core?.personas?.current?.()
+          if (typeof p === 'string' && p.trim()) {
+            personaHint = p.replace(/\s+/g, ' ').trim().slice(0, 260)
+          }
+        } catch {}
+
+        let moodText = ''
+        try {
+          const m = api.use('mood')
+          if (m && typeof m.label === 'function') moodText = String(m.label() || '')
+        } catch {}
+
+        const chatSnippets = collectRecentOwnerChatSnippets(settings.timeZone)
+        const bodyCues = []
+        if ((act.hunger ?? engine.state.hunger) >= 68) bodyCues.push('睡前有点饿')
+        if ((act.cravings || engine.state.cravings || []).length) {
+          bodyCues.push(`嘴馋${(act.cravings || engine.state.cravings).slice(0, 3).join('、')}`)
+        }
+        if ((act.discomfort ?? 0) >= 45) bodyCues.push(`身体有些不适（${act.phaseName || '生理期'}，怕冷想暖和）`)
+        if (moodText) bodyCues.push(`近期心情偏${moodText}`)
+        if (act.kind === 'nap') bodyCues.push('这是一场短暂迷糊的小睡')
+
+        const promptParts = [
+          personaHint ? `【角色人设片段】${personaHint}` : '',
+          bodyCues.length ? `【此刻身心状态】${bodyCues.join('；')}` : '',
+          chatSnippets.length ? `【近期私聊碎片（只作潜意识意象灵感，不要机械照抄）】\n${chatSnippets.join('\n')}` : '',
+          `【本次随机梦境灵感切入点】${motif}`,
+          recentDreams.length
+            ? `【最近做过的梦（严禁重复或写相似场景/意象）】\n${recentDreams.map((d, i) => `${i + 1}. ${d}`).join('\n')}`
+            : '',
+          '请生成一条全新、自然、带点朦胧跳跃感的梦境摘要。',
+        ].filter(Boolean)
+
+        const askPromise = api.ask({
+          system:
+            '你在帮一个拥有真实作息的虚拟女孩生成她睡觉时做的一段简短梦境。要求：1) 只输出一句中文（20~55字），必须以「梦到」开头；2) 画面鲜活有想象力，可自然揉进一点近期聊天的潜意识碎片或当下体感，但绝对不要照搬聊天原文；3) 严禁和「最近做过的梦」出现相同场景或桥段（尤其不要动不动就写海边/发光大海）；4) 不要加引号、编号或多余解释。',
+          text: promptParts.join('\n\n'),
+          maxTokens: 120,
+          temperature: 0.95,
+        })
+        let timeoutId = null
+        const timeoutPromise = new Promise((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error('AI 生梦超时')), 25_000)
+          timeoutId.unref?.()
+        })
+        let raw = ''
+        try {
+          raw = await Promise.race([askPromise, timeoutPromise])
+        } finally {
+          if (timeoutId) clearTimeout(timeoutId)
+        }
+        const cleaned = cleanAiDreamText(raw)
+        if (cleaned && !recentDreams.includes(cleaned)) {
+          return engine.recordDream(Date.now(), cleaned, {
+            source: 'ai',
+            motif,
+            sleepId,
+            replaceSleepDream,
+          })
+        }
+        api.log.debug('AI 生梦返回为空或与近期梦境重复，回退至防重复梦境池')
+      } catch (err) {
+        api.log.warn('AI 动态生梦失败，已回退至防重复梦境池：', err?.message || err)
+      } finally {
+        dreamInFlight = false
+        engine.clearDreamPending(sleepId)
+      }
+      return engine.recordDream(Date.now(), '', { source: 'pool', sleepId, replaceSleepDream })
+    }
+
     async function handleEngineActions(actions, { ignoreStartupGrace = false } = {}) {
       for (const act of actions || []) {
         if (act.type === 'resume-away') {
           await flushResumedAway(act.label, act.queued)
         } else if (act.type === 'wake-missed') {
           await flushWakeMissed(act.reason, act.missed, act.dream)
+        } else if (act.type === 'generate-dream') {
+          await generateAiDream(act)
         } else if (act.type === 'hunger-nudge') {
           if (!ignoreStartupGrace && Date.now() - startedAt < 10 * 60_000) continue
           if (!canProactiveToOwner()) continue
@@ -310,12 +452,22 @@ export default {
         if (!api.settings().groupEnabled) return ''
         return '你在群聊中也拥有真实的日常作息与身体体感（如饥饿、嘴馋、困倦、刚睡醒迷糊等），请自然融入群聊语气，不要机械报分数；严格保护个人隐私，绝不在群聊提及生理期、痛经、上厕所或洗澡等私密细节。'
       }
+      const autonomy = normalizeAutonomyMode(api.settings().autonomyMode)
+      const routineRules =
+        autonomy === 'free'
+          ? [
+              '当前处于全自动自主模式：你可以完全按自己的节奏和身体体感决定吃饭、找零食/夜宵加餐、去洗手间、洗澡和睡觉，不需要向主人请示或等主人同意。想去做某件事时，直接自然地跟主人打声招呼（如「我先去趟洗手间马上回」「饿了自己去弄点吃的」「先去洗个澡啦」「困了先睡啦晚安」）并直接调用 real_life_routine(action="go") 执行即可。',
+              '只有在主人明确开口挽留或下令禁止（如「先别睡陪我一会儿」「不准去上厕所，憋着！」「先别吃东西」）时，才调用 real_life_routine(action="forbid") 锁定状态并乖乖听话；主人解除禁令时再调用 action="allow" 或 "go"。',
+            ]
+          : [
+              '正在跟主人聊天时，未经主人同意你绝不能擅自离开去上厕所、洗澡或睡觉；如果急着想去或饿了，先在对话里自然请示主人，只有当主人明确同意/催你去（如「去吧」「快去上厕所」「去吃饭吧」）时，才调用 real_life_routine(action="go") 执行。',
+              '当主人下令不许你做某事（如「不准去上厕所，憋着！」「不许偷吃东西」「先别洗澡」「别睡陪我聊」）时，必须调用 real_life_routine(action="forbid") 锁定状态并乖乖听话，绝不能嘴上答应背地偷跑！主人解除禁令时再调用 action="allow" 或 "go"。',
+            ]
       return [
-        '你拥有真实的日常身体体感（三餐饥饿与嘴馋、困倦睡眠、去洗手间、晚间洗澡吹头发、以及生理周期的腹痛怕冷与情绪起伏）。把体感自然融入语气，不要机械播报分数。',
+        '你拥有真实的日常身体体感（三餐饥饿与嘴馋、困倦睡眠、去洗手间、洗澡吹头发、以及生理周期的腹痛怕冷与情绪起伏）。把体感自然融入语气，不要机械播报分数。',
         '当主人问起你现在饿不饿、今天吃过什么、困不困、洗没洗澡、想去厕所吗、生理期第几天/还有多久来、昨晚做没做梦等自身状态时，先调用 real_life_status 查看真实记录再回答，不要瞎编。',
         '当主人在聊天中投喂你食物/饮品（比如请你喝奶茶、喂蛋糕、递红糖水、给冰饮），或照顾安抚你的不适（如贴暖宝宝、揉肚子抱抱、给止痛药）时，先调用 real_life_interact 更新身体状态再回复。',
-        '正在跟主人聊天时，未经主人同意你绝不能擅自离开去上厕所、洗澡或睡觉；如果急着想去或饿了，先在对话里自然请示主人，只有当主人明确同意/催你去（如「去吧」「快去上厕所」「去吃饭吧」）时，才调用 real_life_routine(action="go") 执行。',
-        '当主人下令不许你做某事（如「不准去上厕所，憋着！」「不许偷吃东西」「先别洗澡」「别睡陪我聊」）时，必须调用 real_life_routine(action="forbid") 锁定状态并乖乖听话，绝不能嘴上答应背地偷跑！主人解除禁令时再调用 action="allow" 或 "go"。',
+        ...routineRules,
       ]
     })
 
@@ -396,24 +548,38 @@ export default {
             const s = engine.snapshot()
             const mealsDone = ['breakfast', 'lunch', 'dinner']
               .filter((k) => s.mealsToday?.[k])
-              .map((k) => `${k === 'breakfast' ? '早饭' : k === 'lunch' ? '午饭' : '晚饭'}吃了${s.mealsToday[k]}`)
-            const recentFeed = (s.events || []).filter((e) => e.tag === '投喂' || e.tag === '进食' || e.tag === '照顾').slice(0, 4).map((e) => e.text)
+              .map((k) => `${k === 'breakfast' ? '第一餐' : k === 'lunch' ? '第二餐' : '第三餐'}吃了${s.mealsToday[k]}`)
+            const recentFeed = (s.events || [])
+              .filter((e) => e.tag === '投喂' || e.tag === '进食' || e.tag === '照顾' || e.tag === '自主加餐')
+              .slice(0, 4)
+              .map((e) => e.text)
             const cyc = s.cycle
             const cycInfo = cyc.enabled
               ? `处于周期第 ${cyc.dayOfCycle}/${cyc.cycleLength} 天（${cyc.phaseName}），身体不适度 ${cyc.discomfort}/100，距离下次经期约 ${cyc.nextPeriodDays} 天` +
                 (cyc.activeBuffs.length ? `，生效照顾：${cyc.activeBuffs.map((b) => b.label).join('、')}` : '') +
                 (cyc.coldPenalty ? `，刚才碰了冰凉的${cyc.coldPenalty.item}正肚子疼` : '')
               : '生理周期未开启'
-            const dreamInfo = s.dreams?.length ? `最近一次梦境（${s.dreams[0].ymd}）：${s.dreams[0].summary}` : '最近没记住什么梦'
+            let dreamInfo = '最近没记住什么梦'
+            if (s.dreams?.length) {
+              const latest = s.dreams[0]
+              const todayYmd = String(s.wallClock || '').slice(0, 10)
+              const gapDays = daysBetweenYmd(latest.ymd, todayYmd)
+              const whenLabel = gapDays <= 0 ? '今天' : gapDays === 1 ? '昨天' : `${gapDays} 天前`
+              dreamInfo =
+                gapDays > 1
+                  ? `最近一次记住的梦是 ${whenLabel}（${latest.ymd}）：${latest.summary}（最近这一次睡觉没有记住新梦，不要把旧梦当成刚做的梦）`
+                  : `最近一次梦境（${whenLabel} · ${latest.ymd}）：${latest.summary}`
+            }
+            const modeLabel = s.autonomyMode === 'free' ? '全自动自主' : s.autonomyMode === 'passive' ? '被动听令' : '日常自主'
             const lockInfo = s.activeLocks?.length
               ? `生效禁令：${s.activeLocks.map((l) => l.label + (l.remainMin ? `(剩${l.remainMin}m)` : '')).join('、')}`
               : '生效禁令：无'
             return {
               ok: true,
               message: [
-                `当前时间：${s.wallClock}（模式：${s.autonomyMode === 'passive' ? '被动听令' : '日常自主'}）`,
-                `饥饿与配额：${s.hungerLabel}（饥饿 ${s.hunger}/100），今日自理正餐配额已用 ${s.mealQuota.used}/${s.mealQuota.max} 顿${s.cravings.length ? `，嘴馋：${s.cravings.join('、')}` : ''}；今日吃过：${mealsDone.length ? mealsDone.join('，') : '暂未吃正餐'}`,
-                `精力与洗漱：精力 ${s.energy}/100，尿意/膀胱 ${s.bladder}/100，今晚洗澡：${s.showeredToday ? '已洗完' : `还没洗（计划 ${s.showerSchedule} 左右）`}`,
+                `当前时间：${s.wallClock}（模式：${modeLabel}，作息睡眠 ${s.sleepSchedule.sleepAt}~${s.sleepSchedule.wakeAt}）`,
+                `饥饿与配额：${s.hungerLabel}（饥饿 ${s.hunger}/100），今日自理正餐配额已用 ${s.mealQuota.used}/${s.mealQuota.max} 顿${s.mealQuota.snacks ? `（另加餐 ${s.mealQuota.snacks} 次）` : ''}${s.cravings.length ? `，嘴馋：${s.cravings.join('、')}` : ''}；本周期吃过：${mealsDone.length ? mealsDone.join('，') : '暂未吃正餐'}`,
+                `精力与洗漱：精力 ${s.energy}/100，尿意/膀胱 ${s.bladder}/100，本周期洗澡：${s.showeredToday ? '已洗完' : `还没洗（计划 ${s.showerSchedule} 左右）`}`,
                 lockInfo,
                 `生理周期：${cycInfo}`,
                 `近期饮食与照顾记录：${recentFeed.length ? recentFeed.join('；') : '暂无'}`,
@@ -458,17 +624,17 @@ export default {
         api.defineTool({
           name: 'real_life_routine',
           description:
-            '执行或锁定日常行动：① 主人同意/催你去上厕所、洗澡、自己去吃饭、睡觉时，用 action="go"；② 主人命令不准去厕所（憋着）、不许自己偷吃、先别洗澡/别睡时，用 action="forbid" 锁定状态；③ 主人解除禁令允许恢复自理时，用 action="allow"。',
+            '执行或锁定日常行动：① 去上厕所、洗澡、吃饭、吃零食/夜宵、睡觉时，用 action="go"（全自动自主模式下可自行决定直接调用，日常/被动模式需先经主人同意/催促）；② 主人明确命令不准去厕所（憋着）、不许吃东西、先别洗澡/别睡时，用 action="forbid" 锁定状态；③ 主人解除禁令允许恢复自理时，用 action="allow"。',
           properties: {
             action: {
               type: 'string',
               enum: ['go', 'forbid', 'allow'],
-              description: 'go=主人同意现在去执行，forbid=主人禁止/让你憋着忍着，allow=仅解除禁令恢复自理',
+              description: 'go=现在去执行，forbid=主人禁止/让你憋着忍着，allow=仅解除禁令恢复自理',
             },
             activity: {
               type: 'string',
-              enum: ['pee', 'poop', 'bathroom', 'shower', 'eat', 'sleep', 'nap', 'all'],
-              description: 'pee/bathroom=去洗手间小号，poop=大号，shower=洗澡吹头发，eat=吃自理配额餐，sleep=夜间睡觉，nap=午休小睡，all=全部禁令',
+              enum: ['pee', 'poop', 'bathroom', 'shower', 'eat', 'snack', 'sleep', 'nap', 'all'],
+              description: 'pee/bathroom=去洗手间小号，poop=大号，shower=洗澡吹头发，eat=吃正餐，snack=自己找零食或夜宵加餐，sleep=睡觉，nap=小睡，all=全部禁令',
             },
             durationMin: {
               type: 'number',
@@ -480,6 +646,7 @@ export default {
             if (api.core?.hub?.turnSendersAllOwner && !api.core.hub.turnSendersAllOwner(sessionId)) {
               return { ok: false, message: '仅限主人私聊触发' }
             }
+            const isFree = normalizeAutonomyMode(api.settings().autonomyMode) === 'free'
             if (action === 'forbid') {
               const r = engine.setLock(activity, true, { durationMin, reason: '主人指令禁止' })
               if (!r.ok) return r
@@ -493,22 +660,38 @@ export default {
               if (!r.ok) return r
               return { ok: true, message: `已解除「${r.label}」，恢复正常自理许可。` }
             }
+            if (activity === 'snack') {
+              const r = engine.eatSnack({ reason: isFree ? '全自动模式自主加餐' : '自己找点零食/夜宵' })
+              return {
+                ok: true,
+                message: `自己找了点「${r.dish}」垫肚子：饥饿度 ${r.beforeHunger}→${r.afterHunger}/100。`,
+              }
+            }
             if (activity === 'eat') {
-              const r = engine.eatQuotaMeal({ reason: '主人批准去吃饭' })
+              const r = engine.eatQuotaMeal({
+                reason: isFree ? '全自动模式自主用餐' : '主人批准去吃饭',
+                allowSnackFallback: isFree || Boolean(api.settings().autoSnack),
+              })
               if (!r.ok && r.quotaExhausted) {
                 return {
                   ok: false,
                   message: `你今天固定的 ${r.quota} 顿正餐配额已经全部吃光啦（当前饥饿 ${r.hunger}/100），家里没零食没法自己做饭了，快委屈跟主人说必须主人亲自投喂才行！`,
                 }
               }
+              if (r.isSnack) {
+                return {
+                  ok: true,
+                  message: `今天正餐配额已经吃完了，所以自己找了点「${r.dish}」加餐：饥饿度 ${r.beforeHunger}→${r.afterHunger}/100。`,
+                }
+              }
               return {
                 ok: true,
-                message: `已获主人批准去吃了「${r.dish}」：饥饿度 ${r.beforeHunger}→${r.afterHunger}/100（今日正餐配额已用 ${r.used}/${r.quota} 顿）。`,
+                message: `${isFree ? '自己去吃了' : '已获主人批准去吃了'}「${r.dish}」：饥饿度 ${r.beforeHunger}→${r.afterHunger}/100（本周期正餐配额已用 ${r.used}/${r.quota} 顿）。`,
               }
             }
             if (activity === 'shower') {
               engine.schedulePendingAway({ kind: 'shower', durationMin: 14, nextHairMin: 7, approved: true })
-              return { ok: true, message: '已安排回完这句就去洗澡+吹头发（约 21 分钟），跟主人说一声吧。' }
+              return { ok: true, message: '已安排回完这句就去洗澡+吹头发（约 21 分钟），跟主人打声招呼吧。' }
             }
             if (activity === 'poop') {
               engine.schedulePendingAway({ kind: 'poop', durationMin: 8, approved: true })
@@ -520,7 +703,7 @@ export default {
             }
             const isNap = activity === 'nap'
             engine.schedulePendingSleep({ kind: isNap ? 'nap' : 'night', approved: true })
-            return { ok: true, message: `已安排说完道别后进入${isNap ? '午休小睡' : '睡眠'}，跟主人道声晚安/午安吧。` }
+            return { ok: true, message: `已安排说完道别后进入${isNap ? '小睡' : '睡眠'}，跟主人道声晚安/待会见吧。` }
           },
         }),
       ]
@@ -543,15 +726,22 @@ export default {
                 : s.afterglowRemainMin > 0
                   ? `✨ 在线（刚洗完澡香香松弛中）`
                   : '🟢 在线清醒'
-        const autoBadge = `${s.autonomyMode === 'passive' ? '🐾 被动听令模式' : '🏠 日常自主模式'}${s.ownerChatting ? ' · 💬 热聊陪伴保护中' : ''} · ⏱️ 心跳 ${s.heartbeatSec}s`
+        const autoLabel =
+          s.autonomyMode === 'free'
+            ? '🤖 全自动自主模式'
+            : s.autonomyMode === 'passive'
+              ? '🐾 被动听令模式'
+              : '🏠 日常自主模式'
+        const chatTag = s.autonomyMode !== 'free' && s.ownerChatting ? ' | 💬 热聊陪伴保护中' : ''
+        const autoBadge = `${autoLabel}${chatTag} | ⏱️ 心跳 ${s.heartbeatSec}s`
         const lockStr = s.activeLocks?.length ? `\n🔒 生效禁令：${s.activeLocks.map((l) => l.label).join('、')}` : ''
         const buffs = s.cycle.activeBuffs.length ? ` | 照顾生效：${s.cycle.activeBuffs.map((b) => `${b.label}(${b.remainMin}m)`).join('、')}` : ''
         return [
-          `【真人状态 · ${s.wallClock}】`,
+          `【真人状态 | ${s.wallClock}】`,
           `${modeStr}（${autoBadge}）${lockStr}`,
-          `🍚 饥饿：${s.hunger}/100（${s.hungerLabel}）· 今日正餐配额：已吃 ${s.mealQuota.used}/${s.mealQuota.max} 顿${s.cravings.length ? ` · 馋：${s.cravings.join('、')}` : ''}`,
-          `⚡ 精力：${s.energy}/100 · 💧 膀胱充盈：${s.bladder}/100 · 🚿 今日洗澡：${s.showeredToday ? '已洗' : `未洗(计划 ${s.showerSchedule})`}`,
-          `🌸 生理周期：${s.cycle.enabled ? `第 ${s.cycle.dayOfCycle}/${s.cycle.cycleLength} 天 · ${s.cycle.phaseName} · 不适度 ${s.cycle.discomfort}/100${buffs}` : '已关闭'}`,
+          `🍚 饥饿：${s.hunger}/100（${s.hungerLabel}）| 正餐配额：${s.mealQuota.used}/${s.mealQuota.max} 顿${s.mealQuota.snacks ? `（加餐 ${s.mealQuota.snacks} 次）` : ''}${s.cravings.length ? ` | 馋：${s.cravings.join('、')}` : ''}`,
+          `⚡ 精力：${s.energy}/100 | 睡眠：${s.sleepSchedule.sleepAt}~${s.sleepSchedule.wakeAt} | 💧 膀胱：${s.bladder}/100 | 🚿 洗澡：${s.showeredToday ? '已洗' : `未洗(计划 ${s.showerSchedule})`}`,
+          `🌸 生理周期：${s.cycle.enabled ? `第 ${s.cycle.dayOfCycle}/${s.cycle.cycleLength} 天 | ${s.cycle.phaseName} | 不适度 ${s.cycle.discomfort}/100${buffs}` : '已关闭'}`,
           `❤️ 投喂照顾亲密累计：${s.affection}`,
         ].join('\n')
       },
@@ -671,6 +861,19 @@ export default {
             s.contextPreview.groupSocial || '（空：群聊完全隐去私人身体细节）',
           ].join('\n')
         }
+        if (key === 'ai做梦' || key === '新梦' || key === 'dream') {
+          const entry = await generateAiDream({
+            sleepId: engine.state.sleep?.sleptAt || 0,
+            kind: engine.state.sleep?.kind || 'night',
+            hunger: Math.round(engine.state.hunger),
+            discomfort: engine.computeCycle().discomfort,
+            phaseName: engine.computeCycle().phaseName,
+            cravings: [...engine.state.cravings],
+          })
+          return entry
+            ? `💭 已生成新梦境（${entry.source === 'ai' ? 'AI动态' : '防重梦池'}）：${entry.summary}`
+            : '💭 正在生成梦境中，请稍候再试'
+        }
         const preset = SCENARIO_ALIASES[key] || key
         const res = applyScenarioWithConfigSync(preset)
         return `🧪 ${res.message}`
@@ -736,8 +939,41 @@ export default {
     api.route('/scenario', async (req) => {
       if (!sameOriginOk(req)) return deny
       const body = await readBody(api, req)
-      const r = applyScenarioWithConfigSync(String(body.preset || 'reset'))
+      const preset = String(body.preset || 'reset')
+      const r = applyScenarioWithConfigSync(preset)
+      if (preset === 'rem-dream' && api.settings().aiDream && typeof api.ask === 'function') {
+        const sleepId = engine.state.sleep?.sleptAt || 0
+        await generateAiDream({
+          sleepId,
+          replaceSleepDream: true,
+          kind: engine.state.sleep?.kind || 'night',
+          hunger: Math.round(engine.state.hunger),
+          discomfort: engine.computeCycle().discomfort,
+          phaseName: engine.computeCycle().phaseName,
+          cravings: [...engine.state.cravings],
+        })
+      }
       return { ...r, state: fullSnapshot() }
+    })
+
+    api.route('/dream', async (req) => {
+      if (!sameOriginOk(req)) return deny
+      const entry = await generateAiDream({
+        sleepId: engine.state.sleep?.sleptAt || 0,
+        kind: engine.state.sleep?.kind || 'night',
+        hunger: Math.round(engine.state.hunger),
+        discomfort: engine.computeCycle().discomfort,
+        phaseName: engine.computeCycle().phaseName,
+        cravings: [...engine.state.cravings],
+      })
+      return {
+        ok: Boolean(entry),
+        dream: entry,
+        message: entry
+          ? `已生成新梦境（${entry.source === 'ai' ? 'AI 动态' : '防重梦池'}）：${entry.summary}`
+          : '梦境正在生成中，请稍候',
+        state: fullSnapshot(),
+      }
     })
 
     api.route('/settle', async (req) => {
@@ -775,7 +1011,7 @@ export default {
 
     const snap = engine.snapshot()
     api.log.info(
-      `生理模块已启动：模式=${snap.mode}，饥饿=${snap.hunger}/100，精力=${snap.energy}/100，周期=${snap.cycle.phaseName}（不适度 ${snap.cycle.discomfort}）`
+      `生理模块已启动：模式=${snap.mode}，自主=${snap.autonomyMode}，作息=${snap.sleepSchedule.sleepAt}~${snap.sleepSchedule.wakeAt}，饥饿=${snap.hunger}/100，精力=${snap.energy}/100，周期=${snap.cycle.phaseName}（不适度 ${snap.cycle.discomfort}）`
     )
 
     return {
@@ -784,6 +1020,8 @@ export default {
       care: (opts) => engine.care(opts),
       updateValues: (patch) => applyManualUpdate(patch),
       applyScenario: (preset) => applyScenarioWithConfigSync(preset),
+      generateDream: (opts) => generateAiDream(opts),
+      handleEngineActions,
       settleNow,
     }
   },
