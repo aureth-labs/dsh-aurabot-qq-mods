@@ -58,6 +58,9 @@ return function QQCallPanel({ settings, draftSettings, setSettings, toast }) {
   const engine = d.engine || 'piper'
   const silentFirst = d.silentFirst !== false
   const silentSec = Number.isFinite(Number(d.silentOpenSec)) ? Number(d.silentOpenSec) : 30
+  const policy = ['always', 'never', 'decide'].includes(d.answerPolicy) ? d.answerPolicy : 'decide'
+  const onError = d.answerOnError === 'skip' ? 'skip' : 'answer'
+  const lastDecision = st && st.answer && st.answer.lastDecision
 
   const bridgeOn = Boolean(st && st.bridge && st.bridge.ok)
   const loopOn = Boolean(st && st.loop && st.loop.running)
@@ -96,7 +99,7 @@ return function QQCallPanel({ settings, draftSettings, setSettings, toast }) {
     h(Card, { title: '通话链路状态' },
       h(StateRow, { on: bridgeOn, label: '声音桥接', extra: bridgeOn ? `端口 ${st.bridge.port || d.port || 47660} · 引擎 ${st.bridge.engine || engine}` : (st && st.bridge && st.bridge.error) || '未启动' }),
       h(StateRow, { on: loopOn, label: '听与说', extra: loopOn ? '在听对方说话' : '没跑' }),
-      h(StateRow, { on: answerOn, label: '自动接听', extra: answerOn ? '盯着来电窗口' : (auto ? '没跑' : '开关是关的') }),
+      h(StateRow, { on: answerOn, label: '自动接听', extra: answerOn ? (policy === 'decide' ? '盯着来电，接不接她自己定' : policy === 'never' ? '盯着来电，一律不接' : '盯着来电窗口') : (auto ? '没跑' : '开关是关的') }),
       h('div', { style: { display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' } },
         h(Btn, { onClick: () => act('/start', 'start'), disabled: !!busy }, busy === 'start' ? '启动中…' : '全部启动'),
         h(Btn, { onClick: () => act('/restart', 'restart'), disabled: !!busy }, busy === 'restart' ? '重启中…' : '重启生效'),
@@ -120,7 +123,40 @@ return function QQCallPanel({ settings, draftSettings, setSettings, toast }) {
           on ? '开着：DSH 启动时自动拉起桥接、回路和接听' : '关着：插件不碰任何音频进程')),
       h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 } },
         h(Switch, { on: auto, onChange: (v) => upd('autoAnswer', Boolean(v)), title: '自动接听' }),
-        h('span', { className: 'ab-note', style: { margin: 0 } }, auto ? '来电自己接' : '来电报铃声，你手点接听')),
+        h('span', { className: 'ab-note', style: { margin: 0 } }, auto ? '来电由模块盯着，接不接看下面' : '来电报铃声，你手点接听')),
+      h('div', { style: { marginTop: 2, marginBottom: 4, fontSize: 12, opacity: 0.75 } }, '接不接这通电话'),
+      h(Select, {
+        value: policy,
+        options: [
+          { value: 'decide', label: '她自己决定 —— 看是谁打来的、几点了，再决定接不接' },
+          { value: 'always', label: '总是接' },
+          { value: 'never', label: '一律不接，只记下来电' },
+        ],
+        onChange: (v) => upd('answerPolicy', v),
+        ariaLabel: '接电话策略',
+      }),
+      policy === 'decide'
+        ? h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' } },
+            h('span', { style: { fontSize: 12, opacity: 0.75 } }, '她一时没给出判断时'),
+            h(Select, {
+              value: onError,
+              options: [{ value: 'answer', label: '先接上（不漏接）' }, { value: 'skip', label: '先不接' }],
+              onChange: (v) => upd('answerOnError', v),
+              ariaLabel: '模型没回时的兜底',
+            }))
+        : null,
+      h('p', { className: 'ab-note', style: { marginTop: 6, marginBottom: 0 } },
+        policy === 'decide'
+          ? '来电人昵称、现在几点、她自己的人格，以及这个人以前打来的记录会一起交给对话模型，让她回一行「接 / 不接 / 等N」。一通电话只问一次，模型 3 秒内不回或接口不通就走上面的兜底。'
+          : policy === 'always'
+            ? '任何来电都直接点接听，和以前一样。'
+            : '任何来电都不点接听，只把来电人和时间记进日志。'),
+      lastDecision
+        ? h('p', { className: 'ab-note', style: { marginTop: 6, marginBottom: 0 } },
+            `最近一次：${lastDecision.time || ''} ${lastDecision.caller || '未知号码'} —— ` +
+            (lastDecision.action === 'answer' ? '她接了' : lastDecision.action === 'decline' ? '她没接' : '她让它多响了会儿') +
+            (lastDecision.why ? `（${lastDecision.why}）` : ''))
+        : null,
       h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 } },
         h(Switch, { on: idle, onChange: (v) => upd('idle', Boolean(v)), title: '催话' }),
         h('span', { className: 'ab-note', style: { margin: 0 } }, idle ? '你沉默十几秒她会主动找话说' : '你不说话，她也不说话')),
