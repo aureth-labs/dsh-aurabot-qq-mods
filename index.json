@@ -4045,8 +4045,8 @@
     },
     {
       "id": "xiaoai-music",
-      "name": "xiaoai music · 小爱音响接入",
-      "version": "0.15.4",
+      "name": "小爱音箱",
+      "version": "0.16.0",
       "description": "小爱音箱接入、歌曲与歌单播放、提醒、称呼拼音匹配与识别日志。",
       "category": "creative",
       "tags": [
@@ -4070,13 +4070,13 @@
         "plugin-internals"
       ],
       "replacesBuiltin": false,
-      "tag": "xiaoai-music-v0.15.4",
-      "file": "xiaoai-music-v0.15.4.zip",
-      "path": "xiaoai-music-v0.15.4/xiaoai-music-v0.15.4.zip",
-      "size": 311544,
-      "sha256": "4173c390ce4cfb57e2a0c188cb2662e6683972d4e063c1ec1dd58d3b2c50b845",
-      "commit": "c9b344f726fb701d3b55645c76b363d353981efd",
-      "publishedAt": "2026-11-18T08:25:11.709Z"
+      "tag": "xiaoai-music-v0.16.0",
+      "file": "xiaoai-music-v0.16.0.zip",
+      "path": "xiaoai-music-v0.16.0/xiaoai-music-v0.16.0.zip",
+      "size": 331058,
+      "sha256": "4998de4f0bb15fea4d5fbddbbd3a8e0335a7f798c04370b3df79fed1b6f65a5b",
+      "commit": "4ef659e7595fd6b08207b3e1071ab89d69a9f4f9",
+      "publishedAt": "2026-11-27T02:53:59.982Z"
     }
   ],
   "revoked": [
@@ -4113,5 +4113,5 @@
       "reason": "作者主动撤回。"
     }
   ],
-  "generatedAt": "2026-11-27T02:45:05.749Z"
+  "generatedAt": "2026-11-27T02:53:59.982Z"
 }
