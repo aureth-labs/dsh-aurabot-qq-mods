@@ -10,7 +10,36 @@ import { join } from 'node:path'
 
 let disposed = false
 // 版本只有这一处：module.json 里也写同一个，运行时部署戳用它判断「要不要覆盖脚本」
-const VERSION = '0.3.1'
+const VERSION = '0.3.2'
+
+// ---------- 子进程退出：分类 / 退避 / 降级 ----------
+// 下面三个是纯函数，测试直接 import；计数状态在 setup 里按进程名维护。
+export const RUNTIME_NAMES = ['bridge', 'loop', 'answer']
+const DEGRADED_AFTER = 3
+
+/** 退出码 → 结局：0 是正常收工；null 是被信号杀掉；其余都算异常 */
+export function classifyExit(code) {
+  if (code === 0) return 'ok'
+  return code == null ? 'signal' : 'crash'
+}
+
+/** 连续失败 n 次后，下次重启前至少等多久：1s → 3s → 9s，封顶 60s（每次 ×3，够本机 python 缓过来） */
+export function backoffMs(failures) {
+  const n = Math.max(1, Number(failures) || 1)
+  return Math.min(60000, 1000 * 3 ** (n - 1))
+}
+
+/** 连续失败到 DEGRADED_AFTER 次就标降级：不再当偶发，通话链路视为不可用 */
+export function isDegraded(failures, limit = DEGRADED_AFTER) {
+  return Number(failures) >= limit
+}
+
+/** 记账：正常收工清零，异常 +1。返回新对象，不改原状态（测试可直接跑序列） */
+export function failureUpdate(state, name, code) {
+  const next = { ...state }
+  next[name] = classifyExit(code) === 'ok' ? 0 : (Number(next[name]) || 0) + 1
+  return next
+}
 
 export default {
   id: 'qq-call',
@@ -55,10 +84,16 @@ export default {
   panel: 'panel.js',
 
   setup(api) {
+    disposed = false   // 热重载 / 测试里重新装载：上一次卸载的标记不能带到这一轮
     const runtimeDir = () => join(api.dataDir(), 'runtime')
+    // 每个运行时候选进程的异常退出计数：面板 /status 里能看见，连续 3 次就标降级
+    const crash = { bridge: 0, loop: 0, answer: 0 }
+    const lastExit = {}
+    const killedPids = new Set()      // 我们自己喊停的，不算异常退出
+    const degradedNotified = new Set()
 
     // 从模块文件夹把 Python 脚本铺到 modules-data（安装包里不带 85MB 模型，脚本也就几十 KB）。
-    // 只补缺失的文件：用户自己改过的脚本一律不覆盖，免得升级把调试改动冲掉。
+    // 内容一样就跳过；不一样就覆盖，覆盖前把旧版存进 .bak-<版本>/，自己改过的也找得回来。
     const MODEL_NEED = [
       ['models/zh_CN-huayan-medium.onnx', 'Piper 中文女声'],
       ['models/zh_CN-huayan-medium.onnx.json', 'Piper 配置'],
@@ -71,6 +106,7 @@ export default {
     function deployRuntime() {
       const src = join(api.dir, 'runtime')
       const dst = runtimeDir()
+      mkdirSync(dst, { recursive: true })   // 「启用通话」关着时也得先有目录，不然一个脚本都铺不下来
       const stamp = join(dst, '.deployed.json')
       let deployed = ''
       try { deployed = String(JSON.parse(readFileSync(stamp, 'utf8')).version || '') } catch {}
@@ -154,6 +190,7 @@ export default {
 
     function killPid(pid) {
       if (!pid) return
+      killedPids.add(pid)
       try {
         process.kill(pid)
       } catch {}
@@ -206,9 +243,35 @@ export default {
             unlinkSync(pidFile(name))
           } catch {}
         }
-        if (!disposed) api.log.warn(`[qq-call] ${name} 退出了（code=${code}）`)
+        const kind = classifyExit(code)
+        const byUs = killedPids.delete(child.pid)
+        lastExit[name] = { code, kind, at: Date.now() }
+        if (disposed) return
+        // 面板点了停 / 重启：我们自己喊的停，不记成故障
+        if (byUs) {
+          api.log.info(`[qq-call] ${name} 已停（code=${code}）`)
+          return
+        }
+        if (kind === 'ok') {
+          Object.assign(crash, failureUpdate(crash, name, code))
+          degradedNotified.delete(name)
+          api.log.info(`[qq-call] ${name} 正常退出（code=0）`)
+          return
+        }
+        Object.assign(crash, failureUpdate(crash, name, code))
+        const n = crash[name]
+        api.log.warn(`[qq-call] ${name} 异常退出（code=${code}，连续 ${n} 次）${isDegraded(n) ? '：已降级，不再自动重启' : `：下次启动前至少等 ${Math.round(backoffMs(n) / 1000)}s`}`)
+        // 降级只报一次，别把日志刷成一片红
+        if (isDegraded(n) && !degradedNotified.has(name)) {
+          degradedNotified.add(name)
+          api.log.error(`[qq-call] ${name} 连续 ${n} 次异常退出，通话链路不可用（原因看 ${join(logDir(), `${name}.log`)}）`)
+        }
       })
-      child.on('error', (e) => api.log.error(`[qq-call] ${name} 启动失败：${e?.message || e}`))
+      child.on('error', (e) => {
+        Object.assign(crash, failureUpdate(crash, name, null))
+        lastExit[name] = { code: null, kind: 'spawn-error', at: Date.now() }
+        api.log.error(`[qq-call] ${name} 启动失败：${e?.message || e}（设置里的 python 是「${pyExe()}」，确认它存在）`)
+      })
       try {
         writeFileSync(pidFile(name), String(child.pid || 0))
       } catch {}
@@ -228,6 +291,11 @@ export default {
 
     async function startAll() {
       if (disposed) return
+      // 用户主动「全部启动」就是一次干净重试：把之前的失败计数清掉
+      for (const n of RUNTIME_NAMES) {
+        crash[n] = 0
+        degradedNotified.delete(n)
+      }
       syncPersona()
       const s = api.settings()
       const health = await bridgeHealth()
@@ -277,6 +345,13 @@ export default {
         engine: api.settings().engine || 'piper',
         port: port(),
         modelMissing: missingModels(),
+        // 子进程异常退出：连续几次、要不要退避、是不是已经降级
+        runtime: {
+          failures: { ...crash },
+          lastExit: { ...lastExit },
+          degraded: RUNTIME_NAMES.filter((n) => isDegraded(crash[n] || 0)),
+          backoffMs: Object.fromEntries(RUNTIME_NAMES.map((n) => [n, backoffMs((crash[n] || 0) + 1)])),
+        },
       }
     })
 
