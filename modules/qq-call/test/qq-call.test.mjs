@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import plugin, { RUNTIME_NAMES, backoffMs, classifyExit, failureUpdate, isDegraded } from '../index.mjs'
+import plugin, { RUNTIME_NAMES, answerEnv, backoffMs, classifyExit, failureUpdate, isDegraded, normalizePolicy } from '../index.mjs'
 
 const MODULE = fileURLToPath(new URL('..', import.meta.url))
 const MANIFEST = JSON.parse(readFileSync(join(MODULE, 'module.json'), 'utf8'))
@@ -322,6 +322,51 @@ test('/start 和 /restart 是干净重试：点一下就按当前设置重来', 
     assert.equal(stop.ok, true)
     const status = await env.call('/status')
     assert.deepEqual(status.runtime.degraded, [], '主动重来过，就不该还挂着降级')
+  } finally {
+    env.dispose()
+  }
+})
+
+test('接电话策略：默认她自己决定，写错了回落到 decide', () => {
+  assert.equal(normalizePolicy('decide'), 'decide')
+  assert.equal(normalizePolicy('ALWAYS'), 'always')
+  assert.equal(normalizePolicy('随便'), 'decide')
+  assert.equal(normalizePolicy(undefined), 'decide')
+
+  const env = answerEnv({ answerPolicy: 'decide', answerOnError: 'answer' })
+  assert.equal(env.QQ_CALL_ANSWER_POLICY, 'decide')
+  assert.equal(env.QQ_CALL_ANSWER_ON_ERROR, 'answer')
+  assert.equal(env.QQ_CALL_ANSWER_TIMEOUT, '3')
+  assert.equal(env.QQ_CALL_ANSWER_WAIT_MAX, '5')
+})
+
+test('兜底写错了按「先接上」：宁可多接也不漏接', () => {
+  assert.equal(answerEnv({ answerPolicy: 'never', answerOnError: '随便' }).QQ_CALL_ANSWER_ON_ERROR, 'answer')
+  assert.equal(answerEnv({ answerOnError: 'skip' }).QQ_CALL_ANSWER_ON_ERROR, 'skip')
+})
+
+test('/status 带上接听策略；还没接过电话时最近判断是空的', async () => {
+  const env = makeEnv({ on: false, answerPolicy: 'decide' })
+  try {
+    const status = await env.call('/status')
+    assert.equal(status.answer.policy, 'decide')
+    assert.equal(status.answer.lastDecision, null)
+  } finally {
+    env.dispose()
+  }
+})
+
+test('她上次的判断写在 last_decision.json 里，/status 读得出来', async () => {
+  const env = makeEnv()
+  try {
+    mkdirSync(join(env.dataDir, 'runtime', 'out'), { recursive: true })
+    writeFileSync(join(env.dataDir, 'runtime', 'out', 'last_decision.json'), JSON.stringify({
+      at: 100, time: '10:00:00', caller: '小明', action: 'decline', why: '在忙',
+    }), 'utf8')
+    const status = await env.call('/status')
+    assert.equal(status.answer.lastDecision.caller, '小明')
+    assert.equal(status.answer.lastDecision.action, 'decline')
+    assert.equal(status.answer.lastDecision.why, '在忙')
   } finally {
     env.dispose()
   }
