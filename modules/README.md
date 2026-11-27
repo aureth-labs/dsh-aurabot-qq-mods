@@ -118,6 +118,7 @@
 
 | 模块 | 版本 | 作者 | 说明 |
 |---|---|---|---|
+| [自动切换模型](auto-change-model/) | 1.0.0 | auto-change-model contributors | 按时段、星期、指定日期和会话人格自动切换聊天模型 |
 | [自动接待](auto-contact/) | 1.0.0 | HDB-Studio | 自动通过好友申请和群邀请并写入白名单；#sl 只有主人能触发 |
 | [每日会话拆分](daily-session/) | 1.0.0 | Winston | 每天自动开新会话，按聊天提炼前一天对话，只在新会话首轮注入摘要，降低上下文和 token 压力 |
 | [DSH 人设与风格](dsh-persona/) | 1.0.1 | RookieApe-tao | 把一张人格连同思考/回复风格注入 DSH 的所有会话（像 dsh-cosplay），不改变大肥鱼 QQ 聊天用的人格。默认不注入，关掉即撤销。 |
