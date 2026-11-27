@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { substitute, formatDate, buildPrompt, cleanModelText, buildLines, previewText } from '../lib/templates.mjs'
+import { substitute, formatDate, buildPrompt, cleanModelText, buildLines, previewText, PLACEHOLDER_DOCS, templateVars } from '../lib/templates.mjs'
 
 test('占位符替换：未知占位符原样保留', () => {
   assert.equal(substitute('今天是 {date} {weekday} {unknown}', { date: '2026-11-20', weekday: '星期五' }), '今天是 2026-11-20 星期五 {unknown}')
@@ -20,6 +20,15 @@ test('构造提示词：正文和系统提示词都替换', () => {
   )
   assert.equal(text, '2026-11-20 的简报，纸宽 32')
   assert.equal(system, '不超过 32 字')
+})
+
+test('构造提示词：说说后自动打印可以带 {moment} 正文', () => {
+  const { text } = buildPrompt(
+    { name: '说说随想', prompt: '她刚说：「{moment}」' },
+    { width: 32, extra: { moment: '今天风很大' } },
+  )
+  assert.equal(text, '她刚说：「今天风很大」')
+  assert.ok(PLACEHOLDER_DOCS.some(([key]) => key === 'moment'), '占位符说明里要有 moment')
 })
 
 test('模型输出清洗：去掉 Markdown', () => {
@@ -77,4 +86,13 @@ test('组装打印行：标题按半宽折行，正文按整宽折行', () => {
   for (const line of titleLines) assert.ok(line.text.length <= 5)
   const bodyLine = lines.find((l) => l.text === '一二三四五')
   assert.ok(bodyLine)
+})
+
+test('占位符说明书和实际变量一一对应', () => {
+  const vars = templateVars({ name: '每日简报' }, { width: 32, paperMm: 58, effectiveMm: 48 })
+  for (const [key, desc, example] of PLACEHOLDER_DOCS) {
+    assert.ok(key in vars, `${key} 没有对应变量`)
+    assert.ok(desc && example, `${key} 缺说明或例子`)
+    assert.equal(substitute(`{${key}}`, vars), String(vars[key]))
+  }
 })

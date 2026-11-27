@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { openStore } from '../lib/store.mjs'
+import { openStore, normalizeTemplate } from '../lib/store.mjs'
 
 const tempDir = () => mkdtemp(join(tmpdir(), 'receipt-store-'))
 
@@ -41,6 +41,73 @@ test('今日总结只补种一次，删掉也不复活', async () => {
   const again = openStore(dir)
   assert.equal(again.seedSummary({ name: '今日总结', prompt: '写总结' }), null)
   assert.equal(again.get('今日总结'), null)
+})
+
+test('模板触发方式：定时与 schedule.enabled 同步，旧的按 enabled 推断', () => {
+  const schedule = normalizeTemplate({ name: '定时', schedule: { enabled: true, time: '07:00' } })
+  assert.equal(schedule.trigger, 'schedule')
+  assert.equal(schedule.schedule.enabled, true)
+
+  const legacy = normalizeTemplate({ name: '旧模板', schedule: { enabled: false } })
+  assert.equal(legacy.trigger, 'manual')
+
+  const model = normalizeTemplate({ name: '自触发', trigger: 'model', schedule: { enabled: true } })
+  assert.equal(model.trigger, 'model')
+  assert.equal(model.schedule.enabled, false, '非定时触发不能保留定时标记')
+
+  const unknown = normalizeTemplate({ name: '乱填', trigger: 'xxx' })
+  assert.equal(unknown.trigger, 'manual')
+})
+
+test('额外预设只补一次：同名跳过，删掉不复活', async () => {
+  const dir = await tempDir()
+  const store = openStore(dir)
+  store.seed({ name: '每日简报', prompt: '写简报' })
+  const created = store.seedPresets([
+    { name: '每日简报', prompt: '重复的' },
+    { name: '晨间计划', prompt: '写计划' },
+    { name: '睡前一句', prompt: '写晚安', schedule: { enabled: false, time: '22:30', days: [] } },
+  ])
+  assert.deepEqual(created.map((t) => t.name), ['晨间计划', '睡前一句'])
+  assert.equal(store.templates().length, 3)
+  assert.equal(store.get('每日简报').prompt, '写简报', '同名的旧模板不能被覆盖')
+
+  assert.deepEqual(store.seedPresets([{ name: '今日菜单', prompt: '写菜单' }]), [])
+  assert.equal(store.templates().length, 3)
+
+  store.deleteTemplate('晨间计划')
+  const again = openStore(dir)
+  assert.deepEqual(again.seedPresets([{ name: '晨间计划', prompt: '写计划' }]), [])
+  assert.equal(again.get('晨间计划'), null)
+})
+
+test('预设生成方式只同步一次，且不动改过提示词的模板', async () => {
+  const dir = await tempDir()
+  const store = openStore(dir)
+  store.saveTemplate({ name: '每日简报', prompt: '固定提示词', engine: 'think' })
+  store.saveTemplate({ name: '今日总结', prompt: '我自己改过的', engine: 'ask' })
+  const changed = store.syncPresetEngines([
+    { name: '每日简报', prompt: '固定提示词', engine: 'ask' },
+    { name: '今日总结', prompt: '原始提示词', engine: 'think' },
+  ])
+  assert.deepEqual(changed, ['每日简报'])
+  assert.equal(store.get('每日简报').engine, 'ask')
+  assert.equal(store.get('今日总结').engine, 'ask', '提示词被改过就不碰')
+
+  store.saveTemplate({ ...store.get('每日简报'), engine: 'think' })
+  const reopened = openStore(dir)
+  assert.deepEqual(reopened.syncPresetEngines([{ name: '每日简报', prompt: '固定提示词', engine: 'ask' }]), [])
+  assert.equal(reopened.get('每日简报').engine, 'think', '同步只做一次，之后尊重用户选择')
+})
+
+test('预设提示词升级只替换未改过的默认值', async () => {
+  const store = openStore(await tempDir())
+  store.saveTemplate({ name: '灵感便签', prompt: '旧默认提示词' })
+  store.saveTemplate({ name: '晨间计划', prompt: '我自己改的' })
+  assert.equal(store.replacePresetPrompt('灵感便签', '旧默认提示词', '新默认提示词'), true)
+  assert.equal(store.get('灵感便签').prompt, '新默认提示词')
+  assert.equal(store.replacePresetPrompt('晨间计划', '旧默认提示词', '新默认提示词'), false)
+  assert.equal(store.get('晨间计划').prompt, '我自己改的')
 })
 
 test('按名字或 id 取模板，保存和删除', async () => {

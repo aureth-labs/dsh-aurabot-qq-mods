@@ -2,7 +2,22 @@
 import { wrapText } from './layout.mjs'
 import { funLines } from './fun.mjs'
 
-export const PLACEHOLDERS = ['date', 'weekday', 'time', 'datetime', 'weekdayNum', 'width', 'paper', 'effective', 'columns', 'name']
+// 能用的占位符：key / 说明 / 例子。改这里要顺手改 README 的占位符表。
+export const PLACEHOLDER_DOCS = [
+  ['date', '日期', '2026-11-27'],
+  ['time', '时分', '09:05'],
+  ['datetime', '日期 + 时间', '2026-11-27 09:05'],
+  ['weekday', '中文星期', '星期五'],
+  ['weekdayNum', '星期数字，0 = 周日', '5'],
+  ['width', '每行字符数', '32'],
+  ['columns', '每行字符数（同 width）', '32'],
+  ['paper', '纸张宽度 mm', '58'],
+  ['effective', '有效打印宽度 mm', '48'],
+  ['name', '当前模板名', '每日简报'],
+  ['moment', '触发这次打印的说说正文（说说后自动打印用）', '今天风很大'],
+]
+
+export const PLACEHOLDERS = PLACEHOLDER_DOCS.map(([key]) => key)
 
 const WEEKDAY_CN = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
 
@@ -25,8 +40,8 @@ export function substitute(text, vars) {
   })
 }
 
-export function templateVars(template, { width, paperMm = 58, effectiveMm = 48, now = new Date() } = {}) {
-  return {
+export function templateVars(template, { width, paperMm = 58, effectiveMm = 48, now = new Date(), extra = {} } = {}) {
+  const vars = {
     ...formatDate(now),
     // width 保留为「每行字符数」，方便旧提示词继续用
     width: String(width),
@@ -34,11 +49,15 @@ export function templateVars(template, { width, paperMm = 58, effectiveMm = 48, 
     paper: String(paperMm),
     effective: String(effectiveMm),
     name: String(template?.name || ''),
+    ...(extra && typeof extra === 'object' ? extra : {}),
   }
+  // 说说后自动打印才带正文；其他场合占位符替换成空，不留 {moment}
+  if (vars.moment === undefined) vars.moment = ''
+  return vars
 }
 
-export function buildPrompt(template, { width, paperMm, effectiveMm, now = new Date() } = {}) {
-  const vars = templateVars(template, { width, paperMm, effectiveMm, now })
+export function buildPrompt(template, { width, paperMm, effectiveMm, now = new Date(), extra = {} } = {}) {
+  const vars = templateVars(template, { width, paperMm, effectiveMm, now, extra })
   const text = substitute(template?.prompt, vars).trim()
   const system = substitute(template?.system || '你是简洁的中文助理。只输出要打印在小票上的正文，不要 Markdown、不要代码块、不要解释。', vars).trim()
   return { system, text }

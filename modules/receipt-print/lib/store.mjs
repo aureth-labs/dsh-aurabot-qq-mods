@@ -6,7 +6,9 @@ const MAX_TEMPLATES = 30
 const MAX_HISTORY = 30
 const MAX_BACKUPS = 200
 const MAX_TEXT = 8000
-const TRIGGER_TYPES = ['command', 'panel', 'schedule', 'moment', 'selftest', 'unknown']
+const TRIGGER_TYPES = ['command', 'panel', 'schedule', 'startup', 'moment', 'model', 'selftest', 'calibrate', 'unknown']
+// 模板的自触发方式：手动 / 定时 / 启动时 / 她发完说说后 / 让模型判断
+const TEMPLATE_TRIGGERS = ['manual', 'schedule', 'startup', 'moment', 'model']
 
 export function newId() {
   return `tpl-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
@@ -28,6 +30,10 @@ export function normalizeTemplate(raw = {}) {
   const days = Array.isArray(schedule.days)
     ? [...new Set(schedule.days.map((d) => Number(d)).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))]
     : []
+  // 老模板只有 schedule.enabled：有定时就算定时，否则手动
+  const trigger = TEMPLATE_TRIGGERS.includes(String(raw.trigger || ''))
+    ? String(raw.trigger)
+    : (schedule.enabled === true ? 'schedule' : 'manual')
   return {
     id: String(raw.id || newId()),
     name: String(raw.name || '未命名模板').trim().slice(0, 40),
@@ -35,8 +41,9 @@ export function normalizeTemplate(raw = {}) {
     prompt: String(raw.prompt || ''),
     system: String(raw.system || ''),
     engine: raw.engine === 'think' ? 'think' : 'ask',
+    trigger,
     schedule: {
-      enabled: schedule.enabled === true,
+      enabled: trigger === 'schedule',
       time: /^\d{2}:\d{2}$/.test(String(schedule.time || '')) ? String(schedule.time) : '08:30',
       days,
     },
@@ -152,7 +159,7 @@ function pruneBackups(target) {
 export function openStore(dir) {
   mkdirSync(dir, { recursive: true })
   const file = join(dir, 'state.json')
-  let state = { version: 1, seeded: false, seededSummary: false, templates: [], history: [], lastRun: {}, moment: { lastAt: 0 } }
+  let state = { version: 1, seeded: false, seededSummary: false, seededPresets: false, engineSynced: false, templates: [], history: [], lastRun: {}, moment: { lastAt: 0 } }
   if (existsSync(file)) {
     try {
       const loaded = JSON.parse(readFileSync(file, 'utf8'))
@@ -225,6 +232,17 @@ export function openStore(dir) {
     history(limit = 10) {
       return state.history.slice(0, Math.max(1, Number(limit) || 10))
     },
+    backupDir(customDir = '') { return resolveBackupTarget(dir, customDir) },
+    // 只替换仍是默认提示词的预设，用户改过的不动。
+    replacePresetPrompt(name, from, to) {
+      const template = state.templates.find((t) => t.name === name)
+      if (!template || !from || !to) return false
+      if (String(template.prompt).trim() !== String(from).trim()) return false
+      template.prompt = to
+      template.updatedAt = Date.now()
+      save()
+      return true
+    },
     lastRun(id) { return state.lastRun[id] || '' },
     markRun(id, date) {
       state.lastRun[id] = date
@@ -260,7 +278,37 @@ export function openStore(dir) {
       }
       return this.saveTemplate(template)
     },
+    // 额外预设只补一次：同名的跳过，删掉的不会复活，最多铺满模板上限。
+    seedPresets(presets = []) {
+      if (state.seededPresets) return []
+      state.seededPresets = true
+      const created = []
+      for (const template of presets) {
+        if (state.templates.length >= MAX_TEMPLATES) break
+        if (!template?.name || state.templates.some((t) => t.name === template.name)) continue
+        created.push(this.saveTemplate(template))
+      }
+      save()
+      return created
+    },
+    // 一次性把预设模板的生成方式调到当前推荐值；只动提示词没被改过的预设，改过的不碰。
+    syncPresetEngines(presets = []) {
+      if (state.engineSynced) return []
+      state.engineSynced = true
+      const changed = []
+      for (const preset of presets) {
+        if (!preset?.name || !preset?.engine) continue
+        const current = state.templates.find((t) => t.name === preset.name)
+        if (!current) continue
+        if (String(current.prompt).trim() !== String(preset.prompt || '').trim()) continue
+        if (current.engine === preset.engine) continue
+        this.saveTemplate({ ...current, engine: preset.engine })
+        changed.push(current.name)
+      }
+      save()
+      return changed
+    },
   }
 }
 
-export { MAX_TEMPLATES, MAX_HISTORY }
+export { MAX_TEMPLATES, MAX_HISTORY, TEMPLATE_TRIGGERS }

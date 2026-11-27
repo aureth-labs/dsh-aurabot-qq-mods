@@ -1,11 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, readdir, readFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:net'
 import { EventEmitter } from 'node:events'
-import { normalizePrinter, parseTcpTarget, windowsArgs, sendBytes, WINDOWS_SCRIPT, queryStatus, statusQueryBytes } from '../lib/transport.mjs'
+import { normalizePrinter, parseTcpTarget, windowsArgs, sendBytes, WINDOWS_SCRIPT, WINDOWS_TIMEOUT_MS, queryStatus, statusQueryBytes } from '../lib/transport.mjs'
 
 function fakeSpawn(captured) {
   return (command, args, options) => {
@@ -116,19 +117,54 @@ test('Windows：调用 PowerShell 并清理临时文件', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'receipt-win-'))
   const captured = []
   const printer = normalizePrinter({ name: 'usb', transport: 'windows', target: 'POS-58' })
+  const captureScript = (command, args) => {
+    const scriptPath = args[args.indexOf('-File') + 1]
+    captured.push({ command, args, scriptPath, script: readFileSync(scriptPath) })
+    const child = new EventEmitter()
+    child.stderr = new EventEmitter()
+    child.kill = () => {}
+    child.stdin = { end() {} }
+    setImmediate(() => child.emit('close', 0))
+    return child
+  }
   const result = await sendBytes(printer, Buffer.from('raw-bytes'), {
-    platform: 'win32', dataDir: dir, spawnImpl: fakeSpawn(captured),
+    platform: 'win32', dataDir: dir, spawnImpl: captureScript,
   })
   assert.equal(result.ok, true)
   assert.equal(captured[0].command, 'powershell.exe')
   assert.ok(captured[0].args.includes('POS-58'))
-  const files = await readdir(dir)
-  assert.ok(files.includes('raw-print.ps1'))
-  assert.ok(!files.some((f) => f.startsWith('job-')), '临时 job 文件应该被删掉')
-  assert.ok((await readFile(join(dir, 'raw-print.ps1'), 'utf8')).includes('WritePrinter'))
-  const script = await readFile(join(dir, 'raw-print.ps1'))
+  const script = captured[0].script
+  assert.ok(script.toString('utf8').includes('WritePrinter'))
   assert.equal(script.subarray(0, 3).toString('hex'), 'efbbbf', 'PowerShell 5.1 需要 UTF-8 BOM 才能正确解析')
   assert.match(script.subarray(3).toString('utf8'), /^[\x00-\x7F]+$/, 'PS1 正文必须是纯 ASCII：中文 Windows 按 GBK 读会把中文字符串拆断')
+  const files = await readdir(dir)
+  assert.deepEqual(files, [], '脚本和 job 文件都要清理干净')
+})
+
+test('Windows：脚本被杀软锁住时换文件名重试一次', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'receipt-win-'))
+  const printer = normalizePrinter({ name: 'usb', transport: 'windows', target: 'DL' })
+  let calls = 0
+  const lockedOnce = () => {
+    calls += 1
+    const child = new EventEmitter()
+    child.stderr = new EventEmitter()
+    child.kill = () => {}
+    child.stdin = { end() {} }
+    setImmediate(() => {
+      if (calls === 1) {
+        child.stderr.emit('data', Buffer.from('The process cannot access the file because it is being used by another process.'))
+        child.emit('close', 1)
+      } else {
+        child.emit('close', 0)
+      }
+    })
+    return child
+  }
+  const result = await sendBytes(printer, Buffer.from('x'), { platform: 'win32', dataDir: dir, spawnImpl: lockedOnce })
+  assert.equal(result.ok, true)
+  assert.equal(calls, 2, '被锁一次应该重试')
+  assert.deepEqual(await readdir(dir), [], '重试用的脚本也要清理')
 })
 
 test('Windows：脚本 ASCII 化后仍能把失败翻成中文提示', async () => {
@@ -148,6 +184,22 @@ test('Windows：脚本 ASCII 化后仍能把失败翻成中文提示', async () 
   const result = await sendBytes(printer, Buffer.from('x'), { platform: 'win32', dataDir: dir, spawnImpl: spawnFail })
   assert.equal(result.ok, false)
   assert.match(result.error, /写打印机失败：DL/)
+})
+
+test('Windows：默认超时 30 秒，显式超时会报出时长', async () => {
+  assert.equal(WINDOWS_TIMEOUT_MS, 30000, 'Add-Type 冷编译经常超过 8 秒')
+  const dir = await mkdtemp(join(tmpdir(), 'receipt-win-'))
+  const printer = normalizePrinter({ name: 'usb', transport: 'windows', target: 'DL' })
+  const hang = () => {
+    const child = new EventEmitter()
+    child.stderr = new EventEmitter()
+    child.kill = () => {}
+    child.stdin = { end() {} }
+    return child
+  }
+  const result = await sendBytes(printer, Buffer.from('x'), { platform: 'win32', dataDir: dir, spawnImpl: hang, timeoutMs: 20 })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /调用 PowerShell 超时（20ms）/)
 })
 
 test('Windows：非 Windows 平台直接拒绝', async () => {

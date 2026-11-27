@@ -255,6 +255,16 @@ export function windowsArgs(scriptPath, printerName, filePath) {
   return ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-PrinterName', printerName, '-FilePath', filePath]
 }
 
+// Windows 首次打印要用 Add-Type 现编译 C# 辅助类，冷启动 8 秒经常不够，给足 30 秒
+export const WINDOWS_TIMEOUT_MS = 30000
+
+function formatTimeout(ms) {
+  return ms >= 1000 ? `${Math.round(ms / 1000)} 秒` : `${ms}ms`
+}
+
+// 文件被杀毒软件或上一次调用占用时，PowerShell 读不到脚本，报的就是这一类
+const LOCKED_RE = /being used by another process|another process|cannot access the file|无法访问(此|该)文件|正在被另一(个)?进程使用/i
+
 async function spawnPowershell(command, args, timeoutMs, spawnImpl) {
   return new Promise((resolve) => {
     let child
@@ -273,7 +283,7 @@ async function spawnPowershell(command, args, timeoutMs, spawnImpl) {
     }
     const timer = setTimeout(() => {
       try { child.kill() } catch { /* 已经退出 */ }
-      finish({ ok: false, error: '调用 PowerShell 超时' })
+      finish({ ok: false, error: `调用 PowerShell 超时（${formatTimeout(timeoutMs)}）` })
     }, timeoutMs)
     child.stderr?.on('data', (chunk) => { stderr += chunk })
     child.on('error', (error) => finish({ ok: false, error: error.message }))
@@ -285,16 +295,29 @@ async function windowsSend(printer, bytes, timeoutMs, { dataDir, spawnImpl, plat
   if (platform !== 'win32') return { ok: false, error: '当前系统不是 Windows，USB 打印队列不可用' }
   if (!printer.target) return { ok: false, error: '没有填打印机队列名（在「设备和打印机」里看）' }
   if (!dataDir) return { ok: false, error: '缺少模块数据目录' }
-  const scriptPath = join(dataDir, 'raw-print.ps1')
-  const filePath = join(dataDir, `job-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.bin`)
-  await writeFile(scriptPath, '\uFEFF' + WINDOWS_SCRIPT, 'utf8')
+  // 每次用独立文件名：固定 raw-print.ps1 会被杀毒软件/上一次调用锁住，PowerShell 读不到就报「被另一进程使用」
+  const tag = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+  const filePath = join(dataDir, `job-${tag}.bin`)
+  let scriptPath = join(dataDir, `raw-print-${tag}.ps1`)
   await writeFile(filePath, bytes)
-  try {
+  const run = async () => {
+    await writeFile(scriptPath, '\uFEFF' + WINDOWS_SCRIPT, 'utf8')
     const args = windowsArgs(scriptPath, printer.target, filePath)
     let result = await spawnPowershell('powershell.exe', args, timeoutMs, spawnImpl)
     // 有些机器只装了 PowerShell 7
     if (!result.ok && /ENOENT|not found|找不到/i.test(result.error || '')) {
       result = await spawnPowershell('pwsh', args, timeoutMs, spawnImpl)
+    }
+    return result
+  }
+  try {
+    let result = await run()
+    // 文件刚落地就被扫描锁住时，换一个文件名再试一次
+    if (!result.ok && LOCKED_RE.test(result.error || '')) {
+      await unlink(scriptPath).catch(() => {})
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      scriptPath = join(dataDir, `raw-print-${tag}-retry.ps1`)
+      result = await run()
     }
     // 脚本里只留 ASCII，报错信息在这里翻回中文，避免中文 Windows 的代码页把脚本解析坏
     if (!result.ok && /WritePrinter failed/i.test(result.error || '')) {
@@ -303,6 +326,7 @@ async function windowsSend(printer, bytes, timeoutMs, { dataDir, spawnImpl, plat
     return result
   } finally {
     unlink(filePath).catch(() => {})
+    unlink(scriptPath).catch(() => {})
   }
 }
 
@@ -311,7 +335,7 @@ async function windowsSend(printer, bytes, timeoutMs, { dataDir, spawnImpl, plat
  * 测试时可以注入 connectImpl / spawnImpl / platform。
  */
 export async function sendBytes(printer, bytes, options = {}) {
-  const timeoutMs = Number(options.timeoutMs || 8000)
+  const timeoutMs = Number(options.timeoutMs || (printer.transport === 'windows' ? WINDOWS_TIMEOUT_MS : 8000))
   const connectImpl = options.connectImpl || connect
   const spawnImpl = options.spawnImpl || spawn
   const platform = options.platform || process.platform
