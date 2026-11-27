@@ -96,13 +96,14 @@
     },
     {
       "id": "anti-ai",
-      "name": "去 AI 味",
-      "version": "1.0.0",
-      "description": "清掉「作为 AI」「总而言之」「希望对你有帮助」这类客服腔，并认出模型写的「不说话」记号",
+      "name": "输出安全（草稿/发言隔离）",
+      "version": "1.2.1",
+      "description": "用 draft/say 双区隔离思考草稿与最终发言，并处理沉默、状态回显和客服腔",
       "category": "social",
       "tags": [
+        "输出安全",
+        "草稿隔离",
         "去AI味",
-        "客服腔",
         "沉默"
       ],
       "author": "肥鱼鱼",
@@ -112,13 +113,13 @@
       "requires": [],
       "capabilities": [],
       "replacesBuiltin": false,
-      "tag": "anti-ai-v1.0.0",
-      "file": "anti-ai-v1.0.0.zip",
-      "path": "anti-ai-v1.0.0/anti-ai-v1.0.0.zip",
-      "size": 4036,
-      "sha256": "e6b59f85889aacf6a1c4f679a25bc2b47567dbaa934a825d641c892f174eae45",
-      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
-      "publishedAt": "2026-11-25T14:35:21.423Z"
+      "tag": "anti-ai-v1.2.1",
+      "file": "anti-ai-v1.2.1.zip",
+      "path": "anti-ai-v1.2.1/anti-ai-v1.2.1.zip",
+      "size": 11492,
+      "sha256": "921fd6ef6e4fec6c60c6a98018c1d580ef1bcaf51ff20b7113f5f717cc48f28a",
+      "commit": "2b44f179073a0e0a4adf43ad7b53bfca2d61d6da",
+      "publishedAt": "2026-11-27T02:54:48.969Z"
     },
     {
       "id": "anti-bot",
@@ -965,7 +966,7 @@
     {
       "id": "draw-request-check",
       "name": "画图前核对请求",
-      "version": "1.0.2",
+      "version": "1.0.5",
       "description": "准备画图时，让当前聊天模型核对用户是否想生成或修改图片。",
       "category": "creative",
       "tags": [
@@ -984,13 +985,13 @@
         "network"
       ],
       "replacesBuiltin": false,
-      "tag": "draw-request-check-v1.0.2",
-      "file": "draw-request-check-v1.0.2.zip",
-      "path": "draw-request-check-v1.0.2/draw-request-check-v1.0.2.zip",
-      "size": 7181,
-      "sha256": "9d0709bcaa0b495b35483201411269608e9048872b12f6e9781bf9d10d1cc943",
-      "commit": "319d5d5daf67a205ed8f211f6fe51744f8ba3370",
-      "publishedAt": "2026-11-25T12:06:28.597Z"
+      "tag": "draw-request-check-v1.0.5",
+      "file": "draw-request-check-v1.0.5.zip",
+      "path": "draw-request-check-v1.0.5/draw-request-check-v1.0.5.zip",
+      "size": 7849,
+      "sha256": "aa67e4bc7b10bacece21c361f7830112b24d5c1d1bffce5410db51a527c0a6b6",
+      "commit": "2b44f179073a0e0a4adf43ad7b53bfca2d61d6da",
+      "publishedAt": "2026-11-27T02:54:48.969Z"
     },
     {
       "id": "dream-sleep",
@@ -1892,7 +1893,7 @@
     {
       "id": "memory-grade",
       "name": "记忆总库",
-      "version": "2.1.2",
+      "version": "2.1.3",
       "description": "存记忆、判密级、贴标签、算时效。写库前自动盖章，过期的只标「当时」不删除。带「实时大脑」：把各会话刚发生的事实时记下来，每条盖密级，跨会话用时按密级兜底。带「过目不忘」：知识类永不淡。遗忘只做整理——该休眠的转休眠、该归档的转归档，真正的删除交给 aurabot 插件自己完成。还带记忆库面板，能翻页、搜、改。东西全在自己机器上，不联网、不外传。",
       "category": "manage",
       "tags": [
@@ -1915,13 +1916,13 @@
         "plugin-internals"
       ],
       "replacesBuiltin": false,
-      "tag": "memory-grade-v2.1.2",
-      "file": "memory-grade-v2.1.2.zip",
-      "path": "memory-grade-v2.1.2/memory-grade-v2.1.2.zip",
-      "size": 85633,
-      "sha256": "5c05e16c2b25b1f7dd5c18dbbc90d2b71096cd3101f59c9946119f6f39e74561",
-      "commit": "40ca38f0326575cd0e2a8c5a026548f08d74f0a9",
-      "publishedAt": "2026-11-25T13:06:13.130Z"
+      "tag": "memory-grade-v2.1.3",
+      "file": "memory-grade-v2.1.3.zip",
+      "path": "memory-grade-v2.1.3/memory-grade-v2.1.3.zip",
+      "size": 86028,
+      "sha256": "df3fe5c1c5d8808ae98cab9e75c84c8012472a7d23032827b13789fcdd31d712",
+      "commit": "2b44f179073a0e0a4adf43ad7b53bfca2d61d6da",
+      "publishedAt": "2026-11-27T02:54:48.969Z"
     },
     {
       "id": "mentions-catchup",
@@ -2203,7 +2204,7 @@
     {
       "id": "moyu-calendar",
       "name": "摸鱼人日历",
-      "version": "1.0.6",
+      "version": "1.0.9",
       "description": "每天从公众号「摸鱼人日历」取当日日历图，定时发到指定 QQ 聊天。",
       "category": "tool",
       "tags": [
@@ -2222,13 +2223,13 @@
         "plugin-config"
       ],
       "replacesBuiltin": false,
-      "tag": "moyu-calendar-v1.0.6",
-      "file": "moyu-calendar-v1.0.6.zip",
-      "path": "moyu-calendar-v1.0.6/moyu-calendar-v1.0.6.zip",
-      "size": 27274,
-      "sha256": "ca84a7fc2e033c10106617c85ac8342082a406fa5779501b29b1ab164a973760",
-      "commit": "9b3e577853d934f7983f4f4e7ce0427f2356676f",
-      "publishedAt": "2026-11-24T03:18:06.903Z"
+      "tag": "moyu-calendar-v1.0.9",
+      "file": "moyu-calendar-v1.0.9.zip",
+      "path": "moyu-calendar-v1.0.9/moyu-calendar-v1.0.9.zip",
+      "size": 38483,
+      "sha256": "fbaf2633b33a0e2beed2b9b1b3ea14fa7eba0055ce9bde5fcfada0e0bae52237",
+      "commit": "2b44f179073a0e0a4adf43ad7b53bfca2d61d6da",
+      "publishedAt": "2026-11-27T02:54:48.969Z"
     },
     {
       "id": "music-discovery",
@@ -2676,8 +2677,8 @@
     {
       "id": "real-life",
       "name": "生理模块",
-      "version": "1.1.0",
-      "description": "让你的bot拥有真人一般的作息和生理状态！目前支持：一日三餐饥饿与讨食、喝水与上厕所暂离、晚间洗澡吹头发、困倦入睡与做梦概率唤醒、28天生理周期（痛经怕冷与投喂哄人互动），以及日常自主/被动听令双模式。",
+      "version": "1.2.1",
+      "description": "让你的bot拥有真人一般的作息和生理状态！目前支持：任意昼夜作息睡眠与AI动态做梦、一日三餐饥饿与自主加餐、喝水与上厕所暂离、洗澡吹头发、28天生理周期（痛经怕冷与投喂哄人互动），以及全自动自主/日常自主/被动听令三模式。",
       "category": "social",
       "tags": [
         "作息",
@@ -2698,13 +2699,13 @@
       ],
       "replacesBuiltin": false,
       "homepage": "https://github.com/WhiteBr1ck/aurabot-mod-real-life",
-      "tag": "real-life-v1.1.0",
-      "file": "real-life-v1.1.0.zip",
-      "path": "real-life-v1.1.0/real-life-v1.1.0.zip",
-      "size": 58679,
-      "sha256": "43e7d6884b83a77accc980005fb4f8f91a7881b99e138e9239b5ea6ecfa3f5e6",
-      "commit": "d13e644df7e052f8c43d77116a812a2b3dd3b79e",
-      "publishedAt": "2026-11-15T21:13:08.399Z"
+      "tag": "real-life-v1.2.1",
+      "file": "real-life-v1.2.1.zip",
+      "path": "real-life-v1.2.1/real-life-v1.2.1.zip",
+      "size": 70456,
+      "sha256": "996089abefde6439ab0cfbb491900d9da332001bc6617e7f994e5c5b7f00ff69",
+      "commit": "2b44f179073a0e0a4adf43ad7b53bfca2d61d6da",
+      "publishedAt": "2026-11-27T02:54:48.969Z"
     },
     {
       "id": "recall-guard",
@@ -4113,5 +4114,5 @@
       "reason": "作者主动撤回。"
     }
   ],
-  "generatedAt": "2026-11-27T02:53:59.982Z"
+  "generatedAt": "2026-11-27T02:54:48.969Z"
 }
