@@ -80,6 +80,7 @@ export function createSearch(api, dependencies = {}) {
     if (!s.enabled || lifetime.signal.aborted) return failure(new SearchError('disabled'));
     let controller, timer;
     try {
+      if (kind === 'read' && args.includeImages !== undefined && typeof args.includeImages !== 'boolean') throw new SearchError('request');
       const input = kind === 'search' || kind === 'docs' ? parseSearch(args, s) : publicUrl(args.url).href;
       if (kind === 'docs' && (args.libraryId ? typeof args.libraryId !== 'string' || !/^\/[\w.-]+\/[\w./-]+$/.test(args.libraryId) || args.libraryId.length > 200
         : typeof args.library !== 'string' || !args.library.trim() || args.library.length > 100)) throw new SearchError('docs');
@@ -146,7 +147,7 @@ export function createSearch(api, dependencies = {}) {
           if (!available.includes(id) || !WEB_SOURCES.includes(id)) throw new SearchError('source');
           charge(chatId, s);
           const raw = await readProvider(id, input, s, signal, dependencies.fetcher, dependencies.pageReader);
-          signal.throwIfAborted(); result = pageResult(raw, id);
+          signal.throwIfAborted(); result = pageResult(raw, id, { includeImages: args.includeImages === true });
         }
         last = { at: new Date().toISOString(), ok: result.ok, elapsedMs: Date.now() - started,
           providers: kind === 'search' ? attempts.map(x => x.provider) : [result.provider],
