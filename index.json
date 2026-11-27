@@ -2143,6 +2143,35 @@
       "publishedAt": "2026-11-14T08:20:25.125Z"
     },
     {
+      "id": "model-quota-guard",
+      "name": "额度守门",
+      "version": "0.1.0",
+      "description": "盯着 workbuddy / trae 的账号额度，低于阈值就自动把当前聊天换成还有额度的模型；读的是插件自己的 usage 接口，不花钱、不占会话。",
+      "category": "manage",
+      "tags": [
+        "模型",
+        "额度",
+        "切换"
+      ],
+      "author": "阿鲸",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.1",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "model-quota-guard-v0.1.0",
+      "file": "model-quota-guard-v0.1.0.zip",
+      "path": "model-quota-guard-v0.1.0/model-quota-guard-v0.1.0.zip",
+      "size": 5836,
+      "sha256": "b640739131cf43e686452097e5b1dd78846f4e97d44efce120416b2d0475409f",
+      "commit": "87b03c9daab1e64d8119b9f6e5b0875f8e31bf31",
+      "publishedAt": "2026-11-27T03:01:22.365Z"
+    },
+    {
       "id": "module-wish",
       "name": "模块心愿单",
       "version": "1.0.0",
@@ -2705,6 +2734,37 @@
       "sha256": "31beb3928b06de05b5d3f629a52f029036b363c84f66be4a6d8f6400c94ed231",
       "commit": "570e04ca8041eb8cb6e577ac159bf5da11816e65",
       "publishedAt": "2026-11-12T15:27:03.216Z"
+    },
+    {
+      "id": "private-daily-session",
+      "name": "私聊每日拆分",
+      "version": "0.1.0",
+      "description": "只在私聊里按天开新会话：跨天 + 静默够久 + 不在回复中才动手，摘要优先读 history-vault 已有日摘要，不重复烧模型",
+      "category": "manage",
+      "tags": [
+        "会话",
+        "私聊",
+        "上下文",
+        "省Token"
+      ],
+      "author": "阿鲸",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.1",
+      "requires": [],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "private-daily-session-v0.1.0",
+      "file": "private-daily-session-v0.1.0.zip",
+      "path": "private-daily-session-v0.1.0/private-daily-session-v0.1.0.zip",
+      "size": 10585,
+      "sha256": "c6d9e7eeb2ef819a099abed9a03948ba1500930a374fb3b1784a43a44ed529fa",
+      "commit": "87b03c9daab1e64d8119b9f6e5b0875f8e31bf31",
+      "publishedAt": "2026-11-27T03:01:22.365Z"
     },
     {
       "id": "qwen-tts",
@@ -4217,5 +4277,5 @@
       "reason": "作者主动撤回。"
     }
   ],
-  "generatedAt": "2026-11-27T02:57:50.604Z"
+  "generatedAt": "2026-11-27T03:01:22.365Z"
 }
