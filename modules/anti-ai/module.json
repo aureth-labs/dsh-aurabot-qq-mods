@@ -1,0 +1,14 @@
+{
+  "id": "anti-ai",
+  "name": "输出安全（草稿/发言隔离）",
+  "version": "1.2.1",
+  "description": "用 draft/say 双区隔离思考草稿与最终发言，并处理沉默、状态回显和客服腔",
+  "category": "social",
+  "tags": ["输出安全", "草稿隔离", "去AI味", "沉默"],
+  "author": "肥鱼鱼",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": []
+}

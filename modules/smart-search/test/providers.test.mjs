@@ -64,6 +64,35 @@ test('page extraction maps Tavily, Exa and Firecrawl actual response shapes', as
     const result = await readProvider(id, 'https://example.com/', s, signal(), async () => response(fixture)); assert.equal(result.content, 'text');
   }
 });
+test('Keenable searches its public route without a key and its keyed route with one', async () => {
+  const seen = [];
+  const fetcher = async (url, init) => {
+    assert.equal(init.redirect, 'error'); seen.push({ url, headers: init.headers, body: JSON.parse(init.body) });
+    return response({ results: [{ url: 'https://example.com/a', title: 'A', description: '', snippet: 'snippet', published_at: '2026-11-20T00:00:00Z' }] });
+  };
+  const result = await searchProvider('keenable', input, s, {}, signal(), fetcher);
+  assert.deepEqual(result.sources, [{ url: 'https://example.com/a', title: 'A', snippet: 'snippet', publishedAt: '2026-11-20T00:00:00Z' }]);
+  assert.equal(seen[0].url, 'https://api.keenable.ai/v1/search/public');
+  assert.equal(seen[0].headers['X-Keenable-Title'], 'aurabot-smart-search'); assert.equal(seen[0].headers['X-API-Key'], undefined);
+  assert.equal(seen[0].body.query, 'test (site:example.com)'); assert.equal(seen[0].body.max_results, 5);
+  assert.equal(seen[0].body.snippet_max_length, 1000); assert.match(seen[0].body.published_after, /^\d{4}-\d{2}-\d{2}$/);
+  await searchProvider('keenable', { ...input, recency: 'any' }, { ...s, keenableApiKey: ' fixture ' }, {}, signal(), fetcher);
+  assert.equal(seen[1].url, 'https://api.keenable.ai/v1/search'); assert.equal(seen[1].headers['X-API-Key'], 'fixture');
+  assert.equal(seen[1].body.published_after, undefined);
+});
+test('Keenable page extraction asks the fetch route for the exact URL', async () => {
+  const page = await readProvider('keenable', 'https://example.com/a?b=1', s, signal(), async (url, init) => {
+    assert.equal(url.origin + url.pathname, 'https://api.keenable.ai/v1/fetch/public'); assert.equal(url.searchParams.get('url'), 'https://example.com/a?b=1');
+    assert.equal(init.redirect, 'error'); assert.equal(init.headers['X-Keenable-Title'], 'aurabot-smart-search'); assert.equal(init.headers['X-API-Key'], undefined);
+    return response({ url: 'https://example.com/a?b=1', title: 'A', content: '# A', truncated: true });
+  });
+  assert.deepEqual(page, { url: 'https://example.com/a?b=1', title: 'A', content: '# A', truncated: true });
+  await assert.rejects(readProvider('keenable', 'https://example.com/', s, signal(), async () => response({ content: '' })), { code: 'page' });
+});
+test('Keenable needs no key to be ready, but stays off until the panel enables it', async () => {
+  assert.deepEqual((await providerStatus({}, s)).find(x => x.id === 'keenable'), { id: 'keenable', name: 'Keenable', enabled: false, ready: true });
+  assert.equal((await providerStatus({}, options({ sources: ['keenable'] }))).find(x => x.id === 'keenable').enabled, true);
+});
 test('DSH readiness checks provider selection, not only its optimistic searchReady', async () => {
   const h = harness({}, { search() {}, searchReady: async () => true, selectSearchProvider: () => { throw Error('unavailable'); } });
   assert.equal((await providerStatus(h.api, s)).find(x => x.id === 'dsh').ready, false);

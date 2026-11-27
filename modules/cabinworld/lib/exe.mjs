@@ -7,10 +7,15 @@ import path from 'node:path'
 
 const DEFAULT_EXE = '../CabinWorld.exe'
 
+/** 读一个 JSON 文件：去掉 BOM 再 parse。bridge.config.json / bridge.json 都走这里，别各写一份。 */
+export function readJsonFile(file) {
+  const text = String(fs.readFileSync(file, 'utf8'))
+  return { raw: text, json: JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text) }
+}
+
 function readGameExe(gameDir) {
   try {
-    const file = path.join(String(gameDir || '').trim(), 'bridge', 'bridge.config.json')
-    const json = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''))
+    const json = readJsonFile(path.join(String(gameDir || '').trim(), 'bridge', 'bridge.config.json')).json
     return String(json.gameExe || DEFAULT_EXE)
   } catch { return DEFAULT_EXE }
 }
@@ -28,6 +33,9 @@ export function exeName(gameDir) {
   return path.basename(exePath(gameDir))
 }
 
+/** 「找不到游戏 exe」的统一说法：tail 是各调用方自己补的下半句。 */
+export function exeMissingText(exe, tail) { return '找不到 ' + exe + '：' + (tail || '先一键安装') }
+
 /**
  * 路径必须落在 root 里面：拒绝 ..、UNC、跨盘。
  *
@@ -43,6 +51,11 @@ export function assertInside(root, p) {
   const lower = target.toLowerCase()
   if (lower !== lowerBase && !lower.startsWith(lowerBase + path.sep)) throw new Error('路径越界：' + target)
   return target
+}
+
+/** bridge/bridge.config.json 的路径。gameDir 是本模块自己的数据目录，不需要越界校验。 */
+export function configPath(gameDir) {
+  return path.join(String(gameDir || '').trim(), 'bridge', 'bridge.config.json')
 }
 
 /**

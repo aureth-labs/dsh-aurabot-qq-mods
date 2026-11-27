@@ -4,6 +4,9 @@
 export const STRONG = [
   '晚安', '我睡了', '睡了', '去睡了', '先睡一步', '我下了', '下线了',
   '关灯了', '撑不住了', '困死了', '睡觉去', '睡啦', 'good night', 'night night',
+  // 祈使型：叫对方（BOT）去睡。2026-11-24 补——原来只有「睡觉去」，
+  // 「你去睡觉吧」「去睡吧」「早点睡」这些最常说的反而一个都没命中。
+  '睡觉吧', '去睡吧', '该睡了', '早点睡', '快去睡', '睡觉啦',
 ]
 
 export const MEDIUM = [
@@ -58,6 +61,38 @@ function isNounUsage(text, word) {
   return Boolean(after) && NOUN_AFTER.includes(after)
 }
 
+// 「我们家狗」「我家猫」这类是领属词，不是主语
+const POSSESSIVE = ['我们家', '我家', '咱家', '俺家']
+// 明确在说别人（第三人称 / 宠物）去睡，跟 BOT 无关
+const OTHER_SUBJECT = ['他', '她', '它', '狗', '猫', '爸', '妈', '哥', '姐', '弟', '妹', '朋友', '室友', '同事', '老板']
+
+/**
+ * 这句话是不是在说「别人」要睡？
+ *
+ * 只排第三人称/宠物，**不排第二人称**：
+ *   「你去睡觉吧」「各回各房睡觉去」都是在安排 BOT 去睡，属于该睡的收线。
+ *   （2026-11-24 曾误写成「主语不是说话人就不算」，把「你去睡觉吧」判成拒绝，是错的。）
+ */
+function isOtherPersonSleep(body, word) {
+  const idxWord = body.indexOf(word)
+  if (idxWord < 0) return false
+  let before = body.slice(0, idxWord)
+  for (const p of POSSESSIVE) before = before.split(p).join('　')
+  let lastPos = -1
+  let isOther = false
+  const consider = (list, other) => {
+    for (const m of list) {
+      const i = before.lastIndexOf(m)
+      if (i > lastPos) { lastPos = i; isOther = other }
+    }
+  }
+  consider(['我', '咱', '俺', '在下'], false)
+  consider(['你', '您', '各', '大家', '你们'], false)   // 第二人称也放行
+  consider(OTHER_SUBJECT, true)
+  if (lastPos < 0) return false   // 无主语的祈使句，按该睡处理
+  return isOther
+}
+
 /** 返回 [是否收线, 强度, 命中的词]。 */
 export function isClosing(text, cfg = {}) {
   const body = String(text || '').trim()
@@ -67,6 +102,8 @@ export function isClosing(text, cfg = {}) {
   if (looksLikeNarration(body)) return [false, '', '']
   if (looksLikeQuestion(body)) return [false, '', '']
   if (isNounUsage(body, word)) return [false, '', '']
+  // 在说别人去睡（「我们家狗睡觉去了」）——跟 BOT 没关系
+  if (isOtherPersonSleep(body, word)) return [false, '', '']
 
   if (strength === 'weak') {
     return isShortAndBare(body, word) ? [true, strength, word] : [false, '', '']

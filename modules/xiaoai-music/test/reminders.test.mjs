@@ -4,6 +4,8 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve, basename } from 'node:path';
 import { FamilyReminders } from '../lib/companion/reminders.mjs';
+import { MiNASpeaker } from '../lib/speaker/mina.mjs';
+import { FamilyPlayback } from '../lib/songs/playback.mjs';
 
 const date = value => Date.parse(value);
 const daily = time => ({ frequency: 'daily', time });
@@ -23,7 +25,10 @@ async function harness(t, options = {}) {
   const create = overrides => {
     const service = new FamilyReminders({ file, now: () => clock,
       canDeliver: async () => { checks++; return true; },
-      deliver: async (reminder, context) => { calls.push({ reminder, context }); return { accepted: true }; },
+      deliver: async (reminder, context) => {
+        if (context.beforeSubmit && !await context.beforeSubmit()) return { accepted: false };
+        calls.push({ reminder, context }); return { accepted: true };
+      },
       ...options, ...overrides, now: () => clock });
     instances.push(service);
     return service;
@@ -72,7 +77,10 @@ test('once validates calendar dates and past times without changing existing per
 
 test('once waits while busy and a failed attempt ends without replay', async t => {
   let idle = false;
-  const h = await harness(t, { canDeliver: async () => idle, deliver: async () => ({ accepted: false }) });
+  const h = await harness(t, { canDeliver: async () => idle, deliver: async (_, context) => {
+    assert.equal(await context.beforeSubmit(), true);
+    throw new Error('synthetic acknowledgement timeout');
+  } });
   await h.service.create({ text: '隔离提醒', schedule: once() });
   h.set('2026-11-05T09:30:00+08:00');
   assert.equal((await h.service.tick()).claimed, false);
@@ -86,9 +94,75 @@ test('once waits while busy and a failed attempt ends without replay', async t =
   assert.equal((await reopened.tick()).claimed, false);
 });
 
+test('once retries preparation after restart and never replays an unacknowledged speaker request', async t => {
+  const h = await harness(t);
+  const audio = join(h.root, 'reminder.wav');
+  let submissions = 0, diskStateAtSubmit;
+  const speaker = new MiNASpeaker({ localAddress: '127.0.0.1', call: async (_, method) => {
+    if (method === 'player_play_music') {
+      submissions++;
+      diskStateAtSubmit = JSON.parse(await readFile(h.file)).reminders[0].lastRun?.state;
+      throw new Error('synthetic lost response');
+    }
+    return { code: 0, info: JSON.stringify({ status: 0, play_song_detail: {} }) };
+  } });
+  const playback = new FamilyPlayback({ library: {}, getSpeaker: async () => speaker });
+  t.after(() => speaker.close());
+  const deliver = async (reminder, options) => {
+    await playback.audio({ id: reminder.id, absoluteFile: audio, duration: 1 }, options);
+    await playback.task;
+    return { accepted: !playback.error };
+  };
+  await h.service.create({ text: '测试', schedule: once() });
+  h.set('2026-11-04T09:30:00+08:00');
+  await h.service.close();
+  const first = h.create({ deliver }); await first.open();
+  assert.equal((await first.tick()).claimed, false);
+  assert.equal(first.list()[0].state, 'active');
+  assert.equal(first.list()[0].lastRun, null);
+  assert.equal(submissions, 0);
+  await first.close();
+  await writeFile(audio, 'synthetic-audio');
+  const retry = h.create({ deliver }); await retry.open();
+  assert.equal((await retry.tick()).submitted, false);
+  assert.equal(diskStateAtSubmit, 'sending');
+  assert.equal(submissions, 1);
+  await retry.close();
+  const afterTimeout = h.create({ deliver }); await afterTimeout.open();
+  assert.equal((await afterTimeout.tick()).claimed, false);
+  assert.equal(submissions, 1);
+});
+
+test('unsubmitted once retries after recovery without starving another due reminder', async t => {
+  const h = await harness(t);
+  const first = await h.service.create({ text: 'first', schedule: once() });
+  await h.service.create({ text: 'second', schedule: once() });
+  await h.service.close();
+  const sent = [];
+  let restored = false;
+  const service = h.create({ deliver: async (reminder, {beforeSubmit}) => {
+    if (reminder.id === first.id && !restored) throw new Error('synthetic mapping unavailable');
+    if (!await beforeSubmit()) return { accepted: false };
+    sent.push(reminder.text);
+    return { accepted: true };
+  } });
+  await service.open();
+  h.set('2026-11-04T09:30:00+08:00');
+  assert.equal((await service.tick()).claimed, false);
+  await service.tick();
+  assert.deepEqual(sent, ['second']);
+  restored = true;
+  h.set('2026-11-04T09:31:00+08:00');
+  await Promise.all([service.tick(), service.tick()]);
+  assert.deepEqual(sent, ['second', 'first']);
+  assert.equal((await service.tick()).claimed, false);
+});
+
 test('once cancellation and interrupted claims do not replay after restart', async t => {
   const gate = deferred(), started = deferred();
-  const h = await harness(t, { deliver: async () => { started.resolve(); await gate.promise; return { accepted: true }; } });
+  const h = await harness(t, { deliver: async (_, context) => {
+    await context.beforeSubmit(); started.resolve(); await gate.promise; return { accepted: true };
+  } });
   const cancelled = await h.service.create({ text: '已取消', schedule: once() });
   await h.service.cancel(cancelled.id);
   await h.service.create({ text: '会中断', schedule: once() });
@@ -104,6 +178,22 @@ test('once cancellation and interrupted claims do not replay after restart', asy
   assert.equal(reopened.list()[1].state, 'completed');
   assert.equal(reopened.list()[1].lastRun.state, 'interrupted');
   assert.equal((await reopened.tick()).claimed, false);
+});
+
+test('cancelling a once reminder during preparation prevents a late submission', async t => {
+  const started = deferred(), resume = deferred();
+  let sends = 0;
+  const h = await harness(t, { deliver: async (_, { beforeSubmit }) => {
+    started.resolve(); await resume.promise;
+    if (await beforeSubmit()) sends++;
+    return { accepted: false };
+  } });
+  const plan = await h.service.create({ text: '隔离取消', schedule: once() });
+  h.set('2026-11-04T09:30:00+08:00');
+  const tick = h.service.tick(); await started.promise;
+  await h.service.cancel(plan.id); resume.resolve(); await tick;
+  assert.equal(sends, 0);
+  assert.equal(h.service.list()[0].state, 'cancelled');
 });
 
 test('daily, weekly and monthly schedules persist Shanghai occurrence times', async t => {

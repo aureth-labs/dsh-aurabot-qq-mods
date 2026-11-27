@@ -1,8 +1,8 @@
 {
   "id": "companion-bond",
   "name": "相伴养成",
-  "version": "1.0.0",
-  "description": "和正在聊天的她一起成长：聊天、投喂、玩耍积累亲密度，状态融入原本的人格回复。",
+  "version": "1.0.1",
+  "description": "聊天、投喂和玩耍积累亲密度，三档桌面立绘带待机、眨眼与视线跟随（Apple Silicon Mac）。",
   "category": "social",
   "tags": [
     "养成",
@@ -19,6 +19,10 @@
   "minPluginVersion": "1.2.1",
   "requires": [],
   "capabilities": [
-    "filesystem"
-  ]
+    "filesystem",
+    "process"
+  ],
+  "build": {
+    "out": ".build"
+  }
 }

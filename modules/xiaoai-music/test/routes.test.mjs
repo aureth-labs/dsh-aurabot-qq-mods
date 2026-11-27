@@ -6,6 +6,8 @@ import { join, dirname, resolve, basename } from 'node:path';
 import definition from '../index.mjs';
 import { SongLibrary } from '../lib/songs/library.mjs';
 import { FamilyPlayback } from '../lib/songs/playback.mjs';
+import { DirectoryLibrary } from '../lib/songs/directories.mjs';
+import { DAILY_PLAYLIST_ID } from '../lib/songs/playlists.mjs';
 import { resourcePaths } from '../lib/songs/storage.mjs';
 
 globalThis.aurabot = { src: new URL('../', import.meta.url), lib: () => ({}) };
@@ -112,3 +114,33 @@ for (const path of ['/songs/play', '/songs/playlist/play']) {
     assert.deepEqual(actions, []);
   });
 }
+
+test('playlist add route reports skipped songs and keeps unrelated saved references', async t => {
+  const post = await routes(t);
+  const result = await post('/songs/playlist/add', { id: 'synthetic-list', ids: ['a'.repeat(64), 'b'.repeat(64)] });
+  assert.equal(result.ok, true);
+  assert.equal(result.added, 0);
+  assert.equal(result.skipped, 2);
+  assert.deepEqual(result.playlist.ids, ['a'.repeat(64)]);
+});
+
+test('daily playlist playback uses the displayed virtual playlist and leaves saved playlists alone', async t => {
+  const id = 'b'.repeat(64);
+  const previousStatus = DirectoryLibrary.prototype.status;
+  const previousPlay = FamilyPlayback.prototype.playlist;
+  const played = [];
+  DirectoryLibrary.prototype.status = function () {
+    return { ...previousStatus.call(this), entries: [{ id, sourceId: 'example', available: true }] };
+  };
+  FamilyPlayback.prototype.playlist = async ids => { played.push(ids); };
+  t.after(() => {
+    DirectoryLibrary.prototype.status = previousStatus;
+    FamilyPlayback.prototype.playlist = previousPlay;
+  });
+  const post = await routes(t);
+  const result = await post('/songs/playlist/play', { id: DAILY_PLAYLIST_ID });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.dailyPlaylist.ids, [id]);
+  assert.deepEqual(played, [[id]]);
+  assert.deepEqual(result.playlists.map(list => list.id), ['synthetic-list']);
+});

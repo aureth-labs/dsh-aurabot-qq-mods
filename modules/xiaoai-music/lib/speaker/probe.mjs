@@ -1,15 +1,16 @@
 import { modelFailureMessage } from './model.mjs';
 import { historyFailure } from './mina.mjs';
 import { DEFAULT_WAKE_CONFIG, matchWakePrefix } from './wake.mjs';
+import { recordKey } from './cursor.mjs';
 
 export const WAKE_ACK_LEAD_IN_MS = 750;
 
 export class SpeakerProbe {
   constructor({ speaker, cursor, ask, familyAction, prepareAnswer, playAnswer,
-    answerFailure = error => modelFailureMessage(error?.code), onInvalidate, sessionRouting = false, getWakeConfig,
+    answerFailure = error => modelFailureMessage(error?.code), onInvalidate, sessionRouting = false, preferLocalControls, getWakeConfig,
     now = Date.now, lifetimeMs = 600000 }) {
     Object.assign(this, { speaker, cursor, ask, familyAction, prepareAnswer, playAnswer, answerFailure,
-      onInvalidate, sessionRouting, getWakeConfig, now, lifetimeMs });
+      onInvalidate, sessionRouting, preferLocalControls, getWakeConfig, now, lifetimeMs });
     this.until = 0;
     this.persistent = false;
     this.generation = 0;
@@ -17,10 +18,17 @@ export class SpeakerProbe {
     this.pending = Promise.resolve();
     this.answersPending = 0;
     this.answerSince = 0;
+    this.ignoredRecords = new Map();
+    this.observations = new Map();
     this.stats = { polls: 0, handled: 0, duplicates: 0, failures: 0, historyFailures: 0,
       lastHistoryFailure: null, lastAction: '', lastError: '' };
   }
   active() { return this.persistent || this.until > this.now(); }
+  observe(record, outcome) {
+    const key = recordKey(record);
+    this.observations.set(key, outcome);
+    while (this.observations.size > 30) this.observations.delete(this.observations.keys().next().value);
+  }
   status() {
     return { active: this.active(), persistent: this.persistent,
       remainingSeconds: this.persistent ? null : Math.max(0, Math.ceil((this.until - this.now()) / 1000)), ...this.stats };
@@ -142,24 +150,46 @@ export class SpeakerProbe {
       if (this.stats.lastError === '语音记录读取失败；未将失败当作空记录。') this.stats.lastError = '';
       for (const record of records.sort((a, b) => a.time - b.time)) {
         if (!this.active() || ticket !== this.generation) return;
-        if (record.time < this.cursor.state.since) continue;
+        if (record.time < this.cursor.state.since) {
+          if (!this.observations.has(recordKey(record))) this.observe(record, '早于当前接入游标，未执行。');
+          continue;
+        }
+        const key = recordKey(record);
+        if (this.ignoredRecords.has(key)) continue;
         const native = String(record.query || '').replace(/[\s，。！？、,.!?：:]/g, '');
-        const action = parseProbeCommand(record.query, { sessionRouting: this.sessionRouting, wakeConfig: this.getWakeConfig?.() }) || (this.answersPending && record.time >= this.answerSince &&
+        const action = parseProbeCommand(record.query, { sessionRouting: this.sessionRouting, preferLocalControls: this.preferLocalControls?.(),
+          wakeConfig: this.getWakeConfig?.() }) || (this.answersPending && record.time >= this.answerSince &&
           /^(?:小爱同学|你好小爱)?(?:暂停(?:播放)?|停止(?:播放)?|别说了)(?:一下|吧)?$/.test(native)
           ? { action: 'cancel-answer' } : null);
-        if (!action) continue;
+        if (!action) {
+          // Keep the first decision until the cursor ages this record out, even after a name change.
+          this.ignoredRecords.set(key, record.time);
+          if (!this.observations.has(key)) this.observe(record, '未命中称呼或指令，未进入对话。');
+          continue;
+        }
         phase = 'cursor';
-        const claimed = await this.cursor.claim(record);
+        let claimed;
+        try { claimed = await this.cursor.claim(record); }
+        catch (error) { this.observe(record, '游标保存失败，未执行。'); throw error; }
         phase = 'history';
         if (!this.active() || ticket !== this.generation) return;
-        if (!claimed) { this.stats.duplicates++; continue; }
+        if (!claimed) {
+          this.stats.duplicates++;
+          if (!this.observations.has(recordKey(record))) this.observe(record, '已领取的重复记录，不重复执行。');
+          continue;
+        }
         this.stats.handled++;
+        this.observe(record, '已接收，正在处理。');
         // Do not await a long model call: the next poll must still hear "stop".
-        void this.act(action.action, action.text, record.time).catch(() => {});
+        void this.act(action.action, action.text, record.time).then(result => {
+          this.observe(record, result?.cancelled ? '处理已取消或被后续指令替代。'
+            : result?.ok === false ? '处理未成功，请查看模块状态。' : '处理流程完成；实际播放效果以音箱为准。');
+        }, () => this.observe(record, this.stats.lastError || '处理失败，请查看模块状态。'));
         ticket = this.generation;
       }
       phase = 'cursor-advance';
       await this.cursor.advance?.(this.now(), { overlapMs: 60000 });
+      for (const [key, time] of this.ignoredRecords) if (time < this.cursor.state.since) this.ignoredRecords.delete(key);
     } catch (error) {
       if (!this.active() || ticket !== this.generation) return;
       this.stats.failures++;
@@ -173,7 +203,7 @@ export class SpeakerProbe {
   }
 }
 
-export function parseProbeCommand(query, { sessionRouting = false, wakeConfig } = {}) {
+export function parseProbeCommand(query, { sessionRouting = false, preferLocalControls = false, wakeConfig } = {}) {
   const raw = String(query || '');
   const clean = raw.replace(/[\s，。！？、,.!?：:]/g, '');
   // Keep an explicit invocation; spelling variants do not change the hardware wake word.
@@ -186,6 +216,10 @@ export function parseProbeCommand(query, { sessionRouting = false, wakeConfig } 
   if (/^(?:暂停(?:播放|音乐)?|停|停一停|等|等等|等一等|等会儿?|稍等)$/.test(control)) return { action: 'pause' };
   if (/^(?:停止(?:播放|音乐|唱歌)?|结束播放|停掉|停了|关掉(?:音乐|歌曲)|(?:别|不要)(?:播放|放|播|唱)了|不听了)$/.test(control)) return { action: 'stop' };
   if (sessionRouting) {
+    if (preferLocalControls && text) {
+      const direct = parseProbeCommand(raw, { wakeConfig });
+      if (direct && direct.action !== 'ask-test') return direct;
+    }
     let offset = 0;
     let consumed = 0;
     for (const character of raw) {

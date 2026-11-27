@@ -35,7 +35,7 @@ export async function providerStatus(api, settings) {
   try { searxngEndpoint(settings.searxngUrl); searxng = true; } catch {}
   return Object.keys(PROVIDERS).map(id => ({ id, name: PROVIDERS[id],
     enabled: settings.sources.includes(id),
-    ready: id === 'dsh' ? dsh : id === 'searxng' ? searxng : Boolean(settings[id + 'ApiKey']?.trim()),
+    ready: id === 'dsh' ? dsh : id === 'searxng' ? searxng : id === 'keenable' ? true : Boolean(settings[id + 'ApiKey']?.trim()),
   }));
 }
 
@@ -69,6 +69,13 @@ async function responseJson(response) {
       : ['1113', '1301', '1302', '1303', '1304', '1305', '429'].includes(code) ? 'limit' : 'format');
   }
   return data;
+}
+// Keenable answers without a key: its public routes only need the calling app
+// named. A key moves the same request to the keyed route for higher limits.
+function keenableRoute(settings, path) {
+  const key = settings.keenableApiKey?.trim();
+  return { url: endpoint(settings.keenableUrl, key ? path : path + '/public'),
+    headers: { 'X-Keenable-Title': 'aurabot-smart-search', ...(key ? { 'X-API-Key': key } : {}) } };
 }
 function afterDate(recency) {
   const days = { day: 1, week: 7, month: 30, year: 365 }[recency];
@@ -134,6 +141,16 @@ export async function searchProvider(id, input, settings, api, signal, fetcher =
       truncated: data.results.length > limit,
       ...(Array.isArray(data.unresponsive_engines) && data.unresponsive_engines.length ? { warning: '部分 SearXNG 引擎未响应，已保留其他引擎的结果。' } : {}) };
   }
+  if (id === 'keenable') {
+    const { url, headers } = keenableRoute(settings, '/v1/search');
+    const sites = domains.length ? ' (' + domains.map(d => 'site:' + d).join(' OR ') + ')' : '';
+    const after = afterDate(recency);
+    const data = await jsonPost(url, headers, { query: query + sites, max_results: limit, snippet_max_length: 1000,
+      ...(after ? { published_after: after.slice(0, 10) } : {}) }, signal, fetcher);
+    if (!Array.isArray(data.results)) throw new SearchError('format');
+    // description is always empty; the page text for the query is in snippet.
+    return { sources: data.results.map(x => ({ url: x?.url, title: x?.title, snippet: x?.snippet, publishedAt: x?.published_at })) };
+  }
   throw new SearchError('source');
 }
 export async function readProvider(id, input, settings, signal, fetcher = fetch, pageReader = readPublicPage) {
@@ -158,6 +175,13 @@ export async function readProvider(id, input, settings, signal, fetcher = fetch,
       { url, formats: ['markdown'], onlyMainContent: true, timeout: Math.min(settings.timeoutSeconds * 1000, 30000) }, signal, fetcher);
     if (typeof data.data?.markdown !== 'string' || !data.data.markdown.trim()) throw new SearchError('page');
     return { url: data.data.metadata?.sourceURL || url, title: data.data.metadata?.title, content: data.data.markdown };
+  }
+  if (id === 'keenable') {
+    const route = keenableRoute(settings, '/v1/fetch');
+    const target = new URL(route.url); target.searchParams.set('url', url);
+    const data = await responseJson(await fetcher(target, { redirect: 'error', signal, headers: { Accept: 'application/json', ...route.headers } }));
+    if (typeof data.content !== 'string' || !data.content.trim()) throw new SearchError('page');
+    return { url: data.url || url, title: data.title, content: data.content, truncated: Boolean(data.truncated) };
   }
   throw new SearchError('source');
 }

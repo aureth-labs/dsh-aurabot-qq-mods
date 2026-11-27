@@ -2,8 +2,9 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { SongLibrary, FamilySongError, hashFile } from './library.mjs';
 import { DirectoryLibrary } from './directories.mjs';
-import { createSongStudio, pathsOf, defaultRoot, listVoices, APPLIO_COMMIT } from './studio.mjs';
+import { createSongStudio, pathsOf, defaultRoot, listVoices, APPLIO_COMMIT, LOCAL_FULL_SONG_TASK, LOCAL_FULL_ENVIRONMENT } from './studio.mjs';
 import { resourcePaths } from './storage.mjs';
+import { LOCAL_VOICE_PREFIX, readLocalSongVoices } from './local-voices.mjs';
 
 const quiet = { info() {}, warn() {}, debug() {} };
 
@@ -14,6 +15,49 @@ export function selectSingingVoice(voices, override = '', expressionVoice = '') 
     throw new FamilySongError('FAMILY_MOTHER_REQUIRED', '请在表达模块选择翻唱音色，或在小爱音响接入下拉选择。');
   }
   return candidates[0];
+}
+
+const cleanParams = value => (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
+
+async function describeLocalFullVoice(api, voice) {
+  if (typeof voice !== 'string' || !voice.startsWith(LOCAL_VOICE_PREFIX)) {
+    throw new FamilySongError('FAMILY_LOCAL_VOICE_UNAVAILABLE', '请选择已登记的本地整曲音色。');
+  }
+  const localId = voice.slice(LOCAL_VOICE_PREFIX.length);
+  const registry = readLocalSongVoices(api);
+  const registered = registry.entries.find(item => item.id === localId);
+  if (!registered) {
+    throw new FamilySongError('FAMILY_LOCAL_VOICE_UNAVAILABLE',
+      `本地整曲音色「${localId}」未登记或已不可用（登记文件：${registry.file}${registry.error ? '；' + registry.error : ''}）。`);
+  }
+  const localApi = api.core?.local;
+  if (!localApi?.active?.('song')) throw new FamilySongError('FAMILY_LOCAL_HOOK_OFF',
+    '本地整曲钩子未开启：请在宿主「本地接口」打开「翻唱换声」开关并放好 song-convert.mjs。');
+  let info;
+  try {
+    info = await localApi.call('song', { task: LOCAL_FULL_SONG_TASK, describe: true,
+      voiceId: localId, renderVersion: registered.renderVersion, log: quiet });
+  } catch (error) {
+    const message = String(error?.message || '').slice(0, 300);
+    if (/本地整曲音色不可用/.test(message)) throw new FamilySongError('FAMILY_LOCAL_VOICE_UNAVAILABLE', message);
+    throw new FamilySongError('FAMILY_LOCAL_HOOK_ERROR', '本地整曲钩子检查失败：' + message);
+  }
+  if (!info || info.kind !== 'describe' || String(info.voiceId || '') !== localId) {
+    throw new FamilySongError('FAMILY_LOCAL_HOOK_ERROR', '本地整曲钩子未按约定返回音色描述（请更新 song-convert.mjs 到支持 ' + LOCAL_FULL_SONG_TASK + ' 的版本）。');
+  }
+  if (String(info.renderVersion || '') !== String(registered.renderVersion)) {
+    throw new FamilySongError('FAMILY_LOCAL_VERSION_MISMATCH',
+      `本地整曲渲染版本不匹配：登记 ${registered.renderVersion}，钩子实际 ${info.renderVersion || '空'}（真实权重、模型或混音配置已变化，请更新登记）。`);
+  }
+  return { localId, registered, localApi, info };
+}
+
+export async function checkLocalFullVoice(api, voice) {
+  const { localApi } = await describeLocalFullVoice(api, voice);
+  const studio = createSongStudio({ getConfig: () => ({ song: api.config().song || {} }), local: localApi, log: quiet });
+  const { parts } = studio.status();
+  const missing = Object.entries(LOCAL_FULL_ENVIRONMENT).filter(([key]) => !parts[key]).map(([, label]) => label);
+  if (missing.length) throw new FamilySongError('FAMILY_LOCAL_ENVIRONMENT', '翻唱环境缺少 ' + missing.join('、') + '，请先在宿主「表达 → 翻唱」准备环境。');
 }
 
 export async function createFamilySongs(api, resources = resourcePaths(api.settings().resourceRoot)) {
@@ -41,6 +85,29 @@ export async function createFamilySongs(api, resources = resourcePaths(api.setti
       const paths = pathsOf(config.root || defaultRoot());
       const voices = listVoices(paths.models);
       const explicit = String(selectedVoice || api.settings().motherVoice || '');
+      // 已登记的本地整曲音色（local:<id>）：本次显式选择优先于已保存默认，
+      // 且只有它才触发本地整曲分支；全局 local.song=true 本身不触发分流。
+      if (explicit.startsWith(LOCAL_VOICE_PREFIX)) {
+        if (pitch !== 0) throw new FamilySongError('FAMILY_LOCAL_PITCH_UNSUPPORTED', '本地整曲音色首版只支持原调，本次不生成变调成品。');
+        const { localId, registered, localApi, info } = await describeLocalFullVoice(api, explicit);
+        const identity = { version: 'family-local-full-song-v1', source: { provider: 'netease', id: source.id },
+          voice: { role: 'local', id: localId, renderVersion: registered.renderVersion },
+          parameters: { pitch: 0, separatorModel: String(config.separatorModel || ''), params: cleanParams(info.params) } };
+        return {
+          identity,
+          voiceName: registered.label,
+          render: async (workDir, stage) => {
+            const studio = createSongStudio({
+              getConfig: () => ({ song: { ...config, enabled: true, keepWork: false } }),
+              workDir, fullLength: true, local: localApi, log: quiet,
+              sendVoiceFile: async () => { throw new Error('Family generation does not send QQ'); },
+            });
+            stage(() => studio.status().current?.stage || '生成本地整曲');
+            return studio.makeLocalFull({ song: source.title, songId: source.id, voiceId: localId,
+              renderVersion: registered.renderVersion, pitch: 0 });
+          },
+        };
+      }
       const voice = selectSingingVoice(voices, explicit, config.voice);
       const model = await hashFile(voice.pth);
       const index = voice.index ? await hashFile(voice.index) : '';

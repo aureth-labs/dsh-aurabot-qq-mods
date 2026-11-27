@@ -8,10 +8,14 @@
 2. 本地检查（需要 Node.js 22.2 或更高版本）：
 
    ```sh
+   npm run setup
    npm run catalog
    npm run check
    npm run pack
    ```
+
+   `npm run setup` 装各模块自己的依赖（TS 模块要靠它才有 `@types/node` 和 `tsc`）。
+   没跑过它的时候，VS Code 里会满屏「找不到 fetch / Response / AbortSignal」，那不是代码问题。
 
 3. 把文件夹复制到 Aurabot 数据目录的 `modules/<id>/`，在面板「扩展」页确认能跑。
 4. 提 PR，按模板填写。

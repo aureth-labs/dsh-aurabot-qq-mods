@@ -9,7 +9,9 @@ test('actual reminder panel selects once date/time and preserves periodic choice
     return [slots[i], value => { slots[i] = typeof value === 'function' ? value(slots[i]) : value; }]; }, useEffect() {}, useRef() { return { current: null }; } };
   const h = (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity) });
   const ui = new Proxy({}, { get: (_, key) => key });
+  let reminderList = { ok: false, code: 'FAMILY_REMINDER_INVALID', message: '定时提醒已暂停。' };
   const call = async (path, body) => { calls.push({ path, body });
+    if (path === '/reminders') return reminderList;
     if (path === '/status') throw Error('synthetic refresh failure');
     if (path === '/reminders/create') return { ok: true, message: '提醒已保存' };
     return { ok: false }; };
@@ -20,6 +22,14 @@ test('actual reminder panel selects once date/time and preserves periodic choice
   const button = text => nodes.find(n => n.type === 'Btn' && n.children.includes(text));
   const change = (name, value) => { label(name).props.onChange({ target: { value } }); render(); };
   render();
+  const shows = text => nodes.some(node => node.children.includes(text));
+  assert.equal(shows('还没有待执行的提醒。'), false);
+  await button('刷新提醒').props.onClick(); render();
+  assert.equal(shows('定时提醒已暂停。'), true);
+  assert.equal(shows('还没有待执行的提醒。'), false);
+  reminderList = { ok: true, reminders: [] };
+  await button('刷新提醒').props.onClick(); render();
+  assert.equal(shows('还没有待执行的提醒。'), true);
   change('提醒周期', 'monthly');
   change('每月提醒日期', '31');
   change('提醒类型', 'once');

@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events'
 import { mkdtempSync, writeFileSync, symlinkSync, lstatSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createBrowser, connectCdp } from '../lib/browser.mjs'
+import { createBrowser, connectCdp, findBrowser } from '../lib/browser.mjs'
 import { createSite } from '../lib/site.mjs'
 
 let createDouyin
@@ -53,6 +53,9 @@ function harness({ platform = 'linux', mode = 'timeout', wait, getPort, refuseSt
         child.pid = undefined
         queueMicrotask(() => child.emit('error', new Error('spawn ENOENT')))
       }
+      // Windows 真实场景：同资料目录已有实例在跑 / Edge 安装被磁盘清理弄坏，
+      // 进程起来马上退出，stderr 一个字都不写——旧代码会把这种报成「请检查浏览器路径」。
+      if (behavior === 'silent-exit') queueMicrotask(() => child.emit('exit', 0, null))
       if (behavior === 'stderr-lock') queueMicrotask(() => {
         child.emit('exit', 1, null)
         setTimeout(() => {
@@ -63,7 +66,7 @@ function harness({ platform = 'linux', mode = 'timeout', wait, getPort, refuseSt
       return child
     },
     getBrowserJson: async (url) => {
-      if (behavior === 'timeout' || behavior === 'spawn-error' || behavior === 'stderr-lock') throw new Error('连接被拒绝')
+      if (behavior === 'timeout' || behavior === 'spawn-error' || behavior === 'stderr-lock' || behavior === 'silent-exit') throw new Error('连接被拒绝')
       if (url.endsWith('/json/list')) return [{ id: '1', type: 'page', url: 'about:blank', webSocketDebuggerUrl: 'ws://127.0.0.1/test' }]
       return { Browser: '假浏览器' }
     },
@@ -219,6 +222,50 @@ test('浏览器报 profile appears to be in use 时明确提示并退避', async
   assert.equal(h.kills.length, 0, '进程已自行退出，不对其他进程发信号')
   await h.browser.open('登录')
   assert.equal(h.children.length, 1)
+})
+
+test('静默退出与启动超时要说清真实原因，不再一律怪「路径和资料目录」', async () => {
+  // 场景一：进程起来马上退出、无任何输出（同目录残留实例 / 清理搬盘弄坏 Edge 安装）
+  const h = harness({ mode: 'silent-exit' })
+  const r = await h.browser.open('定时')
+  assert.match(r.message, /自己退出/)
+  assert.match(r.message, /任务管理器|重装 Edge/)
+  assert.doesNotMatch(r.message, /检查浏览器路径和专用资料目录/, '路径明明没问题，不该再怪路径')
+
+  // 场景二：进程活着但调试端口一直不开（启动慢 / 杀毒拦截）
+  const t = harness({ mode: 'timeout' })
+  const tr = await t.browser.open('定时')
+  assert.match(tr.message, /调试端口/)
+  assert.match(tr.message, /30 秒内/)
+  assert.doesNotMatch(tr.message, /检查浏览器路径和专用资料目录/)
+})
+
+test('findBrowser：填的路径不存在就回退常见安装位置探测；哪儿都没有才报空', () => {
+  const exists = (p) => p === 'C:\\fake\\msedge.exe' || p === 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe'
+  assert.equal(findBrowser('C:\\fake\\msedge.exe', exists), 'C:\\fake\\msedge.exe', '填的路径真实存在就用填的')
+  assert.equal(findBrowser('C:\\missing\\msedge.exe', exists), 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe', '填的不存在时回退自动探测（清理搬盘后 x86 路径失效的兜底）')
+  assert.equal(findBrowser('C:\\missing\\msedge.exe', () => false), '', '哪儿都没有返回空，由调用方报「路径不对」并列出填过的路径')
+  assert.equal(findBrowser('', exists), 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe', '没填就走自动探测')
+})
+
+test('失败的登录检查也落盘并刷新时间戳：报错文案和「查的」时间配套', async () => {
+  process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'dy-account-fail-'))
+  const cfg = normalize({ enabled: true, douyin: { enabled: true } })
+  let clock = 5_000_000
+  const site = { ensure: async () => ({ ok: false, message: '浏览器没起来（测试注入的失败）' }), connected: () => false, close: async () => {} }
+  const dy = createDouyin({ getConfig: () => cfg, site, hub: {}, now: () => clock, log: { warn() {}, info() {}, debug() {} } })
+  const r = await dy.account(true)
+  assert.equal(r.loggedIn, false)
+  assert.match(r.message, /浏览器没起来/)
+  assert.equal(r.at, clock, '失败时间写进 account.at，面板不再拿上次成功的时间配这次的报错')
+  const st = dy.state()
+  assert.match(st.account.message, /浏览器没起来/)
+  assert.equal(st.account.at, clock, '失败原因已持久化，刷新页面也能看到带时间的原因')
+  clock += 60_000
+  const r2 = await dy.account(true)
+  assert.equal(r2.at, clock, '再查一次时间跟着走，不再停留在一个旧时间')
+  dy.dispose()
+  await new Promise((resolve) => setImmediate(resolve))
 })
 
 test('已连上的自有浏览器优先正常关闭，失败时回退到进程树清理', async () => {

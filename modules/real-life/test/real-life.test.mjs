@@ -4,8 +4,8 @@ import { readFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
-import { wallTime, parseHm, formatHm, daysBetweenYmd, shiftYmd, inHourWindow } from '../lib/clock.mjs'
-import { createRealLifeEngine, classifyFood } from '../lib/engine.mjs'
+import { wallTime, parseHm, formatHm, daysBetweenYmd, shiftYmd, inHourWindow, normHour, hoursBetween, routineDayYmd } from '../lib/clock.mjs'
+import { createRealLifeEngine, classifyFood, DREAM_POOL } from '../lib/engine.mjs'
 import mod from '../index.mjs'
 
 let checkDef = (def, id) => {
@@ -546,4 +546,331 @@ test('pre-release audit: anti-spoiler send guard, pendingSleep on out, lock auto
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('v1.2: night-owl schedule (05:00~14:00) handles cross-midnight routine day, meals, shower, poop, nap, and no 24h oversleep', () => {
+  const settings = {
+    sleepEnabled: true,
+    sleepAt: '05:00',
+    wakeAt: '14:00',
+    napEnabled: true,
+    showerEnabled: true,
+    showerAt: '23:30',
+    mealTimes: '14:30, 19:30, 01:00',
+    dailyMealQuota: 3,
+    autoMeal: true,
+    dietEnabled: true,
+    bathroomEnabled: true,
+    periodEnabled: true,
+    periodNudge: true,
+    hungerNudge: true,
+    autonomyMode: 'daily',
+  }
+
+  // 1. routineDayYmd: 以 05:00~14:00 中点 09:30 为界，23:30 和次日 01:30 属于同一作息日，09:40 后翻到新一天
+  const t2330 = Date.parse('2026-11-26T15:30:00Z') // 2026-11-26 23:30 CST
+  const t0130 = Date.parse('2026-11-26T17:30:00Z') // 2026-11-27 01:30 CST
+  const t1000 = Date.parse('2026-11-27T02:00:00Z') // 2026-11-27 10:00 CST
+  assert.equal(hoursBetween(5, 14), 9)
+  assert.equal(normHour(25.5), 1.5)
+  assert.equal(routineDayYmd(t2330, 9.5, 'Asia/Shanghai'), '2026-11-26')
+  assert.equal(routineDayYmd(t0130, 9.5, 'Asia/Shanghai'), '2026-11-26')
+  assert.equal(routineDayYmd(t1000, 9.5, 'Asia/Shanghai'), '2026-11-27')
+
+  // 2. 05:25 自动入睡 → 预计醒来在当天 14:00 附近（约 8.5h，不会跳到次日）
+  let now = Date.parse('2026-11-26T21:25:00Z') // 2026-11-27 05:25 CST
+  const eng = createRealLifeEngine({ getSettings: () => settings, nowFn: () => now, rngFn: () => 0.4 })
+  eng.tick(now)
+  assert.equal(eng.state.mode, 'asleep')
+  const wakeHours = (eng.state.sleep.plannedWakeAt - now) / 3_600_000
+  assert.ok(wakeHours > 7.5 && wakeHours < 9.5, `expected ~8.5h sleep, got ${wakeHours}h`)
+
+  // 3. 快到起床时间前（13:50）赖床再入睡：只补睡 ~30 分钟，绝不 +24h 睡整天
+  const t1350 = Date.parse('2026-11-27T05:50:00Z') // 13:50 CST
+  eng.wakeUpNow(t1350, '被叫醒')
+  eng.enterSleep({ kind: 'night', now: t1350, reason: '赖床回笼' })
+  const snoozeH = (eng.state.sleep.plannedWakeAt - t1350) / 3_600_000
+  assert.ok(snoozeH >= 0.4 && snoozeH <= 1.2, `expected short snooze <= 1.2h, got ${snoozeH}h`)
+
+  // 4. 睡醒后 15:30~16:30（wakeAt + 1.45h ± 45m）能正常触发每日大号（不再写死在上午 09:12）
+  eng.wakeUpNow(Date.parse('2026-11-27T06:10:00Z'), '自然醒') // 14:10 CST
+  let pooped = false
+  for (let m = 0; m <= 120; m += 15) {
+    now = Date.parse('2026-11-27T06:45:00Z') + m * 60_000 // 14:45 ~ 16:45 CST
+    eng.updateValues({ bladder: 20, hunger: 10 }, now)
+    eng.tick(now)
+    if (eng.state.mode === 'away' && eng.state.away?.kind === 'poop') {
+      pooped = true
+      eng.finishAwayNow(now + 8 * 60_000)
+      break
+    }
+  }
+  assert.equal(pooped, true, 'expected daily poop to trigger after 14:00 wakeAt')
+
+  // 5. 清醒中段 19:35（wakeAt + 5.5h）精力偏低时触发小睡（不再撞车 13:10~14:00），且每作息日只小睡一次
+  now = Date.parse('2026-11-27T11:35:00Z') // 19:35 CST
+  eng.state.lastTickAt = now - 30_000
+  eng.updateValues({ energy: 50, hunger: 10, bladder: 20, poopedToday: true }, now)
+  eng.tick(now)
+  assert.equal(eng.state.mode, 'asleep')
+  assert.equal(eng.state.sleep.kind, 'nap')
+  eng.wakeUpNow(now + 35 * 60_000, '自然醒')
+
+  // 6. 23:30 跨零点洗澡：00:10 仍在洗澡窗口内，可正常触发洗澡，且跨过午夜 showeredToday 保持为 true
+  now = Date.parse('2026-11-27T16:10:00Z') // 2026-11-28 00:10 CST
+  eng.state.lastTickAt = now - 30_000
+  eng.updateValues({ energy: 70, hunger: 10, bladder: 20 }, now)
+  eng.tick(now)
+  assert.equal(eng.state.mode, 'away')
+  assert.equal(eng.state.away.kind, 'shower')
+  eng.finishAwayNow(now + 22 * 60_000)
+  assert.equal(eng.snapshot(Date.parse('2026-11-27T17:00:00Z')).showeredToday, true)
+
+  // 7. 凌晨 01:20 吃第三餐（跨零点餐点）：吃夜宵而不是早点豆浆，且 02:30 清醒时段允许触发经期求哄
+  now = Date.parse('2026-11-27T17:20:00Z') // 2026-11-28 01:20 CST
+  eng.state.lastTickAt = now - 30_000
+  eng.updateValues({ hunger: 60, bladder: 20, energy: 60, mealsUsed: 2 }, now)
+  eng.tick(now)
+  assert.ok(eng.state.hunger < 30, `expected midnight 01:00 meal to auto-feed, hunger=${eng.state.hunger}`)
+  assert.doesNotMatch(String(eng.state.mealsToday.dinner || ''), /豆浆|油条|燕麦/)
+
+  // 凌晨 02:30 经期第 1 天清醒时能触发 period-nudge（不再被 09:30~22:12 硬编码拦死）
+  now = Date.parse('2026-11-27T18:30:00Z') // 2026-11-28 02:30 CST
+  eng.state.lastTickAt = now - 30_000
+  eng.applyScenario('period-day1', now)
+  eng.updateValues({ hunger: 20, bladder: 20, energy: 60 }, now)
+  const { actions } = eng.tick(now)
+  assert.ok(actions.some((a) => a.type === 'period-nudge'), 'expected period-nudge to work at 02:30 when awake')
+})
+
+test('v1.2: full-auto mode (free) acts without asking permission, supports self-snack, and still obeys explicit forbid locks', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rl-free-'))
+  try {
+    let savedSettings = { ...mod.defaults, autonomyMode: 'free', chatIdleMinutes: 15, dailyMealQuota: 3 }
+    let ruleFn = null
+    let toolBuilder = null
+    const mockApi = {
+      id: 'real-life',
+      dir,
+      dataDir: () => dir,
+      config: () => ({ enabled: true, dryRun: false, ownerQQ: '123456', ownerName: '主人' }),
+      settings: () => savedSettings,
+      saveSettings: (p) => Object.assign(savedSettings, p),
+      isOwner: (uid) => String(uid) === '123456',
+      log: { info() {}, warn() {}, error() {}, debug() {} },
+      context: () => () => {},
+      rule: (fn) => { ruleFn = fn; return () => {} },
+      on: () => () => {},
+      tool: (b) => { toolBuilder = b; return () => {} },
+      defineTool: (s) => s,
+      command: () => () => {},
+      route: () => () => {},
+      every: () => () => {},
+      later: () => () => {},
+      onDispose: () => () => {},
+      use: () => null,
+      core: {
+        mutes: { muted: () => false },
+        hub: { turnSendersAllOwner: () => true, pushToSession: async () => {} },
+      },
+    }
+    const exported = mod.setup(mockApi)
+    // 1. 规则提示词在 free 模式下不再要求请示权限
+    const rules = ruleFn('private')
+    const joinedRules = Array.isArray(rules) ? rules.join('\n') : String(rules)
+    assert.match(joinedRules, /全自动自主模式/)
+    assert.doesNotMatch(joinedRules, /未经主人同意你绝不能擅自离开/)
+
+    // 2. 工具 real_life_routine(eat) 在正餐配额用完后，free 模式自动回退为自主加餐，不报错求投喂
+    exported.updateValues({ hunger: 85, mealsUsed: 3 })
+    const tools = toolBuilder({ chat: { chatId: 'private:123456', kind: 'private' }, level: 'full', sessionId: 's1' })
+    const routineTool = tools.find((t) => t.name === 'real_life_routine')
+    const eatRes = await routineTool.execute({ action: 'go', activity: 'eat' })
+    assert.equal(eatRes.ok, true)
+    assert.match(eatRes.message, /加餐/)
+    assert.ok(exported.snapshot().hunger < 85)
+
+    // 3. 引擎级检验：刚聊完天，上下文也不要求请示批准；3 分钟后后台自动去厕所/加餐；但显式 forbid 锁仍严格生效
+    let now = Date.parse('2026-11-26T13:35:00Z') // 21:35 CST
+    const eng = createRealLifeEngine({
+      getSettings: () => ({ autonomyMode: 'free', chatIdleMinutes: 15, dailyMealQuota: 3 }),
+      nowFn: () => now,
+    })
+    eng.updateValues({ bladder: 88, hunger: 82, mealsUsed: 3, energy: 15 }, now)
+    eng.onIncomingMessage(
+      { kind: 'private', chatId: 'private:100', userId: '100', nickname: '主人', text: '在干嘛呢' },
+      { isOwner: true, now }
+    )
+    const freeCtx = eng.buildContext({ chat: { chatId: 'private:100', kind: 'private' }, isOwner: true, now: now + 30_000 })
+    assert.match(freeCtx, /不用请示|不用征求/)
+    assert.doesNotMatch(freeCtx, /请示批准|没经主人同意不敢自己先睡/)
+
+    // 仅过 3 分钟（远小于 chatIdleMinutes=15）：全自动模式自动先吃零食再处理如厕/洗澡
+    now += 3 * 60_000
+    eng.tick(now)
+    assert.ok(eng.state.hunger < 70, `expected free mode auto-snack after 3m, got hunger=${eng.state.hunger}`)
+    assert.equal(eng.state.mode, 'away')
+    eng.finishAwayNow(now + 3 * 60_000)
+
+    // 显式禁令在 free 模式下仍然严格生效：主人说「不准去上厕所，憋着！」
+    now += 5 * 60_000
+    eng.updateValues({ bladder: 92 }, now)
+    eng.onIncomingMessage(
+      { kind: 'private', chatId: 'private:100', userId: '100', nickname: '主人', text: '不准去上厕所，憋着！' },
+      { isOwner: true, now }
+    )
+    assert.equal(eng.isLocked('bathroom', now), true)
+    now += 5 * 60_000
+    eng.updateValues({ bladder: 92, showeredToday: true, energy: 80, hunger: 20 }, now)
+    eng.tick(now)
+    assert.equal(eng.state.mode, 'awake', 'explicit forbid lock must still hold in free mode')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('v1.2: dreams never repeat back-to-back in pool, AI dream generation works with context, and falls back cleanly on error', async () => {
+  // 1. 兜底梦池扩充且防重复：连抽 16 次完全不重复
+  assert.ok(DREAM_POOL.length >= 30)
+  let t = Date.parse('2026-11-26T18:00:00Z')
+  const eng = createRealLifeEngine({ getSettings: () => ({ aiDream: false }), nowFn: () => t })
+  const seen = new Set()
+  for (let i = 0; i < 16; i++) {
+    t += 60_000
+    const d = eng.recordDream(t)
+    assert.equal(seen.has(d.summary), false, `duplicate dream found on draw ${i}: ${d.summary}`)
+    seen.add(d.summary)
+  }
+
+  // 2. 开启 aiDream 时，REM 阶段发出 generate-dream 动作，由 index.mjs 调用 api.ask 生成专属梦境并支持失败兜底
+  const dir = mkdtempSync(join(tmpdir(), 'rl-dream-'))
+  try {
+    let askMode = 'ok'
+    const askCalls = []
+    const savedSettings = { ...mod.defaults, aiDream: true }
+    const mockApi = {
+      id: 'real-life',
+      dir,
+      dataDir: () => dir,
+      config: () => ({ enabled: true, dryRun: false, ownerQQ: '123456', ownerName: '主人' }),
+      settings: () => savedSettings,
+      saveSettings: (p) => Object.assign(savedSettings, p),
+      isOwner: (uid) => String(uid) === '123456',
+      log: { info() {}, warn() {}, error() {}, debug() {} },
+      context: () => () => {},
+      rule: () => () => {},
+      on: () => () => {},
+      tool: () => () => {},
+      defineTool: (s) => s,
+      command: () => () => {},
+      route: () => () => {},
+      every: () => () => {},
+      later: () => () => {},
+      onDispose: () => () => {},
+      use: (id) => (id === 'mood' ? { label: () => '开心放松', current: () => 78 } : null),
+      ask: async (opts) => {
+        askCalls.push(opts)
+        if (askMode === 'fail') throw new Error('network down')
+        return '「梦到骑着一只会发光的小木马穿过挂满星光灯笼的午夜商店街」'
+      },
+      core: {
+        mutes: { muted: () => false },
+        personas: { current: () => '你是喜欢散步和烘焙的开朗女孩小满。' },
+        hub: {
+          turnSendersAllOwner: () => true,
+          pushToSession: async () => {},
+          chatLogOf: () => [{ chatId: 'private:123456', who: '主人', text: '今天路过街角买了一杯桂花拿铁' }],
+        },
+      },
+    }
+
+    const exported = mod.setup(mockApi)
+    const aiDream = await exported.generateDream({ hunger: 75, discomfort: 0, kind: 'night' })
+    assert.equal(aiDream.source, 'ai')
+    assert.equal(aiDream.summary, '梦到骑着一只会发光的小木马穿过挂满星光灯笼的午夜商店街')
+    assert.equal(askCalls.length, 1)
+    assert.match(askCalls[0].text, /桂花拿铁/)
+    assert.match(askCalls[0].text, /开心放松/)
+
+    // 失败时自动回退防重复梦境池，不抛异常、不重复刚刚的 AI 梦
+    askMode = 'fail'
+    const fallbackDream = await exported.generateDream({ hunger: 30, discomfort: 0, kind: 'night' })
+    assert.equal(fallbackDream.source, 'pool')
+    assert.notEqual(fallbackDream.summary, aiDream.summary)
+
+    // 睡眠中被叫醒时，interruptedSleep 中的梦境应正确呈现在上下文里
+    let t2 = Date.parse('2026-11-26T18:00:00Z')
+    const engWake = createRealLifeEngine({
+      getSettings: () => ({ aiDream: false }),
+      nowFn: () => t2,
+      rngFn: () => 0.05, // 保证叫醒
+    })
+    engWake.applyScenario('rem-dream', t2)
+    const recordedSummary = engWake.state.dreams[0].summary
+    const wRes = engWake.onIncomingMessage(
+      { kind: 'private', chatId: 'private:100', userId: '100', nickname: '主人', text: '快醒醒' },
+      { isOwner: true, now: t2 + 60_000 }
+    )
+    assert.equal(wRes.woken, true)
+    const wakeCtx = engWake.buildContext({ chat: { chatId: 'private:100', kind: 'private' }, isOwner: true, now: t2 + 60_000 })
+    assert.ok(wakeCtx.includes(recordedSummary), 'expected interruptedSleep dream to appear in wake context')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('v1.2.1 (Issue #1): wake -> bathroom -> return never reloops into 24h sleep across midnight wake jitter', () => {
+  // 复现 Issue #1 原始时间线：2026-11-23 23:41:05 入睡 → 11-24 07:40:36 自然醒 → 去洗手间 → 07:43:36 回来
+  const settings = {
+    sleepEnabled: true,
+    sleepAt: '23:30',
+    wakeAt: '07:45',
+    bathroomEnabled: true,
+    showerEnabled: false,
+    timeZone: 'Asia/Shanghai',
+    autonomyMode: 'daily',
+  }
+  let now = Date.parse('2026-11-23T15:41:05Z') // 2026-11-23 23:41:05 CST
+  const eng = createRealLifeEngine({ getSettings: () => settings, nowFn: () => now, rngFn: () => 0.9 })
+
+  // 1. 23:41:05 入睡，记录计划醒来时间（基于 11-23 睡眠周期盐值）
+  eng.tick(now)
+  assert.equal(eng.state.mode, 'asleep')
+  const wakeAtMs = eng.state.sleep.plannedWakeAt
+  const wakeWall = wallTime(wakeAtMs, 'Asia/Shanghai')
+  assert.equal(wakeWall.ymd, '2026-11-24')
+
+  // 2. 到点自然醒，并立刻因膀胱满进入洗手间暂离 3 分钟
+  now = wakeAtMs + 5_000
+  eng.updateValues({ bladder: 90 }, now)
+  eng.tick(now)
+  assert.equal(eng.state.mode, 'away')
+  assert.equal(eng.state.away.kind, 'pee')
+
+  // 3. 3 分钟后从洗手间回来，再次 tick：严禁回笼入睡，更不能顺延 24 小时睡到 11-25！
+  now += 3 * 60_000 + 5_000
+  eng.tick(now)
+  assert.equal(eng.state.mode, 'awake', 'must stay awake after natural wake + bathroom return')
+
+  // 4. 再推进 5 分钟（模拟原 Issue 中 07:43:36 ~ 07:50 仍在旧版次日抖动窗口内）也保持清醒
+  now += 5 * 60_000
+  eng.tick(now)
+  assert.equal(eng.state.mode, 'awake')
+
+  // 5. 即使不是自然醒（例如距起床点仅剩 19 分钟被主人提前吵醒），tick 也不得自动回睡
+  let t2 = Date.parse('2026-11-23T15:41:05Z')
+  const eng2 = createRealLifeEngine({ getSettings: () => settings, nowFn: () => t2, rngFn: () => 0.9 })
+  eng2.tick(t2)
+  const wake2 = eng2.state.sleep.plannedWakeAt
+  t2 = wake2 - 19 * 60_000 // 距起床点仅 19 分钟
+  eng2.wakeUpNow(t2, '被叫醒')
+  eng2.state.lastTickAt = t2
+  eng2.updateValues({ energy: 50, bladder: 20 }, t2)
+  eng2.tick(t2 + 30_000)
+  assert.equal(eng2.state.mode, 'awake', 'must not auto-reenter sleep when < 45m before wakeAt')
+
+  // 6. 即便此时被手动哄睡，计划醒来时间也只能在 1 小时内，绝不 +24h 睡整天
+  eng2.enterSleep({ kind: 'night', now: t2 + 30_000, reason: '手动哄睡' })
+  const durH = (eng2.state.sleep.plannedWakeAt - (t2 + 30_000)) / 3_600_000
+  assert.ok(durH >= 0.45 && durH <= 1.0, `expected short snooze <= 1h, got ${durH}h`)
 })

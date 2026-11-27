@@ -1,5 +1,5 @@
 // 红果短剧面板（模块自带，官方 panel.js 机制）
-const { useState, useEffect, useRef } = React
+const { useState, useEffect } = React
 
 // 展示墙：竖版海报网格（640×914，2:3 卡片）
 const HG_KIND = { watch: '看过', share: '分享给你' }
@@ -19,29 +19,34 @@ const HG_CSS = `
 .ab-hgcard .tx{padding:0 8px;margin-bottom:7px;font-size:11px;line-height:1.4;height:2.8em;overflow:hidden;color:var(--ab-sub);word-break:break-all}
 `
 
-return function HongguoPanel ({ settings, draftSettings, setSettings, toast }) {
-  const s = draftSettings || settings || {}
+return function HongguoPanel ({ toast }) {
   const [login, setLogin] = useState(null) // { loggedIn, shot, me }
   const [busy, setBusy] = useState('')
   const [recent, setRecent] = useState(null)
   const [vt, setVt] = useState(null) // 看图自检结果
-  const timer = useRef(null)
 
-  const set = (k, v) => setSettings({ [k]: v })
-
-  const loadRecent = () => call('/hongguo/state').then((r) => setRecent((r && r.recent) || [])).catch(() => setRecent([]))
+  // 宿主把接口异常也包成 HTTP 200 + ok:false：必须看 ok，否则会显示成「还没刷过」
+  const loadRecent = () => call('/hongguo/state?limit=60').then((r) => {
+    if (r && r.ok === false) { setRecent(null); toast('读取记录失败：' + (r.message || '接口没通'), 'err'); return }
+    setRecent((r && r.recent) || [])
+  }).catch((e) => { setRecent(null); toast('读取记录失败：' + e.message, 'err') })
 
   useEffect(() => { loadRecent() }, [])
 
-  // 登录轮询：二维码出来后每 2.5 秒看一眼
+  // 登录轮询：二维码出来后每 2.5 秒看一眼。接口出错时安静跳过，别抛未处理的 rejection
+  const polling = Boolean(login) && !login.loggedIn
   useEffect(() => {
-    if (!login || login.loggedIn) return undefined
+    if (!polling) return undefined
+    let ticks = 0
     const t = setInterval(async () => {
-      const r = await call('/hongguo/login/poll')
+      // 浏览器打不开时接口会一直返回「未登录」：给个上限，别让面板开着就一直打
+      if (++ticks > 120) { clearInterval(t); toast('登录没等到结果，先停了，需要再点「开始登录」', 'err'); return }
+      const r = await call('/hongguo/login/poll').catch(() => null)
+      if (!r) return
       if (r.loggedIn) { setLogin(r); toast('登录成功：' + ((r.me && r.me.nickname) || '')); clearInterval(t) } else if (r.shot) setLogin(r)
     }, 2500)
     return () => clearInterval(t)
-  }, [Boolean(login), login && login.loggedIn])
+  }, [polling])
 
   const startLogin = async () => {
     setBusy('login')
@@ -105,8 +110,9 @@ return function HongguoPanel ({ settings, draftSettings, setSettings, toast }) {
       if (x.kind && !cur.kinds.includes(x.kind)) cur.kinds.push(x.kind)
       if (!cur.text && x.text) cur.text = x.text
       if (!cur.plot && x.plot) cur.plot = x.plot
-      if (!cur.score && x.score) cur.score = x.score
-      if (x.good) cur.good = true
+      // 分数与「金标」必须来自同一条记录，否则会出现「金标 + 低分」
+      if ((x.score || 0) > (cur.score || 0)) { cur.score = x.score || 0; cur.good = !!x.good }
+      else if ((x.score || 0) === (cur.score || 0) && x.good) cur.good = true
       if (x.saw) cur.saw = true
       if (!cur.sec && x.sec) cur.sec = x.sec
     }
@@ -143,20 +149,8 @@ return function HongguoPanel ({ settings, draftSettings, setSettings, toast }) {
     h('div', { className: 'tx' }, x.text || x.plot || '')) // 没话说也留这一块，卡片才等高
   }
 
-  return h('div', { className: 'ab-grid' },
-    h(ui.Card, { title: '刷红果短剧', right: h(ui.Switch, { on: s.enabled !== false, onChange: (v) => set('enabled', v) }), desc: '用专用浏览器刷红果短剧：看推荐，刷到觉得你会喜欢的就用 QQ 私聊发给你（她的话 + 剧集链接）。' },
-      h(ui.Row, { label: '多久刷一轮' }, h('input', { className: 'ab-input', type: 'number', min: 0.1, step: 0.5, style: { width: 100 }, value: s.intervalHours, onChange: (e) => set('intervalHours', Number(e.target.value)) }), h('span', { className: 'ab-muted' }, '小时')),
-      h(ui.Row, { label: '一轮看几部' }, h('input', { className: 'ab-input', type: 'number', min: 1, style: { width: 100 }, value: s.perRun, onChange: (e) => set('perRun', Number(e.target.value)) }), h('span', { className: 'ab-muted' }, '部')),
-      h(ui.Row, { label: '每天最多看', hint: '含手动刷的' }, h('input', { className: 'ab-input', type: 'number', min: 0, style: { width: 100 }, value: s.maxWatchPerDay, onChange: (e) => set('maxWatchPerDay', Number(e.target.value)) }), h('span', { className: 'ab-muted' }, '部')),
-      h(ui.Row, { label: '每天最多分享', hint: '私聊发你的上限，避免刷屏' }, h('input', { className: 'ab-input', type: 'number', min: 0, style: { width: 100 }, value: s.maxSharesPerDay, onChange: (e) => set('maxSharesPerDay', Number(e.target.value)) }), h('span', { className: 'ab-muted' }, '部')),
-      h(ui.Row, { label: '每部停留', hint: '随机取中间的秒数，像真人看剧' }, h('div', { className: 'ab-flex' },
-        h('input', { className: 'ab-input', type: 'number', min: 1, style: { width: 80 }, value: s.dwellMin, onChange: (e) => set('dwellMin', Number(e.target.value)) }),
-        h('span', { className: 'ab-muted' }, '~'),
-        h('input', { className: 'ab-input', type: 'number', min: 1, style: { width: 80 }, value: s.dwellMax, onChange: (e) => set('dwellMax', Number(e.target.value)) }),
-        h('span', { className: 'ab-muted' }, '秒'))),
-      h(ui.Row, { label: '浏览器路径', hint: '留空自动找 Edge / Chrome' }, h('input', { className: 'ab-input wide', value: s.browserPath || '', onChange: (e) => set('browserPath', e.target.value.trim()), placeholder: 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' })),
-      h(ui.Row, { label: '看画面用哪个模型', hint: '留空 = 跟聊天模型；默认模型看不懂图时填一个支持图片的' }, h('input', { className: 'ab-input wide', value: s.visionModel || '', onChange: (e) => set('visionModel', e.target.value.trim()), placeholder: 'xdpool/glm-5.3' }))
-    ),
+  return h(React.Fragment, null,
+    h('style', null, HG_CSS),
     h(ui.Card, { title: '她真的看得懂吗', desc: '真播十几秒抓一帧，问她画面里有什么。确认当前模型能不能看懂画面 —— 看不懂就只会照简介瞎写。' },
       h(ui.Btn, { disabled: !!busy, onClick: visionTest }, busy === 'vt' ? '正在试（要播十几秒）…' : '试一下她能不能看懂画面'),
       vt && vt.ok ? h('div', { className: 'ab-note', style: { marginTop: 8 } },
@@ -173,14 +167,13 @@ return function HongguoPanel ({ settings, draftSettings, setSettings, toast }) {
         h('div', { className: 'ab-small ab-muted' }, '用红果 App 扫码登录（浏览器窗口里也能直接操作）：'),
         h('img', { src: login.shot, alt: '红果登录', style: { maxWidth: 320, width: '100%', border: '1px solid var(--ab-line)', borderRadius: 8, marginTop: 6 } })) : null,
       login && login.loggedIn ? h('div', { className: 'ab-note', style: { marginTop: 8 } }, '已登录：' + ((login.me && login.me.nickname) || '（没拿到昵称）')) : null,
-      !login ? h('div', { className: 'ab-small ab-muted', style: { marginTop: 8 } }, '点「开始登录」会开一个专用浏览器窗口，登录状态单独存，不碰你平时的浏览器。') : null
+      !login ? h('div', { className: 'ab-small ab-muted', style: { marginTop: 8 } }, '点「开始登录」会开一个专用浏览器窗口，登录状态单独存，不碰你平时的浏览器；扫码成功后窗口会自动收起。') : null
     ),
     h(ui.Card, { title: '她刷过什么', right: h('div', { className: 'ab-flex' },
       h(ui.Btn, { small: true, kind: 'ghost', onClick: loadRecent }, '刷新'),
       h(ui.Btn, { small: true, kind: 'ghost', disabled: !!busy, onClick: fillCovers }, busy === 'fill' ? '补封面中…' : '补封面')) },
     recent === null ? h(ui.Empty, { icon: '⏳', text: '加载中…' })
       : recent.length === 0 ? h(ui.Empty, { icon: '📺', text: '还没刷过。点上面「现在刷一轮」试试。' })
-        : h('div', { className: 'ab-hgwall' }, wallOf(recent).map(hgCell))),
-    h('style', null, HG_CSS)
+        : h('div', { className: 'ab-hgwall' }, wallOf(recent).map(hgCell)))
   )
 }

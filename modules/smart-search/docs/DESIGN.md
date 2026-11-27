@@ -12,7 +12,7 @@ QQ 提问 → 当前聊天模型
           ←  模型判断是否补查，最后回答并引用来源
 ```
 
-本地路由为明确的优先顺序，不是相关性评分模型：技术文档优先 Exa / Firecrawl，中文普通检索优先智谱，英文新闻优先 Tavily，其他问题优先 DSH / SearXNG。只有启用且已配置的渠道参与。模型可通过 `sources` 指定来源、`mode=verify` 请求多源核对；面板的策略与上限始终优先。
+本地路由为明确的优先顺序，不是相关性评分模型：技术文档优先 Exa / Firecrawl，中文普通检索优先智谱，英文新闻优先 Tavily，其他问题优先 DSH / SearXNG；Keenable 在各类问题中都排最后，只在被启用时参与。只有启用且已配置的渠道参与。模型可通过 `sources` 指定来源、`mode=verify` 请求多源核对；面板的策略与上限始终优先。
 
 没有独立 Jev、二次汇总模型或嵌套研究循环。判断证据是否足够、改写检索词和决定后续读取由当前聊天模型负责；模型工具调用行为最终仍取决于它的能力和宿主限制。
 
@@ -41,9 +41,10 @@ QQ 提问 → 当前聊天模型
 - Exa：`POST /search`（auto）、`POST /contents`。
 - Firecrawl v2：`POST /search`、`POST /scrape`（markdown）。
 - SearXNG：`GET /search?format=json`，可指定引擎，保留部分引擎失败提示。
+- Keenable：未填密钥时 `POST /v1/search/public`、`GET /v1/fetch/public`，请求头带 `X-Keenable-Title` 标明来源；填了密钥改走 `POST /v1/search`、`GET /v1/fetch` 并带 `X-API-Key`。结果正文取 `snippet`（`description` 恒为空），用 `snippet_max_length` 限长。
 - Context7：`GET /api/v2/libs/search`、`GET /api/v2/context`。不把库目录介绍当成读到文档。
 
-Tavily / Exa / 智谱传各自支持的时间条件；DSH / Firecrawl 用查询词提示；SearXNG 不支持 week 时按 month 查询并明确说明。域名在响应侧再次筛选。日期限制取决于索引质量，不能代替原文核对。
+Tavily / Exa / 智谱 / Keenable 传各自支持的时间条件；DSH / Firecrawl 用查询词提示；SearXNG 不支持 week 时按 month 查询并明确说明。域名在响应侧再次筛选。日期限制取决于索引质量，不能代替原文核对。
 
 ## 宿主依赖
 

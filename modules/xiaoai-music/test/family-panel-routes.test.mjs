@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, isAbsolute } from 'node:path';
 import definition from '../index.mjs';
@@ -9,17 +9,17 @@ import { SongLibrary, FamilySongError } from '../lib/songs/library.mjs';
 globalThis.aurabot = { src: new URL('../', import.meta.url), lib: () => ({}) };
 const { selectSingingVoice } = await import('../lib/songs/runtime.mjs');
 
-async function setup(t) {
+async function setup(t, local) {
   const root = await mkdtemp(join(tmpdir(), 'family-panel-routes-'));
   const handlers = new Map(), disposers = [], saved = [];
   const settings = { resourceRoot: root, networkInterface: 'Synthetic interface' };
   const config = { persona: { current: 'synthetic' }, voice: { enabled: true, engine: 'edge', voice: 'Synthetic voice' }, song: { voice: 'Synthetic singing voice' } };
   const baseline = JSON.stringify(config);
-  const module = await definition.setup({ id: 'xiaoai-music', tool() {}, rule() {}, defineTool: value => value, settings: () => settings, config: () => config,
+  const module = await definition.setup({ id: 'xiaoai-music', tool() {}, rule() {}, defineTool: value => value, settings: () => settings, config: () => config, dataDir: () => root,
     saveSettings: async patch => { saved.push(patch); Object.assign(settings, patch); },
     use: id => id === 'song' ? { status: () => ({ voices: [{ id: 'Synthetic singing voice', pth: 'private-fixture-path' }] }) } : null,
     route: (path, handler) => handlers.set(path, handler), every() {}, on() {}, onDispose: fn => disposers.push(fn),
-    core: { http: { body: async req => req.body }, personas: { current: () => { throw new Error('Global persona must not be read'); }, list: () => { throw new Error('Global persona list must not be read'); } } },
+    core: { local, http: { body: async req => req.body }, personas: { current: () => { throw new Error('Global persona must not be read'); }, list: () => { throw new Error('Global persona list must not be read'); } } },
   });
   t.after(async () => { for (const dispose of disposers) await dispose();
     const path = relative(tmpdir(), root); assert.ok(path && !isAbsolute(path) && !path.startsWith('..'));
@@ -37,6 +37,7 @@ test('family settings expose safe dropdowns and save only this module settings',
   const choices = await h.get('/settings/options');
   assert.equal(choices.ok, true);
   assert.equal(choices.voices.options[0].id, '');
+  assert.equal(choices.voices.singing.label, 'Synthetic singing voice');
   assert.equal(JSON.stringify(choices).includes('private-fixture-path'), false);
   const patch = { networkInterface: 'Synthetic interface', speakerDevice: 'synthetic-device', motherVoice: '' };
   assert.equal((await h.post('/settings/save', patch)).ok, true);
@@ -47,6 +48,68 @@ test('family settings expose safe dropdowns and save only this module settings',
   assert.equal((await h.post('/settings/save', { ...patch, dialogueVoice: 'retired family voice' })).ok, true);
   assert.deepEqual(h.saved[1], patch);
   assert.equal(Object.hasOwn(h.saved[1], 'dialogueVoice'), false);
+});
+
+test('local voice preflight reports hook, revision and environment readiness without rendering', async t => {
+  const calls = [];
+  let active = false;
+  let renderVersion = 'old-version';
+  const h = await setup(t, {
+    active: () => active,
+    call: async (slot, args) => {
+      calls.push(args);
+      assert.equal(slot, 'song');
+      assert.equal(args.task, 'xiaoai-full-song/v1');
+      assert.equal(args.describe, true);
+      return { kind: 'describe', voiceId: 'example-voice', renderVersion };
+    },
+  });
+  await writeFile(join(h.root, '本地整曲音色.json'), JSON.stringify([
+    { id: 'example-voice', label: '示例音色', renderVersion: 'current-version' },
+  ]));
+  const saved = await h.post('/settings/save', { networkInterface: '', speakerDevice: '', motherVoice: 'local:example-voice' });
+  assert.equal(saved.ok, true);
+  assert.equal((await h.get('/settings/options')).voices.singing.label, '示例音色（本地整曲）');
+  const check = () => h.post('/songs/local-voice/check', { voice: 'local:example-voice' });
+  assert.equal((await check()).code, 'FAMILY_LOCAL_HOOK_OFF');
+  assert.equal(calls.length, 0);
+  assert.equal((await h.get('/songs/local-voice/check')).ok, false);
+
+  active = true;
+  assert.equal((await check()).code, 'FAMILY_LOCAL_VERSION_MISMATCH');
+  renderVersion = 'current-version';
+  const env = join(h.root, 'cover-environment');
+  Object.assign(h.config.song, { root: env, separatorModel: 'test-model.onnx' });
+  const missing = await check();
+  assert.equal(missing.code, 'FAMILY_LOCAL_ENVIRONMENT');
+  assert.match(missing.message, /Python.*人声分离程序.*FFmpeg.*人声分离模型/);
+  for (const [directory, files] of [
+    [join(env, 'env', 'Scripts'), ['python.exe', 'audio-separator.exe']],
+    [join(env, 'bin'), ['ffmpeg.exe']],
+    [join(env, 'separator-models'), ['test-model.onnx']],
+  ]) {
+    await mkdir(directory, { recursive: true });
+    for (const file of files) await writeFile(join(directory, file), 'fixture');
+  }
+  assert.deepEqual(await check(), { ok: true, message: '可以生成原调整曲。' });
+  assert.equal(calls.length, 3);
+  assert.deepEqual((await h.get('/status')).songs.jobs, []);
+});
+
+test('recognition history rejects remote and non-POST requests before accessing credentials', async t => {
+ const h=await setup(t);const handler=h.handlers.get('/speaker/history/read');
+ assert.equal((await h.get('/speaker/history/read')).ok,false);
+ assert.equal((await handler({method:'POST',socket:{remoteAddress:'192.0.2.1'},headers:{host:'127.0.0.1:3080','content-type':'application/json'},body:{}})).ok,false);
+ assert.equal((await h.get('/status')).connected,false);
+});
+
+test('pinyin preview returns multiple readings in order without changing saved names', async t => {
+  const h = await setup(t);
+  const before = await h.get('/speaker/wake');
+  const preview = await h.post('/speaker/wake/pinyin', { names: ['小伴', '蓝蓝'] });
+  assert.deepEqual(preview, { ok: true, readings: ['xiao ban', 'lan lan'] });
+  assert.deepEqual((await h.get('/speaker/wake')).wake, before.wake);
+  assert.equal((await h.get('/speaker/wake/pinyin')).ok, false);
 });
 
 test('module exports and HTTP routes share the playback and recurring reminder formats', async t => {

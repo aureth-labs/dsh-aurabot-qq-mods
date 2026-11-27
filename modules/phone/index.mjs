@@ -23,7 +23,7 @@ const execFileP = promisify(execFile)
 export default {
   id: 'phone',
   name: '手机逛逛',
-  version: '0.4.1',
+  version: '0.4.2',
   api: 1,
   description: '通过 ADB 逛 Android 手机：按主人教好的流程自动签到/浏览/点赞，或自由推理完成一句话任务。',
   panel: 'panel.js',
@@ -78,6 +78,7 @@ export default {
         sessionTimeoutMs: Number(s.sessionTimeoutMs) || 900000,
         writeEventMemory: s.writeEventMemory !== false,
         decisionModel: String(s.decisionModel || ''), // 'provider::model'，空 = 跟随全局模型
+        visibleDecisions: s.visibleDecisions === true, // #61：默认关——决策走静默直连(api.ask)，不进人格会话窗；开了才落工作区「操作决策」窗供主人围观
         // 主动逛（照刷B站的节奏三件套）：autoBrowse 默认关、间隔默认 4 小时、每天默认最多 3 轮
         autoBrowse: !!s.autoBrowse,
         intervalHours: Math.max(0.1, Number(s.intervalHours) || 4),
@@ -159,9 +160,10 @@ export default {
     }
 
     // ---- 工作区上下文（adb 由调用方注入，见 startRun）----
-    // win 决定决策思考落在哪条工作区会话：
+    // #61：决策默认走静默直连（api.ask），不进任何会话窗；只有面板打开「决策过程可见」(visibleDecisions)
+    // 时 win 才生效，决定这步决策思考落到哪条工作区会话：
     //   自发（定时器 cron/定时主动逛）→ 共享的「手机逛逛 · 操作决策」一条；
-    //   被调用（工具/命令/触发词/面板/跨模块）→ 每次一个独立子智能体会话（key 唯一，互不串上下文），
+    //   被调用（工具/命令/触发词/面板/跨模块）→ 每次一个独立任务窗（key 唯一，互不串上下文），
     //   跑完结果经 Promise 返回给调用方。
     function makeWin(mode, flowKey = '', prompt = '') {
       if (mode !== 'delegate') return { key: 'decision', title: '手机逛逛 · 操作决策' }
@@ -173,18 +175,21 @@ export default {
         session, safety, memory,
         // 底座层没有 api 句柄，错误经这条回调进插件宿主日志（错误日志统一走插件日志，不单独写文件）
         log: (t) => api.log.warn(`[phone] ${t}`),
-        // 操作决策器的每次提问走这里：
-        // 默认走 api.think（hub.runSystemTurn）——按 win 落到对应工作区会话窗，主人实时可见；
-        // 两个例外仍走 api.ask（直接问模型、不进会话）：① 选了「决策模型」（opts.cfg 压过全局，think 不支持按次换模型）；
-        // ② 截图兜底要传整屏图（api.think 只收文字）。
+        // 操作决策器的每次提问走这里。#61：默认走 api.ask（无人格、不进会话的静默直连）——
+        // 任务书与抓来的界面文字只作为这一次请求的输入，绝不落进她的人格会话窗被当成对方发言回话。
+        // 例外一：选了「决策模型」走 api.ask({cfg})（opts.cfg 压过全局，think 不支持按次换模型）。
+        // 例外二：截图兜底要传整屏图（api.think 只收文字）走 api.ask。
+        // 仅当面板明确打开「决策过程可见」(visibleDecisions) 时，才改走 api.think 让主人围观每一步；
+        // 该路径会把文本注入人格会话窗，所以补一句显式框架，降低被误当对话回话的概率。
         ask: (p) => {
           const o = typeof p === 'string' ? { text: p } : { ...p }
           const m = modelSel()
           if (m) return api.ask({ ...o, cfg: { model: m } })
           if (Array.isArray(o.images) && o.images.length) return api.ask(o)
-          const prompt = [o.system ? `【系统指令（必须严格遵守，只回一个 JSON 动作，不要角色扮演不要多余文字）】\n${o.system}` : '', o.text]
-            .filter(Boolean).join('\n\n')
-          if (typeof api.think === 'function') {
+          if (getSettings().visibleDecisions && typeof api.think === 'function') {
+            const frame = '【以下是系统交给你的手机操作任务与当前屏幕信息，不是聊天对象说的话；你只需按任务输出下一步 JSON 动作，不要把它当对方发言来回应。】'
+            const prompt = [frame, o.system ? `【操作规范】\n${o.system}` : '', o.text]
+              .filter(Boolean).join('\n\n')
             return api.think(prompt, { title: win.title, key: win.key, noTools: true, timeoutMs: 180000 })
           }
           return api.ask(o)
@@ -322,6 +327,16 @@ export default {
     }
     /** 主动逛一轮：总纲常驻注入 + 决策器落到某个应用时才按需加载该应用手册（省 token）；跑完私聊汇报 + 写记忆 */
     async function runAutoRound(mode = 'self') {
+      // 每日上限硬闸（#61 附带修复）：这道闸原来只写在面板定时器的调用处，AI 工具 phone_auto_browse
+      // 直接进来时绕过去了。上限是跨入口的总量约束，放在真正开跑的这一层，谁调用都受限。
+      const cap = getSettings().maxRunsPerDay
+      if (cap > 0) {
+        const st0 = autoStats()
+        if (st0.day === dayKey() && Number(st0.runs || 0) >= cap) {
+          api.log.info(`[phone] 今天主动逛到上限了（${cap} 轮），这一轮不碰手机`)
+          return { ok: false, capped: true, steps: 0, summary: '', message: `今天已经主动逛了 ${st0.runs} 轮，到上限 ${cap} 了，先不玩手机。` }
+        }
+      }
       const guide = guides.get('main') // 总纲（面板「主流程总纲」卡，可改）
       const guideFor = (pkg) => {
         // 按前台包名挑单应用手册；挑不出专属的就退回通用兜底手册，保底不裸奔
@@ -329,7 +344,7 @@ export default {
         return guides.get(key || 'generic')
       }
       const r = await startRun({
-        flowKey: 'auto-' + dayKey(),
+        flowKey: 'phone-play', // 固定 key：运行经验按 flowKey 累积，按天新建 key 等于每天从零开始
         prompt: '主动逛一轮手机：按总纲自己挑 1~3 个已安装的常用应用，逐个签到/刷新内容/适度点赞，只读为主，逛完用 finish 总结这一轮逛了什么。',
         packages: [],
         guide,
@@ -961,12 +976,12 @@ export default {
       runWorkspace: (o) => runWorkspace(o),
       /**
        * 跨模块调用面：别的模块 `api.use('phone').run({ goal })` 或 `run({ flowId })`。
-       * 每次开一个独立子智能体会话（工作区可见、互不串上下文），跑完把
+       * 默认静默执行（决策不进会话窗）；打开「决策过程可见」后才落独立任务窗（	ask-*，互不串上下文）。跑完把
        * { ok, message, steps, summary } 经 Promise 返回给调用方；总开关没开直接拒绝。
        */
       run: ({ goal, flowId } = {}) => {
         if (!getSettings().enabled) return Promise.resolve(offMsg())
-        // 一审 #19-3：跨模块调用默认走模块内循环（每一动都过安全门）；面板打开「委派给子智能体」才开独立子智能体会话
+        // 一审 #19-3：跨模块调用走模块内循环（每一动都过安全门），不 spawn 子智能体；决策落点见 visibleDecisions
         // 跨模块调用落独立决策窗（task-*，不串上下文）；动作仍由模块执行、每一动过 safety.gate
         const mode = 'delegate'
         if (flowId) {

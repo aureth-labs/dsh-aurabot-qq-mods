@@ -1,0 +1,14 @@
+{
+  "id": "todo",
+  "name": "待办调度",
+  "version": "1.1.0",
+  "description": "定时待办与可选的早晚问候计划",
+  "category": "tool",
+  "tags": ["待办", "定时", "提醒"],
+  "author": "明天阵雨转晴 (Jupiter-L-Z)",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["filesystem", "plugin-config", "plugin-internals"]
+}

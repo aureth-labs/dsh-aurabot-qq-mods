@@ -5,6 +5,7 @@ import { join, dirname } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runtimePackages, packageReady } from './runtime-state.mjs';
+import { curlDownloadArgs, downloadOptionsFromEnv, runCurl } from './download-options.mjs';
 const run = promisify(execFile);
 export async function prepareDependencies(root, {onProgress=()=>{}, packages=runtimePackages(), sourceRoot}={}) {
   await mkdir(root,{recursive:true});
@@ -18,7 +19,8 @@ export async function prepareDependencies(root, {onProgress=()=>{}, packages=run
         if(sourceRoot && sourceRoot!==root && packageReady(sourceRoot,pkg)) {
           await cp(join(sourceRoot,'node_modules',pkg.name),stage,{recursive:true});
         } else {
-        await run(process.platform==='win32'?'curl.exe':'curl',['-fLsS','--retry','2','--connect-timeout','20','--max-time','300','-o',archive,pkg.url],{windowsHide:true});
+        const options=downloadOptionsFromEnv();
+        await runCurl(curlDownloadArgs({url:pkg.url,output:archive,timeoutSec:options.timeoutSec,proxy:options.proxy,connectTimeout:20,retry:2}),{proxy:options.proxy});
         // Executable dependencies are pinned to the committed npm lock integrity.
         const [algorithm,expected]=pkg.integrity.split('-');
         if (algorithm!=='sha512' || createHash('sha512').update(await readFile(archive)).digest('base64')!==expected) throw new Error(`依赖校验失败：${pkg.name}`);

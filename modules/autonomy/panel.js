@@ -194,7 +194,7 @@ return function Panel({ settings, save, toast }) {
         h('span', { className: 'ab-muted ab-small' }, ['乖一点', '正常', '皮一点'][pIdx]),
       ),
       h('div', { className: 'ab-note ab-small', style: { marginTop: 8 } },
-        '时段活跃度、手机玩耍倾向在页面下方的设置里。',
+        '时段活跃度、手机玩耍倾向、虚拟机地址与私钥都在页面下方的设置里。',
       ),
     ),
 

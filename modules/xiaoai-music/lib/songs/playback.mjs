@@ -1,12 +1,21 @@
 import { FamilySongError, songFailure } from './library.mjs';
+import { SpeakerPlaybackError } from '../speaker/mina.mjs';
 
-const playbackFailure = error => error instanceof FamilySongError ? songFailure(error)
-  : { code: 'FAMILY_PLAYBACK_FAILED', message: '音箱播放操作未完成，已保存的歌曲会保留。' };
+const playbackSteps = {
+  prepare: ['FAMILY_PLAYBACK_PREPARE', '尚未准备好当前歌曲，请查看生成进度或重新选择歌曲。'],
+  read: ['FAMILY_PLAYBACK_READ', '读不到这首歌的完整音频，请检查文件是否仍在曲库。'],
+  connect: ['FAMILY_PLAYBACK_CONNECT', '没能连接小爱音箱，请检查登录、音箱在线状态和所选网卡。'],
+  announce: ['FAMILY_PLAYBACK_ANNOUNCE', '音箱未能播报播放提示，请检查连接后重试。'],
+  play: ['FAMILY_PLAYBACK_START', '没能开始播放歌曲，请检查音箱在线状态后重试。'],
+  pause: ['FAMILY_PLAYBACK_PAUSE', '暂停指令未完成，请在音箱上查看当前是否仍在播放。'],
+  resume: ['FAMILY_PLAYBACK_RESUME', '没能继续播放，请重新点选这首歌。'],
+  stop: ['FAMILY_PLAYBACK_STOP', '没能停止音箱上的播放，请在音箱上手动停止后重试。'],
+};
 
 export class FamilyPlayback {
-  constructor({ library, getSpeaker, now = Date.now, schedule = setTimeout, cancel = clearTimeout,
+  constructor({ library, getSpeaker, log, now = Date.now, schedule = setTimeout, cancel = clearTimeout,
     wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)), random = Math.random }) {
-    Object.assign(this, { library, getSpeaker, now, schedule, cancel, wait, random });
+    Object.assign(this, { library, getSpeaker, log, now, schedule, cancel, wait, random });
     this.generation = 0;
     this.queue = Promise.resolve();
     this.phase = 'idle';
@@ -31,6 +40,17 @@ export class FamilyPlayback {
     const result = this.queue.then(operation);
     this.queue = result.catch(() => {});
     return result;
+  }
+  fail(ticket, error, step) {
+    const failure = error instanceof FamilySongError ? error
+      : error instanceof SpeakerPlaybackError ? new FamilySongError(error.code, error.message)
+      : new FamilySongError(...playbackSteps[step]);
+    if (ticket === this.generation) {
+      this.phase = 'failed';
+      this.error = songFailure(failure);
+      this.log?.warn?.('小爱播放未完成。' + this.error.message);
+    }
+    return failure;
   }
   assertAvailable(ids, { saved = true, restored = false } = {}) {
     for (const id of ids) {
@@ -79,8 +99,10 @@ export class FamilyPlayback {
     this.pendingSources.set(ticket, String(sourceId));
     this.phase = 'preparing';
     this.error = null;
+    let step = 'stop';
     try {
       await this.halt(ticket);
+      step = 'prepare';
       const job = await this.library.request(sourceId, options);
       if (ticket !== this.generation) return { ...job, cancelled: true };
       if (blockedAtStart.has(job.id)) throw new FamilySongError('FAMILY_ENTRY_REMOVING', '这首歌曲正在删除，请稍后再选择。');
@@ -89,8 +111,7 @@ export class FamilyPlayback {
       this.finish(job.id, ticket, options?.announce === true, null, options?.isCurrent, true);
       return { ...job, playback: this.status() };
     } catch (error) {
-      if (ticket === this.generation) { this.phase = 'failed'; this.error = playbackFailure(error); }
-      throw error;
+      throw this.fail(ticket, error, step);
     } finally { this.pendingSources.delete(ticket); }
   }
   async entry(id, { announce = false, isCurrent = null } = {}) {
@@ -98,13 +119,13 @@ export class FamilyPlayback {
     this.list = null;
     return this.startEntry(String(id), announce, null, isCurrent);
   }
-  async audio(entry, { isCurrent = () => true } = {}) {
+  async audio(entry, { isCurrent = () => true, beforeSubmit } = {}) {
     if (!entry || typeof entry.id !== 'string' || !entry.id ||
         typeof entry.absoluteFile !== 'string' || !entry.absoluteFile || !(entry.duration > 0) || !Number.isFinite(entry.duration)) {
       throw new FamilySongError('FAMILY_AUDIO_INVALID', '本次对话音频不可用。');
     }
     this.list = null;
-    return this.startEntry(entry.id, false, entry, isCurrent);
+    return this.startEntry(entry.id, false, entry, isCurrent, beforeSubmit);
   }
   async playlist(ids, { mode = 'sequential', announce = false, isCurrent = null } = {}) {
     if (!Array.isArray(ids) || !ids.length || ids.some(id => typeof id !== 'string' || !id.trim())) {
@@ -113,7 +134,9 @@ export class FamilyPlayback {
     if (!['sequential', 'random'].includes(mode)) {
       throw new FamilySongError('FAMILY_PLAYLIST_MODE', '请选择顺序或随机播放。');
     }
-    const ordered = [...new Set(ids)];
+    const invalid = this.library.invalidSongIds;
+    const ordered = [...new Set(ids)].filter(id => !invalid?.has(id));
+    if (!ordered.length) throw new FamilySongError('FAMILY_CACHE_INVALID', '歌单中的歌曲均未通过校验，请恢复文件后刷新。');
     this.assertAvailable(ordered);
     if (mode === 'random') {
       for (let i = ordered.length - 1; i > 0; i--) {
@@ -130,7 +153,7 @@ export class FamilyPlayback {
     this.list.index++;
     return this.startEntry(this.list.ids[this.list.index], false, null, isCurrent);
   }
-  async startEntry(id, announce = false, readyEntry = null, isCurrent = null) {
+  async startEntry(id, announce = false, readyEntry = null, isCurrent = null, beforeSubmit) {
     this.assertAvailable([id], { saved: !readyEntry });
     this.clearEnd();
     const ticket = ++this.generation;
@@ -142,11 +165,10 @@ export class FamilyPlayback {
     try {
       await this.halt(ticket);
       if (ticket !== this.generation) return { ...this.status(), cancelled: true };
-      this.finish(id, ticket, announce, readyEntry, isCurrent);
+      this.finish(id, ticket, announce, readyEntry, isCurrent, false, beforeSubmit);
       return this.status();
     } catch (error) {
-      if (ticket === this.generation) { this.phase = 'failed'; this.error = playbackFailure(error); }
-      throw error;
+      throw this.fail(ticket, error, 'stop');
     }
   }
   halt(ticket) {
@@ -156,33 +178,41 @@ export class FamilyPlayback {
       this.current = null;
     });
   }
-  finish(id, ticket, announce = false, readyEntry = null, isCurrent = null, restored = false) {
+  finish(id, ticket, announce = false, readyEntry = null, isCurrent = null, restored = false, beforeSubmit) {
+    let step = 'prepare';
     this.task = (readyEntry ? Promise.resolve() : this.library.wait(id)).then(() => this.enqueue(async () => {
       if (ticket !== this.generation) return;
       if (isCurrent && !isCurrent()) return this.release();
+      step = 'read';
       this.assertAvailable([id], { saved: !readyEntry, restored });
       const entry = readyEntry || await this.library.get(id);
       this.assertAvailable([id], { saved: !readyEntry, restored });
+      step = 'connect';
       const speaker = await this.getSpeaker();
       if (ticket !== this.generation) return;
       this.assertAvailable([id], { saved: !readyEntry, restored });
       this.speaker = speaker;
       if (isCurrent && !isCurrent()) return this.release();
       if (announce) {
+        step = 'announce';
         await speaker.say('收到，准备播放。');
         await this.wait(3000);
         if (ticket !== this.generation) return;
       }
       if (isCurrent && !isCurrent()) {
+        step = 'stop';
         if (speaker.ownsPlayback) await speaker.operate('stop');
         if (ticket === this.generation) return this.release();
         return;
       }
       this.current = entry;
       if (restored) this.removedEntries.delete(id);
-      const result = await speaker.playFile(entry.absoluteFile, entry.duration);
+      step = 'play';
+      const submit = beforeSubmit && (() => beforeSubmit(() => ticket === this.generation && isCurrent()));
+      const result = await speaker.playFile(entry.absoluteFile, entry.duration, submit);
       if (ticket === this.generation) {
         if (isCurrent && !isCurrent()) {
+          step = 'stop';
           await speaker.operate('stop');
           if (ticket === this.generation) return this.release();
           return;
@@ -192,10 +222,14 @@ export class FamilyPlayback {
         this.startedAt = Number.isFinite(result?.startedAt) ? result.startedAt : this.now();
         this.armEnd(ticket);
       }
-    })).catch(error => {
-      if (ticket !== this.generation) return;
-      this.phase = 'failed';
-      this.error = playbackFailure(error);
+    })).catch(async error => {
+      if (ticket === this.generation && this.list && this.library.invalidSongIds?.has(id) && (!isCurrent || isCurrent())) {
+        if (this.list.index + 1 >= this.list.ids.length) return this.complete();
+        const next = await this.next({ isCurrent });
+        if (!next.cancelled) return this.task;
+        return;
+      }
+      this.fail(ticket, error, step);
     });
   }
   async pause() {
@@ -209,8 +243,7 @@ export class FamilyPlayback {
         if (this.speaker && (this.current || this.speaker.ownsPlayback)) await this.speaker.operate('pause');
         if (ticket === this.generation) this.phase = 'paused';
       } catch (error) {
-        if (ticket === this.generation) { this.phase = 'failed'; this.error = playbackFailure(error); }
-        throw error;
+        throw this.fail(ticket, error, 'pause');
       }
       return this.status();
     });
@@ -227,7 +260,7 @@ export class FamilyPlayback {
         this.startedAt = this.now();
         this.armEnd(ticket);
       }
-      catch (error) { this.phase = 'failed'; this.error = playbackFailure(error); throw error; }
+      catch (error) { throw this.fail(ticket, error, 'resume'); }
       return this.status();
     });
   }
@@ -252,8 +285,7 @@ export class FamilyPlayback {
         this.elapsed = 0;
         if (ticket === this.generation) this.phase = 'stopped';
       } catch (error) {
-        if (ticket === this.generation) { this.phase = 'failed'; this.error = playbackFailure(error); }
-        throw error;
+        throw this.fail(ticket, error, 'stop');
       }
       return this.status();
     });

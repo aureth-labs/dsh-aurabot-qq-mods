@@ -5,24 +5,43 @@ export function recordKey(record) {
   return createHash('sha256').update(JSON.stringify([record.time, record.requestId, record.query])).digest('hex');
 }
 
+function parseCursor(contents) {
+  let value;
+  try { value = JSON.parse(contents); }
+  catch { return null; }
+  const isHash = key => typeof key === 'string' && /^[a-f0-9]{64}$/.test(key);
+  const isTime = time => Number.isSafeInteger(time) && time >= 0;
+  if (!isTime(value?.since) || !Array.isArray(value.claimed) || !value.claimed.every(isHash)) return null;
+  if (Object.hasOwn(value, 'claimedAt') && (!value.claimedAt || typeof value.claimedAt !== 'object' ||
+      Array.isArray(value.claimedAt) || !Object.entries(value.claimedAt).every(([key, time]) => isHash(key) && isTime(time)))) return null;
+  return value;
+}
+
 export class VoiceCursor {
   constructor(file) {
     this.file = file;
     this.state = { since: 0, claimed: [] };
     this.pending = Promise.resolve();
   }
-  async open() {
+  async open(log) {
+    let contents;
     try {
-      const value = JSON.parse(await readFile(this.file, 'utf8'));
-      if (!Number.isSafeInteger(value.since) || !Array.isArray(value.claimed) ||
-          value.claimed.some((x) => !/^[a-f0-9]{64}$/.test(x))) throw new Error();
-      if (Object.hasOwn(value, 'claimedAt') && (!value.claimedAt || typeof value.claimedAt !== 'object' ||
-          Array.isArray(value.claimedAt) || Object.entries(value.claimedAt).some(([key, time]) =>
-            !/^[a-f0-9]{64}$/.test(key) || !Number.isSafeInteger(time) || time < 0))) throw new Error();
-      this.state = value;
+      contents = await readFile(this.file, 'utf8');
     } catch (error) {
-      if (error.code !== 'ENOENT') throw new Error('语音游标损坏，未启动监听。');
+      if (error.code === 'ENOENT') return;
+      throw Object.assign(new Error(`读取语音游标失败（${error.code}）。`), { code: error.code });
     }
+    const value = parseCursor(contents);
+    if (value) { this.state = value; return; }
+
+    // arm() writes the new starting time before it can poll any voice commands.
+    try {
+      await rename(this.file, this.file + '.corrupt-' + randomUUID() + '.bak');
+    } catch (error) {
+      throw Object.assign(new Error(`备份损坏的语音游标失败（${error.code}）。`), { code: error.code });
+    }
+    this.state = { since: 0, claimed: [] };
+    log?.warn?.('语音游标损坏，原文件已在同目录备份。下次开始监听时将从当前时间重新记录。');
   }
   async save(next) {
     const temporary = this.file + '.tmp-' + randomUUID();

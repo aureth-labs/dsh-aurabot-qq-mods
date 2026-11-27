@@ -4,7 +4,11 @@
 
 import { clip, briefStatus, briefLook, briefTask, briefProcess, briefCatalog, briefRaw } from '../lib/brief.mjs'
 
-const ok = (cond, label, extra) => console.log((cond ? 'OK ' : 'FAIL ') + label + (extra ? ' - ' + extra : ''))
+const ok = (cond, label, extra) => {
+  if (cond) { console.log('OK ' + label + (extra ? ' - ' + extra : '')); return }
+  console.error('FAIL ' + label + (extra ? ' - ' + extra : ''))
+  process.exitCode = 1
+}
 
 // ---- clip：按码点截断，emoji 不能被切成半个 ----
 ok(clip('abc', 10) === 'abc', 'clip: 短文本原样')

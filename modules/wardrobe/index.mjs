@@ -59,13 +59,12 @@ const extOf = (mime) => (mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ?
 export default {
   id: 'wardrobe',
   name: '衣柜',
-  version: '1.2.0',
+  version: '1.2.1',
   api: 1,
   description: '她的衣服：参考图 + 文字描述；手动挑或跟作息自动换装（场景标签），按姿势生成预览图',
   panel: 'panel.js',
   settings: [
     { key: 'enabled', label: '启用', type: 'switch' },
-    { key: 'autoDress', label: '跟作息自动换装', type: 'switch' },
     { key: 'autoTag', label: '新衣服自动打场景标', type: 'switch' },
     { key: 'visionModel', label: '看图模型', type: 'text', hint: '留空 = 用当前聊天模型（能看图就行）；也可以填 provider/model 强制指定，比如 deepseek-official/deepseek-flash' },
   ],
@@ -527,6 +526,11 @@ export default {
     }
     seedOnce()
 
+    api.route('/autodress/set', async (req) => {
+      const b = await api.core.http.body(req)
+      api.saveSettings({ ...(api.settings() || {}), autoDress: b.on !== false })
+      return { ok: true, autoDress: api.settings().autoDress !== false }
+    })
     api.route('/look/apply', async () => {
       const s = load()
       return { ok: true, block: lookBlock(s), outfit: outfitText(s), hairdoId: s.hairdoId || 'h_long', makeupId: s.makeupId || 'm_bare' }
@@ -544,6 +548,8 @@ export default {
         makeupId: s.makeupId || 'm_bare',
         hairdos: (s.hairdos || HAIR_PRESETS).map((h) => ({ id: h.id, name: h.name, desc: cleanText(h.desc) })),
         hairdoId: s.hairdoId || 'h_long',
+        autoDress: cfg().autoDress !== false,
+        hasRoutine: Boolean(api.use('routine')),
         scenes: SCENES.map((k) => ({ key: k, name: SCENE_NAME[k] })),
         autoDressOn: Boolean(s.today && s.today.autoScene),
         poses: Object.entries(POSES).map(([k, v]) => ({ key: k, name: v.name })),

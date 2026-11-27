@@ -62,7 +62,14 @@ return function MemePanel({ settings, save, toast }) {
     timer=setTimeout(poll,300);
     return ()=>{stopped=true;clearTimeout(timer);};
   },[data?.installation?.busy]);
+  const proxyAddressOk = value => {
+    try {
+      const url = new URL(String(value || '').trim());
+      return ['http:', 'https:', 'socks5:', 'socks5h:', 'socks4:', 'socks4a:'].includes(url.protocol) && !!url.hostname;
+    } catch { return false; }
+  };
   const retryInstallation = async () => {
+    if (settings.downloadProxyEnabled === true && !proxyAddressOk(settings.downloadProxy)) { toast('下载代理地址无效，请使用 http:// 或 socks5:// 开头的地址。'); return; }
     setChanging(true);
     try {
       const result=await call('/installation',{});
@@ -114,6 +121,13 @@ return function MemePanel({ settings, save, toast }) {
         h('p', {className:'ab-muted ab-small'},data.installation.total>0 ? `${data.installation.completed} / ${data.installation.total}` : data.installation.received ? `已下载 ${(data.installation.received/1048576).toFixed(1)} MiB，完成后自动继续。` : '首次准备需要一些时间，完成后即可使用。')),
       data?.installation?.error && h('div', {style:{display:'flex',alignItems:'center',flexWrap:'wrap',gap:12,marginBottom:16}},
         h('span',null,data.installation.error),data.installation.help && h('a',{href:data.installation.help,target:'_blank',rel:'noopener noreferrer'},'安装说明'),h(ui.Btn,{disabled:changing,onClick:retryInstallation},'重试准备')),
+      h('div', { style: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 } },
+        h('label', { style: { display: 'flex', gap: 6, alignItems: 'center' } }, '素材下载超时',
+          h('input', { className: 'ab-input', type: 'number', min: 1, max: 360, inputMode: 'numeric', 'aria-label': '素材下载超时（分钟）', title: '单次网络请求最多等多少分钟，默认 60。到点只停下这一次请求，已下载的部分保留，下次从断点继续。', style: { width: 64 }, value: Number(settings.downloadTimeoutMinutes) || 60, onChange: e => { const value = Number(e.target.value); if (Number.isInteger(value) && value >= 1 && value <= 360) saveSetting({ downloadTimeoutMinutes: value }); } }),
+          '分钟'),
+        h('label', { style: { display: 'flex', gap: 6, alignItems: 'center' } }, '安装时走代理',
+          h(ui.Switch, { on: settings.downloadProxyEnabled === true, onChange: () => saveSetting({ downloadProxyEnabled: settings.downloadProxyEnabled !== true }) })),
+        settings.downloadProxyEnabled === true && h('input', { className: 'ab-input', type: 'text', inputMode: 'url', autoComplete: 'off', spellCheck: false, 'aria-label': '安装下载的代理地址', title: '只用于下载表情库和扩展，支持 http:// 与 socks5://', placeholder: '代理地址，如 http://127.0.0.1:7890', style: { flex: '1 1 220px', minWidth: 180 }, value: settings.downloadProxy || '', onChange: e => saveSetting({ downloadProxy: e.target.value.trim() }) })),
       h('p', null, '聊天中发送“#表情列表”查看全部表情，发送“#表情详情 摸摸”查看用法。'),
       h('div', { style: { display: 'flex', gap: 16, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', marginBottom: 16 } },
         h('label', { style: { display: 'flex', gap: 10, alignItems: 'center' } }, '目录列数',

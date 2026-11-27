@@ -20,6 +20,7 @@ async function harness({ firstUse = false, dialogue = false, music = { entries: 
       if (path === '/onboarding/networks') return { ok: true, networks: [{ name: 'Synthetic LAN', addresses: ['192.0.2.1'] }] };
       if (path === '/speaker/check') { checked = true; return { ok: true, historyReadable: true }; }
       if (path === '/speaker/wake') return { ok: true, wake: { names: ['小伴'] } };
+      if (path === '/speaker/wake/pinyin') return { ok: true, readings: ['xiao ban'] };
       if (path === '/speaker/wake/save') { wakeSaved = true; return { ok: true, wake: body }; }
       if (path === '/reminders') return { ok: true, reminders: [] };
       if (path === '/settings/options') return { ok: true, voices: { options: [{ id: '', label: '跟随宿主' }] } };
@@ -85,6 +86,9 @@ test('a song shared with the primary cannot be deleted while viewing an external
 
 test('unmatched playlist ids are visible and cleanup refreshes the currently open playlist', async t => {
   const h = await harness({ music: musicFixture(), playlists: [{id:'synthetic-list',name:'Synthetic playlist',ids:['c'.repeat(64)]}] }); t.after(h.close);
+  assert.ok(h.nodes().some(n => n.props['aria-label'] === '全部歌曲内容'));
+  h.nodes().find(n => n.type === 'button' && n.children.some(child => child?.children?.includes('Synthetic playlist'))).props.onClick();
+  h.render();
   assert.ok(h.nodes().some(n => n.children.includes('找不到的歌曲（找不到或无法读取，请重新添加）')));
   await h.button('一键清除失效歌曲').props.onClick(); h.render();
   assert.equal(h.nodes().some(n => n.children.includes('找不到的歌曲（找不到或无法读取，请重新添加）')),false);
@@ -137,9 +141,9 @@ test('first-use panel gates music until storage, connection and names, with opti
   assert.equal(switchProps().disabled, true);
   assert.ok(label('可用网卡')); assert.ok(label('主要称呼'));
   assert.equal(h.button('完成配置，进入模块').props.disabled, true);
-  assert.equal(h.button('AI 补足同音词').props.disabled, true);
+  assert.equal(h.button('AI 补足同音词'), undefined);
   await h.button('检查登录与连接').props.onClick(); h.render();
-  assert.match(notice().children[0], /保存主要称呼/);
+  assert.match(notice().children[0], /点击「保存称呼」/);
   assert.equal(switchProps().disabled, true);
   await h.button('保存称呼').props.onClick(); h.render();
   assert.equal(h.button('完成配置，进入模块').props.disabled, false);

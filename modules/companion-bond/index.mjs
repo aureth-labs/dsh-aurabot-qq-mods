@@ -1,3 +1,4 @@
+import { createDesktop, DESKTOP_DEFAULTS } from './lib/desktop.mjs'
 import { openStore } from './lib/store.mjs'
 import { DEFAULTS, interact, parseAction, remember, settings, snapshot, syncFeed } from './lib/growth.mjs'
 
@@ -12,9 +13,9 @@ const HELP = [
 ].join('\n')
 
 export default {
-  id: 'companion-bond', name: '相伴养成', version: '1.0.0', api: 1,
+  id: 'companion-bond', name: '相伴养成', version: '1.0.1', api: 1,
   description: '聊天、投喂、玩耍，与她一起慢慢成长。',
-  defaults: DEFAULTS,
+  defaults: { ...DEFAULTS, ...DESKTOP_DEFAULTS },
   panel: 'panel.js',
   settings: [
     { key: 'chatCooldownSeconds', label: '聊天成长间隔（秒）', type: 'number', min: 0, max: 3600, step: 1, hint: '默认 30 秒；填 0 可每条聊天都计分，仍受每日上限限制。' },
@@ -27,6 +28,11 @@ export default {
     const pending = new Map()
     const cfg = () => settings(api.settings())
     const warn = error => api.log.warn('养成操作失败：' + error.message)
+    const desktop = typeof api.dir === 'string' ? createDesktop({
+      moduleDir: api.dir, dataDir: api.dataDir(), getSettings: () => api.settings(),
+      getState: () => snapshot(state, Date.now()), saveSettings: patch => api.saveSettings(patch), log: api.log,
+    }) : null
+    const syncDesktop = () => { try { desktop?.sync() } catch (error) { warn(error) } }
     function transaction(change) {
       const next = structuredClone(state)
       const result = change(next)
@@ -47,7 +53,7 @@ export default {
       const feed = api.use('feed')
       // 面板不返回 QQ 号、聊天消息或原始喂食记录。
       const { seenMessages, seenFeed, ...publicState } = v
-      return { ok: true, ...publicState, feedAvailable: typeof feed?.state === 'function' }
+      return { ok: true, ...publicState, feedAvailable: typeof feed?.state === 'function', desktop: desktop?.info() || null }
     }
     function statusText() {
       const s = status()
@@ -131,6 +137,26 @@ export default {
     })
 
     api.route('/status', () => status())
+    api.route('/desktop-control', async req => {
+      if (req.method !== 'POST') return { ok: false, message: '请使用 POST。' }
+      let body = ''
+      for await (const chunk of req) { body += chunk; if (Buffer.byteLength(body) > 4096) return { ok: false, message: '请求内容过长。' } }
+      let input
+      try { input = JSON.parse(body) } catch { return { ok: false, message: '请求格式错误。' } }
+      if (!input || typeof input !== 'object' || Array.isArray(input)) return { ok: false, message: '请求格式错误。' }
+      const patch = {}
+      if ('enabled' in input) { if (typeof input.enabled !== 'boolean') return { ok: false, message: '开关格式错误。' }; patch.desktopEnabled = input.enabled }
+      if ('idle' in input) { if (typeof input.idle !== 'boolean') return { ok:false, message:'待机开关格式错误。' }; patch.desktopIdleEnabled=input.idle }
+      if ('height' in input) { if (!Number.isFinite(input.height) || input.height < 140 || input.height > 600) return { ok: false, message: '人物高度应为 140–600。' }; patch.desktopHeight = Math.round(input.height) }
+      if ('preview' in input) { if (!['auto','low','middle','high'].includes(input.preview)) return { ok: false, message: '未知外观。' }; patch.desktopPreviewStage = input.preview }
+      if (!Object.keys(patch).length || Object.keys(input).some(k => !['enabled','height','preview','idle'].includes(k))) return { ok: false, message: '不支持的设置。' }
+      api.saveSettings(patch)
+      syncDesktop()
+      return { ok: true, message: '桌面立绘设置已更新。', desktop: desktop?.info() || null }
+    })
+    api.on('config', syncDesktop)
+    api.every(2000, syncDesktop, '桌面立绘同步')
+    syncDesktop()
     api.route('/interact', async req => {
       if (req.method !== 'POST') return { ok: false, message: '请使用 POST。' }
       let body = ''
@@ -145,7 +171,7 @@ export default {
       return transaction(s => interact(s, action, Date.now(), cfg()))
     })
     api.every(15_000, () => { try { sync() } catch (error) { warn(error) } }, 'companion-bond-feed')
-    api.log.info('相伴养成 1.0.0 已加载：主人私聊中自然互动，投喂沿用 feed。')
-    return { status, dispose() { pending.clear() } }
+    api.log.info('相伴养成 1.0.1 已加载：主人私聊中自然互动，投喂沿用 feed。')
+    return { status, dispose() { desktop?.dispose(); pending.clear() } }
   },
 }

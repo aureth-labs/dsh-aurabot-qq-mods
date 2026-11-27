@@ -19,15 +19,17 @@ export function bagText(bag) {
 // 六项身体感受：字段名 + 显示名，顺序就是输出顺序。
 const FEELINGS = [['satiety', '饱腹'], ['hydration', '口渴'], ['joy', '开心'], ['energy', '精力'], ['calm', '平静'], ['warmth', '暖和']]
 
-export function briefStatus(body) {
+export function briefStatus(body, opts) {
+  // public：群聊里用。零花钱、背包、感受、想做还没做的事都是私事，只有主人私聊才看整份。
+  const pub = !!(opts && opts.public)
   const p = body.position || {}
   const f = body.feeling || {}
   const lines = []
   const nowD = new Date()
   lines.push('现在：' + (nowD.getMonth() + 1) + '/' + nowD.getDate() + ' ' + String(nowD.getHours()).padStart(2, '0') + ':' + String(nowD.getMinutes()).padStart(2, '0'))
   lines.push('位置：' + (p.place || '还不知道') + (p.zoneName ? ' · ' + p.zoneName : ''))
-  if (typeof body.wallet === 'number') lines.push('零花钱：' + body.wallet + ' 元（背包 ' + (body.bagSlots || 12) + ' 格）')
-  lines.push('背包：' + bagText(body.bag))
+  if (!pub && typeof body.wallet === 'number') lines.push('零花钱：' + body.wallet + ' 元（背包 ' + (body.bagSlots || 12) + ' 格）')
+  if (!pub) lines.push('背包：' + bagText(body.bag))
   const doingLabel = body.doing && body.doing.label
   if (doingLabel) {
     let doing = '正在做：' + doingLabel
@@ -49,15 +51,14 @@ export function briefStatus(body) {
   }
   const feel = FEELINGS.filter(function (it) { return f[it[0]] != null })
     .map(function (it) { return it[1] + ' ' + f[it[0]] })
-  if (feel.length) lines.push('感受：' + feel.join(' · '))
-  if (body.hunger) lines.push('饥饿：' + body.hunger)
-  if (body.mood) lines.push('心情：' + (body.mood.word || body.mood.key || '') + (body.mood.cause ? '（' + body.mood.cause + '）' : ''))
+  if (!pub && feel.length) lines.push('感受：' + feel.join(' · '))
+  if (!pub && body.mood) lines.push('心情：' + (body.mood.word || body.mood.key || '') + (body.mood.cause ? '（' + body.mood.cause + '）' : ''))
   if (body.weather) lines.push('天气：' + (body.weather.name || '') + ' ' + (body.weather.temp == null ? '' : body.weather.temp + '°C') + (body.weather.phase ? ' · ' + body.weather.phase : ''))
-  if (Array.isArray(body.wishes) && body.wishes.length) {
+  if (!pub && Array.isArray(body.wishes) && body.wishes.length) {
     const w = body.wishes.filter(function (x) { return !x.done }).map(function (x) { return x.text }).slice(0, 5)
     if (w.length) lines.push('想做还没做：' + w.join('、'))
   }
-  lines.push('状态数据：' + clip(JSON.stringify({ position: body.position, wallet: body.wallet, bagSlots: body.bagSlots, feeling: body.feeling, hunger: body.hunger, mood: body.mood && body.mood.word, doing: body.doing && body.doing.label, items: body.items, weather: body.weather ? { name: body.weather.name, temp: body.weather.temp, phase: body.weather.phase } : null }), 700))
+  if (!pub) lines.push('状态数据：' + clip(JSON.stringify({ position: body.position, wallet: body.wallet, bagSlots: body.bagSlots, feeling: body.feeling, hunger: body.hunger, mood: body.mood && body.mood.word, doing: body.doing && body.doing.label, items: body.items, weather: body.weather ? { name: body.weather.name, temp: body.weather.temp, phase: body.weather.phase } : null }), 700))
   return lines.join('\n')
 }
 
@@ -141,6 +142,8 @@ export function briefCatalog(body) {
 export function briefRaw(body) {
   const lines = []
   if (body && body.label) lines.push('做了：' + body.label)
+  // cabin_stop 返回 { stopped: true/false, note }（不是数组），note 本身就是人话，不用再贴原文。
+  if (body && typeof body.stopped === 'boolean') return body.note || (body.stopped ? '已经叫停了' : '现在没在做事')
   if (body && Array.isArray(body.stopped) && body.stopped.length) lines.push('停下了：' + body.stopped.join('、'))
   if (body && body.status) lines.push('状态：' + body.status)
   lines.push('原始返回：' + clip(JSON.stringify(body), 1500))

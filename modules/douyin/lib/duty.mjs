@@ -923,7 +923,13 @@ export function createDouyin({ getConfig, getSettings, setOwner, hub, memory, lo
     return loginAction(async () => {
       try {
         const r = await ready(s, '登录')
-        return { ...(s.account || { loggedIn: false }), ...(r.ok ? {} : { message: r.message }) }
+        if (!r.ok) {
+          // 失败也落盘并刷新时间戳：否则面板把本次的报错文案搭在上次成功检查的
+          // 「X 天前查的」上——文案是新的、时间是旧的，看起来像旧缓存没刷新
+          //（实际上旧代码只在成功时写 s.account，失败原因根本没被记住）。
+          s.account = { ...(s.account || { loggedIn: false }), loggedIn: false, at: now(), message: r.message }
+        }
+        return { ...s.account }
       } catch (error) {
         return { loggedIn: false, error: error.message }
       } finally {
@@ -970,12 +976,16 @@ export function createDouyin({ getConfig, getSettings, setOwner, hub, memory, lo
   function state() {
     const s = load()
     const c = cfg()
+    // 浏览器上次启动失败的原因 / 下次重试时间（browser.status 是模块自己的只读面；
+    // 注入的假浏览器没有这个方法时给 null）。
+    const bs = typeof browser?.status === 'function' ? browser.status() : null
     return {
       runs: s.runs, watched: s.watched, like: s.like, comment: s.comment, share: s.share, writes: s.writes,
       atOwner: s.atOwner, owner: ownerDy() ? { nickname: ownerDy().nickname } : null,
       caps: { like: capOf(s, 'like'), comment: capOf(s, 'comment'), share: capOf(s, 'share'), atOwner: capOf(s, 'atOwner'), writes: isNew(s) ? Math.floor(c.gate.maxWritesPerDay / 2) : c.gate.maxWritesPerDay },
       newAccount: isNew(s), lastRun: s.lastRun, nextDueAt: s.nextDueAt, lastSkipReason: s.lastSkipReason,
       pauseReason: paused(s) ? s.pauseReason : '', account: s.account, busy, browserOpen: site.connected(),
+      browser: bs, // { connected, lastError, retryAt }：浏览器启动失败的原因与重试时间
       history: s.history.slice(0, 30),
     }
   }

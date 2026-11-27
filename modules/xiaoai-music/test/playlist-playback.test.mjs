@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { FamilyPlayback } from '../lib/songs/playback.mjs';
+import { SpeakerPlaybackError } from '../lib/speaker/mina.mjs';
 
 const deferred = () => {
   let resolve;
@@ -32,7 +33,8 @@ function harness(options = {}) {
         return { id, absoluteFile: id + '.mp3', duration: 10 };
       },
     },
-    getSpeaker: async () => speaker,
+    getSpeaker: async () => { await options.connect?.(); return speaker; },
+    log: { warn: message => actions.push(['warning', message]) },
     now: () => now,
     schedule: (fn, delay) => {
       const timer = { fn, delay, cancelled: false };
@@ -196,10 +198,27 @@ test('a failed list item reports failure and does not silently skip to another s
   await h.player.task;
   await h.end();
   assert.equal(h.player.status().phase, 'failed');
+  assert.match(h.player.status().error.message, /读不到这首歌/);
   assert.equal(h.player.status().playlist.index, 1);
   assert.deepEqual(h.files(), ['a.mp3']);
   assert.equal(JSON.stringify(h.player.status()).includes('synthetic-private-detail'), false);
   await h.player.stop();
+});
+
+test('connection and audio transfer failures explain the stage without exposing private details', async () => {
+  const connection = harness({ connect: () => { throw new Error('synthetic-private-detail'); } });
+  await connection.player.entry('a');
+  await connection.player.task;
+  assert.match(connection.player.status().error.message, /没能连接小爱音箱/);
+  assert.doesNotMatch(connection.actions.at(-1)[1], /synthetic-private-detail/);
+
+  const transfer = harness({ play: () => {
+    throw new SpeakerPlaybackError('FAMILY_AUDIO_TRANSFER_TIMEOUT', '音箱没有开始读取歌曲，请检查所选网卡。');
+  } });
+  await transfer.player.entry('a');
+  await transfer.player.task;
+  assert.equal(transfer.player.status().error.message, '音箱没有开始读取歌曲，请检查所选网卡。');
+  assert.match(transfer.actions.at(-1)[1], /没有开始读取歌曲/);
 });
 
 test('invalid playlist requests leave an existing playback alone', async () => {

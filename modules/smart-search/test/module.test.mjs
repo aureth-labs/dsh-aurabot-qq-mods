@@ -7,7 +7,7 @@ test('native tools and rules are registered, without message interception or glo
   const h = harness(); h.load();
   assert.deepEqual(h.tools().map(t => t.name), ['qq_web_search', 'qq_read_webpage', 'qq_search_docs']);
   assert.match(h.rules[0](), /不要求用户/); assert.equal(h.events.message, undefined);
-  assert.equal(h.secrets.length, 6); h.dispose();
+  assert.equal(h.secrets.length, 7); h.dispose();
 });
 test('search guidance balances uncertain facts, reuse and non-search tasks', () => {
   const h = harness(); h.load();

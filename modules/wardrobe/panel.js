@@ -105,6 +105,13 @@ return function WardrobePage({ toast }) {
     if (r.ok) setData({ ...data, today: r.today, outfit: r.outfit })
   }
 
+  const toggleAutoDress = async () => {
+    const r = await post('/autodress/set', { on: !data.autoDress })
+    if (r && r.ok === false) { toast && toast(r.message || '没改成功'); return }
+    setData({ ...data, autoDress: Boolean(r.autoDress) })
+    toast && toast(r.autoDress ? '自动换装已开启' : '自动换装已关闭')
+  }
+
   const applyLook = async () => {
     const r = await post('/look/apply', {})
     if (r && r.ok === false) { toast && toast(r.message || '没保存上'); return }
@@ -347,6 +354,25 @@ return function WardrobePage({ toast }) {
 
     h('input', { ref: replaceRef, type: 'file', accept: 'image/*', style: { display: 'none' }, onChange: onReplaceFile }),
 
+    h(ui.Card, { title: '跟作息自动换装' },
+      h('div', { className: 'ab-switch-row' },
+        h('button', {
+          type: 'button',
+          className: 'ab-switch' + (data.autoDress ? ' on' : ''),
+          'aria-pressed': data.autoDress ? 'true' : 'false',
+          onClick: toggleAutoDress,
+        }),
+        h('span', { style: { fontSize: 13 } }, data.autoDress ? '已开启' : '已关闭')),
+      h('div', { className: 'ab-muted', style: { fontSize: 12, lineHeight: 1.8, marginTop: 8 } },
+        '她一天的处境（出门上班、下班到家、休息、睡觉）变化时，自动换上对应场景的衣服。',
+        h('br', null),
+        '今天你手动挑过衣服，就一整天不再自动换；没标场景的衣服永远不会被自动穿上。'),
+      (data.autoDress && !data.hasRoutine)
+        ? h('div', { style: { marginTop: 10, padding: '10px 12px', borderRadius: 8, background: '#fff7e6', border: '1px solid #ffe0a3', fontSize: 12, lineHeight: 1.8, color: '#8a6100' } },
+          '已开启，但没有检测到「作息 routine」模块，所以现在不会生效。',
+          h('br', null),
+          '装好「作息」后会自动开始工作，不用再回来改设置。')
+        : null),
     h(ui.Card, { title: '加一件衣服', desc: '上传参考图，自动写描述；或者自己写穿搭描述。标了场景的衣服才会被作息自动换上。' },
       h('div', { style: { display: 'flex', gap: 10, alignItems: 'flex-start' } },
         h('input', {
@@ -497,5 +523,8 @@ return function WardrobePage({ toast }) {
           h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 } },
             h('div', { className: 'ab-muted', style: { fontSize: 11 } }, h2.poses + ' · ' + new Date(h2.at).toLocaleString().slice(-8)),
             h(ui.Btn, { small: true, kind: 'ghost', onClick: () => delPreview(h2.id) }, '删')))))
-        : h('div', { className: 'ab-muted ab-small' }, '还没有生成过。')))
+        : h('div', { className: 'ab-muted ab-small' }, '还没有生成过。')),
+
+
+)
 }

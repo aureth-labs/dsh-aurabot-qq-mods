@@ -127,6 +127,7 @@ export class FamilyReminders {
     this.closed = false;
     this.generation = 0;
     this.ticking = null;
+    this.retryAfter = new Map();
     this.closing = null;
   }
   time() {
@@ -147,7 +148,7 @@ export class FamilyReminders {
     const temporary = this.file + '.tmp-' + randomUUID();
     try {
       await mkdir(dirname(this.file), { recursive: true });
-      await writeFile(temporary, JSON.stringify({ schema: 1, reminders: next }, null, 2), { mode: 0o600, flag: 'wx' });
+      await writeFile(temporary, JSON.stringify({ schema: 1, reminders: next }, null, 2), { mode: 0o600, flag: 'wx', flush: true });
       await rename(temporary, this.file);
     } catch {
       await unlink(temporary).catch(() => {});
@@ -203,6 +204,7 @@ export class FamilyReminders {
       if (reminder.state !== 'active') return copy(reminder);
       const cancelled = { ...reminder, state: 'cancelled' };
       await this.persist(this.reminders.map(item => item.id === id ? cancelled : item));
+      this.retryAfter.delete(id);
       return copy(cancelled);
     });
   }
@@ -218,7 +220,8 @@ export class FamilyReminders {
   async runTick(ticket) {
     this.assertOpen();
     const now = this.time();
-    const due = this.reminders.filter(item => item.state === 'active' && item.lastRun?.state !== 'sending' && timestamp(item.nextAt) <= now)
+    const due = this.reminders.filter(item => item.state === 'active' && item.lastRun?.state !== 'sending' &&
+        timestamp(item.nextAt) <= now && (this.retryAfter.get(item.id) ?? 0) <= now)
       .sort((a, b) => timestamp(a.nextAt) - timestamp(b.nextAt))[0];
     if (!due) return { claimed: false };
     let idle;
@@ -228,23 +231,37 @@ export class FamilyReminders {
       throw new FamilyReminderError('FAMILY_REMINDER_CHECK_FAILED');
     }
     if (!idle || this.closed || ticket !== this.generation) return { claimed: false };
-    const claimed = await this.enqueue(async () => {
-      if (this.closed || ticket !== this.generation) return null;
+    let claimed;
+    const claim = (canSubmit = () => true) => this.enqueue(async () => {
+      if (this.closed || ticket !== this.generation || !canSubmit()) return false;
       const current = this.reminders.find(item => item.id === due.id);
       const now = this.time();
-      if (!current || current.state !== 'active' || current.lastRun?.state === 'sending' || timestamp(current.nextAt) > now) return null;
+      if (!current || current.state !== 'active' || current.lastRun?.state === 'sending' || timestamp(current.nextAt) > now) return false;
       const run = { id: randomUUID(), scheduledAt: current.nextAt, state: 'sending' };
       const next = { ...current, nextAt: current.schedule.frequency === 'once' ? current.nextAt : iso(nextOccurrence(current.schedule, Math.max(now, timestamp(current.nextAt)) + 1)), lastRun: run };
       await this.persist(this.reminders.map(item => item.id === next.id ? next : item));
-      return copy(next);
+      if (once && (this.closed || ticket !== this.generation || !canSubmit())) {
+        // The caller still awaits permission, so no playback request has left yet.
+        await this.persist(this.reminders.map(item => item.id === current.id ? current : item));
+        return false;
+      }
+      claimed = next;
+      this.retryAfter.delete(due.id);
+      return !this.closed && ticket === this.generation;
     });
-    if (!claimed) return { claimed: false };
+    const once = due.schedule.frequency === 'once';
+    if (!once && !await claim()) return { claimed: false };
     const isCurrent = () => !this.closed && ticket === this.generation && this.reminders.some(item =>
-      item.id === claimed.id && item.state === 'active' && item.lastRun?.id === claimed.lastRun.id && item.lastRun.state === 'sending');
-    if (!isCurrent()) return { claimed: true, submitted: false, interrupted: true };
+      item.id === due.id && item.state === 'active' && (!claimed ||
+        (item.lastRun?.id === claimed.lastRun.id && item.lastRun.state === 'sending')));
+    if (!isCurrent()) return { claimed: Boolean(claimed), submitted: false, interrupted: true };
     let accepted = false;
-    try { accepted = (await this.deliver(copy(claimed), { isCurrent }))?.accepted === true; }
+    try { accepted = (await this.deliver(copy(claimed ?? due), { isCurrent, beforeSubmit: once ? claim : undefined }))?.accepted === true; }
     catch {}
+    if (!claimed) {
+      if (isCurrent()) this.retryAfter.set(due.id, this.time() + 60000);
+      return { claimed: false, submitted: false };
+    }
     if (!isCurrent()) return { claimed: true, submitted: false, interrupted: true };
     const completed = await this.enqueue(async () => {
       if (!isCurrent()) return null;

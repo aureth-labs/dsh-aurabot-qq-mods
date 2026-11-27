@@ -1,0 +1,14 @@
+{
+  "id": "daily-session",
+  "name": "每日会话拆分",
+  "version": "1.0.0",
+  "description": "每天自动开新会话，按聊天提炼前一天对话，只在新会话首轮注入摘要，降低上下文和 token 压力",
+  "category": "manage",
+  "tags": ["会话", "上下文", "每日", "省Token"],
+  "author": "Winston",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["filesystem", "plugin-internals"]
+}
