@@ -100,8 +100,8 @@ class VoiceSegmenterTest(unittest.TestCase):
         self.assertEqual(events[2]["kind"], "speech")
         self.assertEqual(events[0]["utter_ms"], 40)
 
-    def test_静音夠600毫秒才收句(self):
-        events = self.语音帧(8)          # 320ms，夠长
+    def test_静音够600毫秒才收句(self):
+        events = self.语音帧(8)          # 320ms，够长
         self.assertTrue(self.seg.active)
         tail = self.静音帧(14)           # 560ms，还不到 600
         self.assertFalse(any(e["kind"] == "end" for e in tail))
@@ -198,7 +198,7 @@ class IdleTest(unittest.TestCase):
         self.assertEqual(self.判(silent_mode=True, user_spoke=True, now=105.0), "none")
         self.assertEqual(self.判(silent_mode=True, user_spoke=True, now=200.0), "idle")
 
-    def test_对方不吭声十四秒后催一句(self):
+    def test_对方不吭夏十四秒后催一句(self):
         self.assertEqual(self.判(user_spoke=True, now=112.0), "none")
         self.assertEqual(self.判(user_spoke=True, now=115.0), "idle")
 
@@ -222,7 +222,7 @@ class GreetTest(unittest.TestCase):
     """模型想不出来时回「安静」= 她决定先听着。"""
 
     def test_认安静(self):
-        for line in ["安静", " 安静 ", "（安静）", "[安静]"]:
+        for line in ["安静", " 安静 ", "（安静）", "[安静]", "[安静] ", "【安静】"]:
             self.assertTrue(logic.greet_is_silent(line), line)
 
     def test_不认别的(self):
