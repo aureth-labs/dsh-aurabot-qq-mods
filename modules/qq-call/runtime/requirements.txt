@@ -1,0 +1,11 @@
+# QQ语音通话 · Python 运行时依赖
+# pip install -r requirements.txt
+
+numpy
+sounddevice
+soundcard
+sherpa-onnx>=1.10
+piper-tts
+edge-tts
+pillow
+pyautogui
