@@ -1,0 +1,21 @@
+{
+  "id": "model-quota-guard",
+  "name": "额度守门",
+  "version": "0.1.0",
+  "description": "盯着 workbuddy / trae 的账号额度，低于阈值就自动把当前聊天换成还有额度的模型；读的是插件自己的 usage 接口，不花钱、不占会话。",
+  "category": "manage",
+  "tags": [
+    "模型",
+    "额度",
+    "切换"
+  ],
+  "author": "阿鲸",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.1",
+  "requires": [],
+  "capabilities": [
+    "network",
+    "plugin-internals"
+  ]
+}

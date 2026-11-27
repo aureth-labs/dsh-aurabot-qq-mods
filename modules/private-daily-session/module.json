@@ -1,0 +1,23 @@
+{
+  "id": "private-daily-session",
+  "name": "私聊每日拆分",
+  "version": "0.1.0",
+  "description": "只在私聊里按天开新会话：跨天 + 静默够久 + 不在回复中才动手，摘要优先读 history-vault 已有日摘要，不重复烧模型",
+  "category": "manage",
+  "tags": [
+    "会话",
+    "私聊",
+    "上下文",
+    "省Token"
+  ],
+  "author": "阿鲸",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.1",
+  "requires": [],
+  "capabilities": [
+    "network",
+    "filesystem",
+    "plugin-internals"
+  ]
+}
