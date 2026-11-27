@@ -6,3 +6,4 @@ await import('./public-web.test.mjs');
 await import('./search.test.mjs');
 await import('./timeouts.test.mjs');
 await import('./errors.test.mjs');
+await import('./page-images.test.mjs');

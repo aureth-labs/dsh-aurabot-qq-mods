@@ -16,7 +16,7 @@ export function localRequest(req, post = false) {
 }
 
 export default {
-  id: 'smart-search', name: '联网搜索', version: '1.0.3', api: 1,
+  id: 'smart-search', name: '联网搜索', version: '1.0.4', api: 1,
   description: '需要时自己查资料、读网页，回答附上来源；默认沿用 DSH 搜索',
   panel: 'panel.js', defaults: DEFAULTS,
   setup(api) {
@@ -52,7 +52,7 @@ export default {
       if (settings().ownerOnly && chat.kind === 'private' && !api.isOwner(chat.userId)) return [];
       return [api.defineTool({
         name: 'qq_web_search',
-        description: '按需要搜索公开网络资料。回答所需的事实拿不准、有时效性或需要出处时主动使用；闲聊、改写、翻译已有内容不必搜索。已有资料足够就回答，不重复检索。mode=verify 多源核对，quick 普通检索。只能使用面板启用的源：DSH 通用；智谱适合中文、搜索词最多70字；Tavily 通用/新闻；Exa 文档/论文/官网；Firecrawl 网页检索；SearXNG 聚合搜索；Keenable 通用网页检索。返回摘要与来源，重要结论可继续用 qq_read_webpage 读原文。',
+        description: '按需要搜索公开网络资料。回答所需的事实拿不准、有时效性或需要出处时主动使用；闲聊、改写、翻译已有内容不必搜索。已有资料足够就回答，不重复检索。mode=verify 多源核对，quick 普通检索。只能使用面板启用的源：DSH 通用；智谱适合中文、搜索词最多70字；Tavily 通用/新闻；Exa 文档/论文/官网；Firecrawl 网页检索；SearXNG 聚合搜索；Keenable 通用网页检索。返回摘要与来源，重要结论可继续用 qq_read_webpage 读原文。要找现成图片，先搜索来源网页，再用 qq_read_webpage 的 includeImages 取得页面中的图片地址。',
         properties: {
           query: { type: 'string', description: '具体搜索词或问题，最多 500 字' },
           mode: { type: 'string', enum: ['quick', 'verify'], description: '默认 quick；重要事实、结果冲突或明确要求核实时选 verify' },
@@ -63,9 +63,10 @@ export default {
         }, required: ['query'], execute: execute('search', chat, sessionId),
       }), api.defineTool({
         name: 'qq_read_webpage',
-        description: '读取公开网页文本，核对搜索来源或用户链接。不访问本机、内网、登录内容或下载文件。source 可指定已启用的 dsh / zhipu / searxng（直接安全读取）、tavily / exa / firecrawl / keenable（服务商提取）。默认优先直接读取；遇到访问限制可换提取服务。文本可能截断，不代表读完全文。',
+        description: '读取公开网页文本，核对搜索来源或用户链接。不访问本机、内网、登录内容或下载文件。source 可指定已启用的 dsh / zhipu / searxng（直接安全读取）、tavily / exa / firecrawl / keenable（服务商提取）。默认优先直接读取；遇到访问限制可换提取服务。找网页中的图片时设 includeImages=true，返回可供选择的图片地址及说明，用 ![说明](图片地址) 发图。直接读取支持提取 HTML 图片；其他源可能只提供文字。文本可能截断，不代表读完全文。',
         properties: {
           url: { type: 'string', description: '要读取的公开 http / https 网页网址' },
+          includeImages: { type: 'boolean', description: '需要找图、发原图时设为 true；同时返回网页里的图片地址，最多20个。默认只读文字' },
           source: { type: 'string', enum: WEB_SOURCES, description: '可选，使用哪个已启用源读取；直接读取失败可主动换源' },
         }, required: ['url'], execute: execute('read', chat, sessionId),
       }), api.defineTool({
