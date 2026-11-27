@@ -1204,6 +1204,40 @@
       "publishedAt": "2026-11-25T12:38:47.699Z"
     },
     {
+      "id": "family-tasks",
+      "name": "家人代办",
+      "version": "0.1.0",
+      "description": "在不改变私聊权限的情况下，把设置的家人 QQ 吩咐给大肥鱼的任务转交给主人私聊来做。主人点头后，做完向家人 QQ 反馈结果。",
+      "category": "manage",
+      "tags": [
+        "家人",
+        "代办",
+        "流水",
+        "隐私"
+      ],
+      "platforms": [
+        "qq"
+      ],
+      "author": "Wilidy",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "process",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "family-tasks-v0.1.0",
+      "file": "family-tasks-v0.1.0.zip",
+      "path": "family-tasks-v0.1.0/family-tasks-v0.1.0.zip",
+      "size": 13587,
+      "sha256": "0a61cb0731b18f7210fea496d4726c470ed7e9ae2ab78f13e958294df3038088",
+      "commit": "197a810361dd875c3db523b587298d272a2c8ee6",
+      "publishedAt": "2026-11-27T02:56:09.759Z"
+    },
+    {
       "id": "feed",
       "name": "喂食",
       "version": "3.2.1",
@@ -4114,5 +4148,5 @@
       "reason": "作者主动撤回。"
     }
   ],
-  "generatedAt": "2026-11-27T02:54:48.969Z"
+  "generatedAt": "2026-11-27T02:56:09.759Z"
 }
