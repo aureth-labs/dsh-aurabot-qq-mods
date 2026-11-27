@@ -2,6 +2,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { readFile, writeFile, rename, unlink, mkdir, readdir, lstat, realpath } from 'node:fs/promises';
 import { join, dirname, basename, extname, resolve, relative, isAbsolute } from 'node:path';
 import { SongLibrary, FamilySongError, hashFile } from './library.mjs';
+import { LOCAL_VOICE_PREFIX, singingVoiceLabel } from './local-voices.mjs';
 
 const hash = text => createHash('sha256').update(text).digest('hex');
 const key = path => process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path);
@@ -9,6 +10,18 @@ const inside = (root, file) => { const rest = relative(root, file); return rest 
 const fail = message => new FamilySongError('FAMILY_DIRECTORY', message);
 const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const copy = value => JSON.parse(JSON.stringify(value));
+
+function withDisplayDetails(item, entry) {
+  const details = { ...item, createdAt: entry?.createdAt || '' };
+  if (item.mode !== 'cover') return details;
+  const voice = entry?.identity?.voice;
+  const local = voice?.role === 'local';
+  const label = singingVoiceLabel(item.voice, local);
+  if (label !== item.voice) details.voiceLabel = label;
+  if (local && voice.id) details.voiceId = LOCAL_VOICE_PREFIX + voice.id;
+  else if (!local) details.voiceId = entry?.voiceName || 'bb_mother_v1';
+  return details;
+}
 
 // External folders are indexed only. Their files and manifests are never written or deleted.
 export class DirectoryLibrary {
@@ -19,6 +32,11 @@ export class DirectoryLibrary {
   get root() { return this.primary.root; }
   get sources() { return this.primary.sources; }
   get jobs() { return this.primary.jobs; }
+  get invalidSongIds() {
+    const ids = new Set(this.dirs.flatMap(dir => dir.invalidIds || []));
+    if (ids.size) for (const [id, entry] of this.entries) if (entry.available) ids.delete(id);
+    return ids;
+  }
   get entries() {
     const merged = new Map();
     for (const dir of this.dirs) for (const record of dir.records) {
@@ -45,23 +63,24 @@ export class DirectoryLibrary {
     let saved;
     try { saved = JSON.parse(await readFile(this.file, 'utf8')); }
     catch (error) { if (error.code !== 'ENOENT') throw fail('目录索引无法读取，原文件已保留。'); }
-    if (saved) {
-      if (saved.schema !== 1 || !Array.isArray(saved.directories) || saved.directories.filter(d => d.id === 'primary').length !== 1 ||
+    if (saved !== undefined) {
+      if (saved?.schema !== 1 || !Array.isArray(saved.directories) || saved.directories.some(d => !d || typeof d.id !== 'string') ||
+          saved.directories.filter(d => d.id === 'primary').length !== 1 ||
           new Set(saved.directories.map(d => d.id)).size !== saved.directories.length || saved.directories.some(d =>
-            typeof d.path !== 'string' || !isAbsolute(d.path) || !Array.isArray(d.records) || d.records.some(r =>
-              !digest(r.id) || !digest(r.sha) || typeof r.file !== 'string' || !inside(d.path, resolve(d.path, r.file)) ||
+            typeof d.path !== 'string' || !isAbsolute(d.path) ||
+            (d.invalidIds !== undefined && (!Array.isArray(d.invalidIds) || !d.invalidIds.every(digest))) ||
+            !Array.isArray(d.records) || d.records.some(r =>
+              !digest(r?.id) || !digest(r.sha) || typeof r.file !== 'string' || !inside(d.path, resolve(d.path, r.file)) ||
               !r.entry?.source?.title || !r.public?.title || !(r.entry.duration > 0)))) throw fail('目录索引格式不正确，未覆盖原文件。');
       this.dirs = saved.directories;
       const root = this.dirs.find(d => d.id === 'primary').path;
       this.primary.root = root; this.primary.metadataRoot = join(root, '歌曲信息');
       await this.checkPaths();
       const primaryDir = this.dirs.find(d => d.id === 'primary');
-      if (primaryDir.phase === 'ready') {
-        try { await this.primary.open({ allowMissing: true }); }
-        catch (error) {
-          if (error.code !== 'FAMILY_CACHE_INVALID') throw error;
-          this.primary.entries.clear(); primaryDir.phase = 'invalid';
-        }
+      if (primaryDir.phase === 'ready' || primaryDir.phase === 'invalid') {
+        await this.primary.open({ allowMissing: true });
+        primaryDir.invalidIds = [...this.primary.invalidIds];
+        primaryDir.phase = 'ready';
       }
     } else {
       await this.primary.open({ allowMissing: true });
@@ -80,6 +99,7 @@ export class DirectoryLibrary {
     const managed = existing || new SongLibrary({ root, workRoot: '', describe: () => { throw fail('外部曲库只读。'); } });
     if (!existing) await managed.open({ allowMissing: true });
     const records = [], known = new Set();
+    const invalidPrefixes = new Set([...managed.invalidIds].map(id => id.slice(0, 12)));
     for (const entry of managed.entries.values()) {
       const file = entry.schema === 1 ? join(entry.id, entry.file) : entry.file;
       known.add(key(join(root, file)));
@@ -90,8 +110,9 @@ export class DirectoryLibrary {
       for (const item of await readdir(folder, { withFileTypes: true })) {
         const file = join(folder, item.name);
         if (item.isSymbolicLink()) continue;
-        if (item.isDirectory()) { if (item.name !== '歌曲信息') await walk(file); continue; }
+        if (item.isDirectory()) { if (item.name !== '歌曲信息' && !managed.invalidIds.has(item.name)) await walk(file); continue; }
         if (!item.isFile() || !['.mp3','.wav','.ogg'].includes(extname(item.name).toLowerCase()) || known.has(key(file))) continue;
+        if (invalidPrefixes.has(/-([a-f0-9]{12})\]\.mp3$/i.exec(item.name)?.[1])) continue;
         const sha = await hashFile(file), id = hash('local-audio-v1:' + sha);
         const previous = this.dirs.flatMap(d => d.records).find(r => r.id === id);
         const duration = previous?.entry.duration || await this.durationOf(file);
@@ -103,35 +124,37 @@ export class DirectoryLibrary {
       }
     };
     await walk(root);
-    return { records, skipped };
+    return { records, skipped, invalidIds: [...managed.invalidIds] };
   }
   async checkPaths() {
     for (const dir of this.dirs) {
       try { if (!(await lstat(dir.path)).isDirectory()) throw new Error(); if (dir.phase === 'missing') dir.phase = 'rescan'; else if (!dir.phase) dir.phase = 'ready'; }
       catch { dir.phase = 'missing'; }
+      const invalid = new Set(dir.invalidIds);
       for (const record of dir.records) {
         try { record.missing = !await this.filePresent(join(dir.path, record.file)); }
         catch { record.unreadable = true; continue; }
-        record.unreadable = false;
+        record.unreadable = Boolean(record.managed && invalid.has(record.id));
       }
     }
     return this.directories();
   }
   directories() { return this.dirs.map(d => ({ id: d.id, path: d.path, primary: d.id === 'primary', phase: d.phase,
-    count: new Set(d.records.map(r => r.id)).size, missing: d.records.filter(r => r.missing).length, skipped: d.skipped || 0 })); }
+    count: new Set(d.records.map(r => r.id)).size, missing: d.records.filter(r => r.missing).length,
+    invalid: d.invalidIds?.length || 0, skipped: d.skipped || 0 })); }
   status() {
     const all = new Map();
     for (const dir of this.dirs) for (const record of dir.records) {
       const available = dir.phase === 'ready' && !record.missing && !record.unreadable;
       const old = all.get(record.id);
       const primaryManaged = dir.id === 'primary' && record.managed;
-      if (!old) all.set(record.id, { ...record.public, directoryIds: [dir.id], available, readOnly: !primaryManaged });
+      if (!old) all.set(record.id, { ...withDisplayDetails(record.public, record.entry), directoryIds: [dir.id], available, readOnly: !primaryManaged });
       else { if (!old.directoryIds.includes(dir.id)) old.directoryIds.push(dir.id); old.available ||= available; old.readOnly &&= !primaryManaged; }
     }
     const primary = this.dirs.find(d => d.id === 'primary');
     for (const item of this.primary.status().entries) {
       const old = all.get(item.id);
-      all.set(item.id, { ...item, directoryIds: [...new Set([...(old?.directoryIds || []),'primary'])],
+      all.set(item.id, { ...withDisplayDetails(item, this.primary.entries.get(item.id)), directoryIds: [...new Set([...(old?.directoryIds || []),'primary'])],
         available: (primary?.phase === 'ready' && !primary.records.find(r => r.id === item.id)?.missing) || old?.available === true, readOnly: false });
     }
     return { entries: [...all.values()], jobs: this.primary.status().jobs, directories: this.directories(), indexError: this.indexError || '' };
@@ -160,7 +183,7 @@ export class DirectoryLibrary {
       if (id === 'primary') { this.primary.entries.clear(); await this.primary.open({ allowMissing: true }); }
       this.primary.addSources(records.map(r => r.entry.source));
       if (id === 'primary') this.indexError = '';
-      return this.directories();
+      return this.checkPaths();
     });
   }
   async filePresent(file) {
@@ -220,10 +243,17 @@ export class DirectoryLibrary {
   async get(id) {
     const primary = this.dirs.find(d => d.id === 'primary');
     if (primary?.phase === 'ready' && this.primary.entries.has(id)) {
-      try { return await this.primary.get(id); } catch {}
+      try { return await this.primary.get(id); } catch (error) {
+        if (error.code === 'FAMILY_CACHE_INVALID') {
+          this.primary.entries.delete(id);
+          this.primary.invalidIds.add(id);
+          primary.invalidIds = [...this.primary.invalidIds];
+          for (const record of primary.records) if (record.id === id) record.unreadable = true;
+        }
+      }
     }
     for (const dir of this.dirs) for (const record of dir.records) {
-      if (record.id !== id || record.missing || dir.phase !== 'ready') continue;
+      if (record.id !== id || record.missing || record.unreadable || dir.phase !== 'ready') continue;
       const path = join(dir.path,record.file);
       try {
         if (!inside(await realpath(dir.path),await realpath(path)) || await hashFile(path) !== record.sha) continue;

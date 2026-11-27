@@ -3,12 +3,15 @@ import assert from 'node:assert/strict';
 import { MiNASpeaker } from '../lib/speaker/mina.mjs';
 import { FAMILY_AUDIO_ID } from '../lib/speaker/transport.mjs';
 
-function harness({ rejectLoop = false, ignoreLoop = false, foreignOnFailure = false, unreadable = false } = {}) {
+function harness({ rejectPlay = false, rejectLoop = false, ignoreLoop = false, foreignOnFailure = false, unreadable = false } = {}) {
   const calls = [];
   let url, loopType = 1;
   const speaker = new MiNASpeaker({ localAddress: '127.0.0.1', call: async (_scope, method, value) => {
     calls.push({ method, value });
-    if (method === 'player_play_music') url = JSON.parse(JSON.parse(value).music).payload.audio_items[0].stream.url;
+    if (method === 'player_play_music') {
+      if (rejectPlay) throw new Error('synthetic-private-detail');
+      url = JSON.parse(JSON.parse(value).music).payload.audio_items[0].stream.url;
+    }
     if (method === 'player_set_loop') {
       if (rejectLoop) return { code: 10 };
       if (!ignoreLoop) loopType = value.type;
@@ -43,6 +46,17 @@ test('rejected or unchanged repeat mode cannot report successful one-round playb
     assert.equal(h.speaker.canResume, false);
     assert.deepEqual(h.calls.filter(item => item.method === 'player_play_operation').map(item => item.value), [{ action: 'pause' }]);
   }
+});
+
+test('play command rejection reports the command stage without leaking the transport error', async t => {
+  const h = harness({ rejectPlay: true }); t.after(() => h.speaker.close());
+  await assert.rejects(h.speaker.playProbe(), error => {
+    assert.equal(error.code, 'FAMILY_SPEAKER_PLAY_COMMAND');
+    assert.match(error.message, /未能下发播放指令/);
+    assert.doesNotMatch(error.message, /synthetic-private-detail/);
+    return true;
+  });
+  assert.equal(h.speaker.server, null);
 });
 
 test('failed owned playback releases its stream without pausing a confirmed foreign media selection', async t => {

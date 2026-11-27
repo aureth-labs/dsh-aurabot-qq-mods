@@ -354,9 +354,25 @@ export function wrapMemoryAdd(memory, getSettings, opts = {}) {
           const dbFile = getDbFile()
           if (dbFile) {
             // 异步补，不等它，插件这个函数是同步的
-            patchClsWithRetry(dbFile, pending.id, pending.cls, log).catch((e) => {
-              log?.warn?.('[memory-grade] 补密级出错：' + e.message)
-            })
+            patchClsWithRetry(dbFile, pending.id, pending.cls, log)
+              .then((done) => {
+                if (!done) return
+                // 2026-11-26 修：补完要让内存里那份也跟上。
+                // 之前只改库不改 index，自检读到的永远是旧值，
+                // 表现就是每小时只补 1 条、库里堆着一批判错的。
+                try {
+                  if (typeof opts.getStore === "function") {
+                    const s = opts.getStore()
+                    const it = s && typeof s.get === "function" ? s.get(pending.id) : null
+                    if (it && it.cls !== pending.cls) it.cls = pending.cls
+                  }
+                } catch {
+                  /* 内存更新失败不影响库 */
+                }
+              })
+              .catch((e) => {
+                log?.warn?.('[memory-grade] 补密级出错：' + e.message)
+              })
           }
         } catch {
           /* 路径拿不到就算了 */

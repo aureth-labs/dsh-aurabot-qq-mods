@@ -31,8 +31,28 @@ export function isMmbiz(url) {
   } catch { return false }
 }
 
-export async function downloadImage(url, { fetchImpl = (...args) => fetch(...args), maxBytes = 5_000_000, timeoutMs = 20000, signal } = {}) {
-  const target = originalImageUrl(url)
+function sameOrigin(value, origin) {
+  if (!origin) return false
+  try { return new URL(String(value || '')).origin === origin } catch { return false }
+}
+
+/**
+ * 自建 RSS（如 we-mp-rss）常把图片改写成自己服务器上的地址。
+ * allowedOrigin 是 RSS 地址所在的站点，给了它才接受这个站点上的图片，别处的仍然不要。
+ */
+function allowedImageUrl(value, allowedOrigin) {
+  const mmbiz = originalImageUrl(value)
+  if (mmbiz) return mmbiz
+  let parsed
+  try { parsed = new URL(String(value || '').trim().replace(/&amp;/g, '&')) } catch { return '' }
+  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) return ''
+  if (!sameOrigin(parsed.href, allowedOrigin)) return ''
+  parsed.hash = ''
+  return parsed.href
+}
+
+export async function downloadImage(url, { fetchImpl = (...args) => fetch(...args), maxBytes = 5_000_000, timeoutMs = 20000, signal, allowedOrigin = '' } = {}) {
+  const target = allowedImageUrl(url, allowedOrigin)
   if (!target) return { ok: false, error: '图片地址不是微信图床 mmbiz.qpic.cn' }
   try {
     const response = await fetchImpl(target, {
@@ -40,7 +60,9 @@ export async function downloadImage(url, { fetchImpl = (...args) => fetch(...arg
       signal: signalWithTimeout(signal, timeoutMs),
     })
     if (!response?.ok) return { ok: false, error: `图片 HTTP ${response?.status ?? ''}` }
-    if (!isMmbiz(response.url || target)) return { ok: false, error: '图片被重定向到非微信图床' }
+    // 跳转之后仍要落在微信图床，或者（给了 allowedOrigin）RSS 自己的站点。
+    const landed = response.url || target
+    if (!isMmbiz(landed) && !sameOrigin(landed, allowedOrigin)) return { ok: false, error: '图片被重定向到非微信图床' }
     const bytes = await readBody(response, maxBytes)
     const mime = detectMime(bytes)
     if (!mime) return { ok: false, error: '下载到的内容不是 PNG、JPEG 或 WebP' }
@@ -79,6 +101,17 @@ export async function writeCache(dir, date, bytes, mime) {
   const file = join(dir, cacheName(date, ext))
   await writeFile(file, bytes)
   return { file, bytes, mime }
+}
+
+/** 删掉某一天的缓存图，png / jpg / webp 都试。返回删掉的文件数。 */
+export async function removeCache(dir, date) {
+  let removed = 0
+  for (const ext of Object.values(EXT)) {
+    try { await unlink(join(dir, cacheName(date, ext))); removed++ } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+    }
+  }
+  return removed
 }
 
 /** 只删自己写的日期图片，保留任务记录。默认留 14 天。 */

@@ -1,0 +1,14 @@
+{
+  "id": "room",
+  "name": "小鱼的小屋",
+  "version": "1.2.0",
+  "description": "给她一间自己的房间：聊天攒鱼币、买家具、家电和装饰，在面板里拖着摆；心情差的时候屋里会变暗。",
+  "category": "desktop",
+  "tags": ["小屋", "养成", "心情", "装饰", "家具"],
+  "author": "王啸宇",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["filesystem", "plugin-internals"]
+}

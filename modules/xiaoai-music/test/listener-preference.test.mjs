@@ -23,7 +23,8 @@ test('corrupt resident preference fails closed without replacing saved data', as
   const file = join(await fixture(t), '常驻入口.json');
   await writeFile(file, '{broken');
   const settings = new ListenerPreference(file);
-  await assert.rejects(settings.open(), /未自动开启/);
+  await settings.open();
+  assert.equal(settings.error.code, 'PREFERENCE_INVALID');
   assert.equal(settings.enabled, false);
   assert.equal(await readFile(file, 'utf8'), '{broken');
 });

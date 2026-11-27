@@ -51,14 +51,22 @@ export function imagesFromHtml(html) {
   return images
 }
 
-/** 日历图是竖版大图。横幅和 gif 表情排除；没有竖版时用第一张微信图。 */
-export function pickCalendarImage(images) {
+/**
+ * 日历图是竖版大图。横幅和 gif 表情排除；没有竖版时用第一张微信图。
+ * allowedOrigin 是 RSS 地址所在的站点：自建 RSS 常把图片改成自己服务器上的地址，
+ * 给了这个来源就一并接受，别的站点仍然不要。
+ */
+export function pickCalendarImage(images, { allowedOrigin = '' } = {}) {
   const list = []
   for (const image of images || []) {
     let src = String(image?.src || '').trim()
     if (src.startsWith('//')) src = `https:${src}`
     src = src.split('#')[0]
-    if (!/^https:\/\/mmbiz\.qpic\.cn\//i.test(src)) continue
+    let ownRss = false
+    if (allowedOrigin) {
+      try { ownRss = ['http:', 'https:'].includes(new URL(src).protocol) && new URL(src).origin === allowedOrigin } catch { ownRss = false }
+    }
+    if (!/^https:\/\/mmbiz\.qpic\.cn\//i.test(src) && !ownRss) continue
     if (/wx_fmt=gif|\.gif(?:$|\?)/i.test(src)) continue
     list.push({ src, w: Number(image?.w) || 0, ratio: Number(image?.ratio) || 0 })
   }

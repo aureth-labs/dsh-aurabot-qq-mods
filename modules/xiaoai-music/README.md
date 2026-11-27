@@ -1,6 +1,16 @@
-# xiaoai music · 小爱音响接入
+# 小爱音箱
 
-Windows 上的 Aurabot 家庭音箱模块：保存完整歌曲、管理顺序或随机歌单、跟随 Aurabot 当前人设的音箱对话，以及北京时间周期与一次提醒。小爱语音入口使用小米云对话记录轮询，并非本地麦克风接管。当前版本为 0.15.4。
+Windows 上的 Aurabot 家庭音箱模块：保存完整歌曲、管理顺序或随机歌单、跟随 Aurabot 当前人设的音箱对话，以及北京时间周期与一次提醒。小爱语音入口使用小米云对话记录轮询，并非本地麦克风接管。当前版本为 0.16.0。
+
+## 更新记录
+
+### 0.16.0
+
+- 支持可选的本地整曲音色登记，附 DDSP、RVC 等已有脚本的接入示例。宿主 RVC 音色继续使用原有生成和缓存。
+- 曲库增加批量保存原曲、批量翻唱和切换已有音色版本。歌曲可按时间、歌名或音色排序，支持全选加入歌单。每日随机歌单抽取最多 20 首可播放歌曲。
+- 重新运行配置引导时可确认并沿用已有曲库、歌单和设置。面板显示默认翻唱音色的实际名称，并提示所选本地音色是否可生成及具体原因。
+- 一次提醒在发送前准备失败时保留计划并重试。播放请求已登记但结果无法确认时，保留投送记录且不自动重发。
+- 播放歌单时跳过已确认损坏的歌曲并保留文件及引用。目录索引、监听偏好、家庭称呼和提醒文件损坏时分别报告问题，保留原有资料。损坏的语音游标会备份，下次开始监听时从当前时间接收口令。
 
 ## 使用条件与配置
 
@@ -13,7 +23,7 @@ Windows 上的 Aurabot 家庭音箱模块：保存完整歌曲、管理顺序或
 
 ## 功能入口
 
-模块 ID 为 `xiaoai-music`，显示名为 `xiaoai music · 小爱音响接入`。面板为独立页面；在 Aurabot 1.2.1 原版宿主中显示于系统分组。模块不会自行修改宿主导航文件。
+模块 ID 为 `xiaoai-music`，面板使用独立的「小爱音箱」标签。宿主已将小爱音箱归入「表达」时，从「表达 → 小爱音箱」打开。使用 Aurabot 1.2.1 原版导航时，可在「系统」分组找到该标签。
 
 ### 首次使用
 
@@ -37,6 +47,84 @@ Windows 上的 Aurabot 家庭音箱模块：保存完整歌曲、管理顺序或
 
 在模块自定义面板搜索选版、保存原曲／翻唱、整理歌单，使用顺序／随机、上一轮停止后的重新播放、下一首、暂停、继续与停止。翻唱音色默认跟随宿主翻唱设置，对话声音跟随宿主语音设置。
 
+### 批量生成和歌单操作
+
+- 已保存歌曲和歌单内的搜索支持歌名、歌手、版本类型和翻唱音色。可用空格组合关键词，例如「示例歌手 翻唱 示例歌名」。
+- 「全部本地生成」逐首将当前列表对应的网易云原曲保存到曲库。「全部音色生成」按所选音色翻唱。两个按钮都按点击时的筛选结果和当前选定的歌曲版本处理，勾选状态只用于歌单操作和删除。缺少可用来源或已有目标成品时会显示跳过原因，「停止后续任务」会让当前一首完成。
+- 「全部版本切换音色」将当前筛选结果切换到已保存的所选音色版本，缺少音色版本时跳过。个人歌单点「保存修改」后生效。
+- 搜索框旁可选时间、字母或音色排序。时间最新在前，中文歌名按拼音。排序仅调整显示。
+- 「每日随机歌单」按北京时间每天从全部可播放歌曲中抽取最多 20 首，同一首歌只抽一个版本。点「小爱播放今日歌单」可在音箱播放一轮。
+- 可勾选当前筛选结果，批量加入一个目标歌单。已有歌曲会跳过，面板汇报新增和跳过数量。
+- 「全部歌曲」中的删除会移除可写音频、曲库记录及歌单引用，并跳过只读条目。歌单中的移出只调整当前歌单，点击「保存修改」后生效。
+
+### 本地整曲音色（可选）
+
+**使用宿主的 RVC（Applio）音色时无需额外配置。** 在小爱翻唱下拉选已有的 RVC 音色即可。开启宿主的「本地接口 → 翻唱换声」也不会改变小爱生成这些音色的方式，已有 RVC 成品继续复用。
+
+已有自己的 DDSP、RVC 或其他本地翻唱脚本时，可以让该脚本向小爱交付混好的整曲。生成所用的模型、分离环境和推理由用户自行准备。
+
+1. 在宿主「本地接口」开启「翻唱换声」。给现有的 `local/song-convert.mjs` 增加对 `xiaoai-full-song/v1` 的处理。下面的示例用占位路径，`renderFullSong` 和 `convertExisting` 请换成现有的整曲渲染函数和原入口逻辑。可以将[示例适配文件](docs/xiaoai-full-song.example.mjs)放到钩子旁边。
+
+   ```js
+   import { createXiaoaiFullSong, XIAOAI_FULL_SONG_TASK } from './xiaoai-full-song.example.mjs';
+
+   const xiaoaiFullSong = createXiaoaiFullSong({
+     voiceId: 'example-voice',
+     model: 'D:/Example/Models/example.pt',
+     config: 'D:/Example/Models/config.yaml',
+     revision: 'example-renderer-v1',
+     renderFullSong,
+   });
+
+   export default async function convert(args) {
+     if (args.task === XIAOAI_FULL_SONG_TASK) return xiaoaiFullSong(args);
+     return convertExisting(args);
+   }
+   ```
+
+2. 生成前先调用钩子的 `describe`，取得登记项。将下面的占位路径替换成你的 `song-convert.mjs` 的绝对路径，在 PowerShell 7（`pwsh`）执行。示例只计算版本，不生成音频。
+
+   ```powershell
+   $env:XIAOAI_EXAMPLE_HOOK = 'D:\Example\Aurabot\local\song-convert.mjs'
+   @'
+   import { pathToFileURL } from 'node:url';
+   const hook = await import(pathToFileURL(process.env.XIAOAI_EXAMPLE_HOOK).href);
+   const describe = hook.default || hook.run;
+   const { kind, voiceId, renderVersion } = await describe({
+     task: 'xiaoai-full-song/v1', describe: true, voiceId: 'example-voice', log: console,
+   });
+   if (kind !== 'describe' || voiceId !== 'example-voice' || !renderVersion) {
+     throw new Error('本地钩子未返回有效的音色描述');
+   }
+   console.log(JSON.stringify({ id: voiceId, label: '示例音色', renderVersion }, null, 2));
+   '@ | node --input-type=module
+   ```
+
+3. 将输出对象加入小爱模块数据目录的 `本地整曲音色.json` 数组，保存为 UTF-8 无 BOM。默认路径为 `%USERPROFILE%\.dsh\plugins-data\aurabot\modules-data\xiaoai-music\本地整曲音色.json`。如已有登记，在数组中追加一项。每个 ID 只登记一次，`id` 值与脚本收到的 `voiceId` 相同。这里的版本值仅为占位：
+
+   ```json
+   [
+     { "id": "example-voice", "label": "示例音色", "renderVersion": "替换为 describe 输出的值" }
+   ]
+   ```
+
+4. 刷新小爱面板，搜索并选定歌曲版本，选择「翻唱」和「示例音色（本地整曲）」。选中后面板会预检钩子、音色版本及分离环境，显示是否可生成和失败原因。看到「可以生成原调整曲」后，点击「生成并保存」或「生成并播放到小爱」。单首和批量下拉都会显示当前默认音色的实际名称，本次选择优先于已保存的默认翻唱音色。
+
+#### 脚本接入约定
+
+小爱只在选中已登记的本地音色时，才以 `task: 'xiaoai-full-song/v1'` 调用宿主翻唱钩子。面板选项 ID 带有 `local:` 前缀，传给钩子的 `voiceId` 是登记里的原始 ID。
+
+| 调用 | 脚本职责 |
+| --- | --- |
+| `describe: true` | 核对所选音色和资源，只返回 `{ kind: 'describe', voiceId, renderVersion, params }`。其中 `params` 是参与成品缓存计算的有效参数。 |
+| 生成 | 接收 `voiceId`、`renderVersion`、原曲 `refSong`、人声 `vocal`、伴奏 `inst`、`output`、`pitch` 和 `log`。版本匹配后，把含人声和伴奏的完整 WAV 写到任务目录内的 `output`，返回 `{ kind: 'master', file: output, voiceId, renderVersion, params }`。输入音轨由小爱提供，保留原文件。 |
+
+小爱把 master 编码为 MP3，通过整曲时长校验后入库。首版支持原调。遇到音色不可用、钩子关闭、版本不匹配或生成失败时，任务报错并保留原有成品。
+
+批量选择本地整曲音色时，变调版本会标明原因并跳过。先将该歌曲切换到原调版本，再执行批量生成。
+
+`renderVersion` 应反映实际权重、模型配置、混音参数及渲染实现。示例会读取权重和配置的内容摘要。混音或实现有变更时，将有效配置纳入摘要或更新示例中的 `revision`。换权重或修改成品配置后，重新执行第 2 步并更新对应登记条目。同曲、同音色和同配方会复用已保存的成品。
+
 显式唤醒示例：“小爱同学，小伴播放小星星”。通过 `xiaoai_music` 工具可查询曲库和控制播放；`xiaoai_reminder` 管理一次及日、周、月提醒。指定已保存成品 ID 时准确播放该版本；按歌曲名或来源查询到多个成品时需要进一步选择，不会自动生成默认翻唱。接口检查主人来源；本地管理修改要求同源 JSON POST。提醒可先文字预览再保存，到时会按用户启用的计划调用音箱。关闭音箱接入入口会停止接收并释放本模块播放。
 
 会话映射会持久保存；对话和提醒读取宿主当前人设，不另存人设正文。语音无法可靠识别说话人，不将称呼当作身份认证。长期分类记忆、随机主动关心及保存位置自动迁移未在本版提供。
@@ -57,7 +145,7 @@ Windows 上的 Aurabot 家庭音箱模块：保存完整歌曲、管理顺序或
 
 ### 定时提醒
 
-在“类型”选择“周期”或“一次”。周期支持每天、每周（可多选星期）和每月；一次选择日期与时间，统一按北京时间执行。已经过去的日期时间不能新建。一次提醒执行后显示“已结束”，不会继续重复；取消后不再执行。提醒投送失败或执行中断也会结束本次计划，列表显示结果，不自动重播。
+在“类型”选择“周期”或“一次”。周期支持每天、每周（可多选星期）和每月。一次提醒选择日期与时间，统一按北京时间执行。已经过去的日期时间不能新建。一次提醒在播报准备期间可以取消。准备失败时保留计划，恢复后补播。播放请求已登记但结果无法确认时，本次计划结束，列表显示投送结果。
 
 到时音箱忙碌或连接未恢复会等待；电脑和 Aurabot 需要保持运行，重启后尚未开始投送的到期提醒会继续等待可用时执行。提醒独立于语音接入开关。已有周期提醒保留，无需重新添加。
 

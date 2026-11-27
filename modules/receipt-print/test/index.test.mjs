@@ -362,7 +362,7 @@ test('/小票 校准 出校准页并留备份', async () => {
   const raw = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8'))
   assert.equal(raw.history[0].template, '校准页')
   assert.equal(raw.history[0].trigger.type, 'command')
-  assert.match(raw.history[0].text, /\] 48mm/)
+  assert.match(raw.history[0].text, /48mm #/)
 })
 
 test('面板 /calibrate 也能打印校准页', async () => {

@@ -12,7 +12,7 @@ const { defineTool, str, int } = __lib('tools/tools.js')
 export default {
   id: 'song',
   name: '翻唱',
-  version: '1.0.1',
+  version: '1.0.2',
   api: 1,
   description: '用她的声音翻唱一首歌（音源默认 B 站优先、网易云兜底，可在面板里反过来），做好发语音条（qq_song_cover、/sing）',
   tab: 'song',

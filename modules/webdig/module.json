@@ -1,0 +1,14 @@
+{
+  "id": "webdig",
+  "name": "网页挖数据",
+  "version": "1.0.0",
+  "description": "让她自己去一个网站里翻数据：先看 robots.txt，再把页面自带的数据或公开接口挖出来落盘，回一句结果摘要。只抓公开内容，不走登录态、不绕验证码、不伪装成别人。",
+  "category": "tool",
+  "tags": ["抓网页", "翻数据", "调研"],
+  "author": "RookieApe-tao",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["network", "filesystem", "process"]
+}

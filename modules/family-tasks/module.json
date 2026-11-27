@@ -1,0 +1,26 @@
+{
+  "id": "family-tasks",
+  "name": "家人代办",
+  "version": "0.1.0",
+  "description": "在不改变私聊权限的情况下，把设置的家人 QQ 吩咐给大肥鱼的任务转交给主人私聊来做。主人点头后，做完向家人 QQ 反馈结果。",
+  "category": "manage",
+  "tags": [
+    "家人",
+    "代办",
+    "流水",
+    "隐私"
+  ],
+  "platforms": [
+    "qq"
+  ],
+  "author": "Wilidy",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "filesystem",
+    "process",
+    "plugin-internals"
+  ]
+}

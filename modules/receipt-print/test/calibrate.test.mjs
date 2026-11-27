@@ -8,7 +8,7 @@ test('候选行宽度正好等于对应毫米的列数', () => {
   assert.ok(rows.length >= 10)
   for (const row of rows) {
     assert.equal(displayWidth(row.text), mmColumns(row.mm))
-    assert.match(row.text, /^#+\] \d+mm$/)
+    assert.match(row.text, /^\d+mm #+\]$/)
   }
   assert.ok(rows.some((row) => row.mm === 48))
   assert.ok(rows[0].mm > rows[rows.length - 1].mm)
@@ -18,7 +18,7 @@ test('校准页包含说明、候选行和验证方框', () => {
   const { lines, images } = buildCalibration({ paperWidthMm: 58, effectiveWidthMm: 48, columns: 32 })
   assert.equal(lines[0].style, 'title')
   assert.ok(lines.some((line) => line.text.includes('有效宽度')))
-  assert.ok(lines.some((line) => line.text.includes('] 48mm')))
+  assert.ok(lines.some((line) => line.text.includes('48mm #')))
   assert.equal(images.length, 1)
   assert.equal(images[0].width, 384)
   assert.equal(images[0].height, 32)

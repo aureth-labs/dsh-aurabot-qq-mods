@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname, resolve, basename } from 'node:path';
 import { SongLibrary, FamilySongError } from '../lib/songs/library.mjs';
 import { DirectoryLibrary } from '../lib/songs/directories.mjs';
+import { FamilyPlayback } from '../lib/songs/playback.mjs';
 import { createLocalAudioHandler } from '../lib/songs/local-audio.mjs';
 import { SongPlaylists } from '../lib/songs/playlists.mjs';
 
@@ -32,6 +33,29 @@ async function harness(t) {
   };
   return { root, library, make, folder, generate };
 }
+
+test('legacy and native mother covers share a display label, while local mixing keeps its own label', async t => {
+  const h = await harness(t);
+  const describe = h.library.primary.describe;
+  h.library.primary.describe = async source => {
+    const recipe = await describe(source);
+    if (source.id === 'native') return { ...recipe, voiceName: 'bb_mother_v1' };
+    if (source.id === 'local') return { ...recipe, voiceName: '妈妈', identity: {
+      ...recipe.identity, voice: { role: 'local', id: 'example-voice', renderVersion: 'example-v1' },
+    } };
+    return recipe;
+  };
+  const legacy = await h.generate('legacy');
+  const native = await h.generate('native');
+  const local = await h.generate('local');
+  const byId = new Map(h.library.status().entries.map(item => [item.id, item]));
+  assert.equal(byId.get(legacy.id).voice, '妈妈');
+  assert.equal(byId.get(native.id).voice, 'bb_mother_v1');
+  assert.equal(byId.get(native.id).voiceLabel, '妈妈');
+  assert.equal(byId.get(local.id).voiceLabel, '妈妈（本地混音）');
+  const saved = JSON.parse(await readFile(h.library.file, 'utf8'));
+  assert.ok(saved.directories[0].records.every(record => !Object.hasOwn(record.public, 'voiceLabel')));
+});
 
 test('ordinary audio is indexed in place; duplicate bytes merge, formats and nested files are included', async t => {
   const h = await harness(t), a = await h.folder('ordinary', { 'sample.mp3': 'a', 'sample.wav': 'b', 'ignore.txt': 'text', 'broken.mp3': 'bad' });
@@ -69,9 +93,46 @@ test('refresh keeps missing ordinary song ids, notices new files and restores a 
 
 
 
+test('a damaged managed song stays isolated across playback, rescan, index rebuild and repair', async t => {
+  const h = await harness(t);
+  const bad = await h.generate('damaged'), good = await h.generate('healthy');
+  const metadata = join(h.library.primary.metadataRoot, bad.id + '.json');
+  const original = await readFile(metadata);
+  await writeFile(metadata, Buffer.alloc(51));
+  const immediate = [];
+  const running = new FamilyPlayback({ library: h.library, schedule: () => null,
+    getSpeaker: async () => ({ playFile: async path => { immediate.push(path); } }) });
+  await running.playlist([bad.id, good.id]); await running.task;
+  assert.deepEqual(immediate, [good.absoluteFile]);
+  const reopened = h.make(); await reopened.open();
+  assert.equal(reopened.status().entries.find(row => row.id === bad.id).available, false);
+  assert.equal((await reopened.get(good.id)).absoluteFile, good.absoluteFile);
+  await assert.rejects(reopened.get(bad.id));
+  const played = [];
+  const playback = new FamilyPlayback({ library: reopened, schedule: () => null,
+    getSpeaker: async () => ({ playFile: async path => { played.push(path); } }) });
+  await playback.playlist([bad.id, good.id]); await playback.task;
+  assert.deepEqual(played, [good.absoluteFile]);
+  await reopened.refresh('primary');
+  assert.equal(reopened.status().entries.length, 2);
+  assert.equal(reopened.directories()[0].invalid, 1);
+  await unlink(reopened.file);
+  const rebuilt = h.make(); await rebuilt.open();
+  assert.deepEqual(rebuilt.status().entries.map(row => row.id), [good.id]);
+  assert.deepEqual(await readFile(metadata), Buffer.alloc(51));
+  await writeFile(metadata, original);
+  await rebuilt.refresh('primary');
+  assert.equal(rebuilt.directories()[0].invalid, 0);
+  assert.equal((await rebuilt.get(bad.id)).absoluteFile, bad.absoluteFile);
+});
+
 test('corrupt directory registry is reported without replacing it', async t => {
-  const h = await harness(t); await writeFile(h.library.file, '{broken');
-  await assert.rejects(h.make().open(), /原文件已保留/); assert.equal(await readFile(h.library.file, 'utf8'), '{broken');
+  const h = await harness(t);
+  for (const contents of ['{broken', 'null', 'false', '0', '""', '{"schema":1,"directories":[null]}']) {
+    await writeFile(h.library.file, contents);
+    await assert.rejects(h.make().open(), { code: 'FAMILY_DIRECTORY' });
+    assert.equal(await readFile(h.library.file, 'utf8'), contents);
+  }
 });
 
 test('local audio endpoint advertises the actual WAV and OGG type', async t => {

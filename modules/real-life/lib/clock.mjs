@@ -104,11 +104,33 @@ export function dailyJitterHours(ymd, salt, amplitudeMinutes = 20) {
   return (unit * amplitudeMinutes) / 60
 }
 
+/** 归一化小时到 [0, 24) 区间。 */
+export function normHour(h) {
+  const n = Number(h)
+  if (!Number.isFinite(n)) return 0
+  return ((n % 24) + 24) % 24
+}
+
+/** 计算从 fromH 正向推进到 toH 经过的小时数，结果在 [0, 24)。 */
+export function hoursBetween(fromH, toH) {
+  return ((normHour(toH) - normHour(fromH)) + 24) % 24
+}
+
+/**
+ * 计算当前时刻所属的「作息日」(YYYY-MM-DD)：
+ * 以指定切分点（通常是睡眠中点，如 23:30~07:45 的 03:37，或 05:00~14:00 的 09:30）作为日界，
+ * 让跨零点清醒的夜猫子作息不会在 00:00 突然重置三餐/洗澡/大号计数。
+ */
+export function routineDayYmd(nowMs = Date.now(), boundaryHour = 0, timeZone = DEFAULT_TZ) {
+  const shiftMs = normHour(boundaryHour) * 3_600_000
+  return wallTime(nowMs - shiftMs, timeZone).ymd
+}
+
 /** 判断当前小时是否在 [startH, endH) 区间内（支持跨午夜，比如 23.5 → 7.5）。 */
 export function inHourWindow(curH, startH, endH) {
-  const c = ((curH % 24) + 24) % 24
-  const s = ((startH % 24) + 24) % 24
-  const e = ((endH % 24) + 24) % 24
+  const c = normHour(curH)
+  const s = normHour(startH)
+  const e = normHour(endH)
   if (Math.abs(s - e) < 1e-6) return false
   return s < e ? c >= s && c < e : c >= s || c < e
 }

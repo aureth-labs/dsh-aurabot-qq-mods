@@ -52,8 +52,11 @@
 
   <!-- 聊天 -->
   <section id="view-chat" class="view" hidden>
-    <header class="topbar glass">
-      <img class="top-avatar" id="chat-avatar" src="icons/avatar.png" alt="">
+    <header class="topbar">
+      <div class="ct-ava">
+        <img class="top-avatar" id="chat-avatar" src="icons/avatar.png" alt="">
+        <i class="dot" id="chat-dot" aria-hidden="true"></i>
+      </div>
       <div class="top-meta">
         <b id="chat-name">…</b>
         <small id="chat-status">连接中…</small>
@@ -63,6 +66,7 @@
     <div id="chat-list" class="chat-list">
       <div id="chat-day" class="day-divider" hidden></div>
     </div>
+    <div class="chat-deco" aria-hidden="true">🐋</div>
     <div id="typing" class="typing glass" hidden><span></span><span></span><span></span></div>
     <div id="img-preview" class="img-preview glass" hidden>
       <img id="img-preview-img" alt="">
@@ -74,11 +78,13 @@
     </div>
     <div id="emoji-panel" class="emoji-panel glass" hidden></div>
     <footer class="inputbar glass">
-      <button id="chat-emoji" class="icon-btn" aria-label="表情" title="表情">😊</button>
-      <button id="chat-img" class="icon-btn" aria-label="发图" title="发图">📷</button>
-      <button id="chat-mic" class="icon-btn" aria-label="按住说话" title="按住说话">🎤</button>
-      <textarea id="chat-input" rows="1" placeholder="说点什么…" maxlength="4000"></textarea>
-      <button id="chat-send" class="btn-primary send-btn" aria-label="发送">➤</button>
+      <div class="input-shell">
+        <button id="chat-emoji" class="mini-btn" aria-label="表情" title="表情">🙂</button>
+        <textarea id="chat-input" rows="1" placeholder="说点什么…" maxlength="4000"></textarea>
+        <button id="chat-send" class="send-btn" aria-label="发送">➤</button>
+      </div>
+      <button id="chat-img" class="round-btn" aria-label="发图" title="发图">📷</button>
+      <button id="chat-mic" class="round-btn mic" aria-label="按住说话" title="按住说话">🎤</button>
       <input type="file" id="chat-file" accept="image/*" hidden>
       <input type="file" id="avatar-file" accept="image/*" hidden>
     </footer>
@@ -86,13 +92,16 @@
 
   <!-- 空间 -->
   <section id="view-moments" class="view" hidden>
-    <header class="topbar glass">
+    <header class="topbar">
       <img class="top-avatar" id="mo-avatar" src="icons/avatar.png" alt="">
       <div class="top-meta"><b id="mo-name">她的空间</b><small id="mo-mood"></small></div>
     </header>
     <div class="moments-scroll">
       <div class="mood-card glass">
-        <div class="mood-head"><span>心情曲线</span><b id="mood-value">–</b></div>
+        <div class="mood-head">
+          <div class="mood-face" aria-hidden="true">🙂</div>
+          <div class="mh-meta"><span>最近的心情</span><b id="mood-value">–</b></div>
+        </div>
         <svg id="mood-chart" viewBox="0 0 320 80" preserveAspectRatio="none"></svg>
       </div>
       <div id="moments-list"></div>
@@ -101,67 +110,125 @@
 
   <!-- 宠物 -->
   <section id="view-pet" class="view" hidden>
-    <header class="topbar glass">
-      <div class="top-meta center"><b>小窝</b><small id="pet-sub">她在里面游来游去</small></div>
-    </header>
-    <div class="pet-stage">
+    <div class="pet-hero">
+      <button id="pet-avatar-btn" class="corner-btn left" aria-label="换形象" title="换形象">🐾</button>
+      <span class="corner-btn right" aria-hidden="true">💗</span>
       <div class="pet-halo"></div>
       <div id="pet-mascot" class="pet-mascot">
         <img id="pet-img" src="icons/avatar.png" alt="">
       </div>
-      <button id="pet-avatar-btn" class="pet-avatar-btn glass" aria-label="换形象" title="换形象">📷</button>
       <div id="pet-bubble" class="pet-bubble glass" hidden></div>
       <div id="pet-fx" class="pet-fx"></div>
     </div>
+    <p id="pet-sub" class="pet-sub">她在里面游来游去</p>
     <div class="pet-stats glass">
-      <div class="stat"><span>🍚 饱食度</span><div class="bar"><i id="bar-satiety"></i></div><b id="val-satiety">–</b></div>
-      <div class="stat"><span>💗 心情</span><div class="bar"><i id="bar-mood"></i></div><b id="val-mood">–</b></div>
-      <div class="stat"><span>🫧 亲密度</span><div class="bar"><i id="bar-intimacy"></i></div><b id="val-intimacy">–</b></div>
+      <div class="stat s-satiety">
+        <span class="s-ico" aria-hidden="true">🍚</span>
+        <div>
+          <div class="s-label">饱食度</div>
+          <div class="bar"><i id="bar-satiety"></i></div>
+        </div>
+        <b id="val-satiety">–</b>
+      </div>
+      <div class="stat s-mood">
+        <span class="s-ico" aria-hidden="true">🙂</span>
+        <div>
+          <div class="s-label">心情</div>
+          <div class="bar"><i id="bar-mood"></i></div>
+        </div>
+        <b id="val-mood">–</b>
+      </div>
+      <div class="stat s-intimacy">
+        <span class="s-ico" aria-hidden="true">💗</span>
+        <div>
+          <div class="s-label">亲密度</div>
+          <div class="bar"><i id="bar-intimacy"></i></div>
+        </div>
+        <b id="val-intimacy">–</b>
+      </div>
     </div>
     <div class="pet-actions glass">
       <div class="food-grid" id="food-grid"></div>
       <div class="pet-btns">
         <button class="btn-soft" data-action="pet">🤚 摸摸头</button>
-        <button class="btn-soft" data-action="play">🎣 陪她玩</button>
+        <button class="btn-soft" data-action="play">🫧 陪她玩</button>
       </div>
     </div>
   </section>
 
   <!-- 设置 -->
   <section id="view-settings" class="view" hidden>
-    <header class="topbar glass">
-      <div class="top-meta center"><b>设置</b></div>
-    </header>
     <div class="settings-scroll">
+      <div class="profile-card glass">
+        <img class="profile-ava" id="set-avatar-img" src="icons/avatar.png" alt="">
+        <div class="profile-meta">
+          <b>Aurabot</b>
+          <small>她的口袋版 · 消息与记忆和 QQ 共用</small>
+          <div class="profile-chips">
+            <span class="chip">原生对话流</span>
+            <span class="chip">同一条记忆</span>
+          </div>
+        </div>
+      </div>
+
       <div class="glass card">
-        <h3>🖼️ 她的形象</h3>
+        <h3><span class="h3-ico">🖼️</span>她的形象</h3>
         <p class="card-sub">从相册挑一张换成她的头像，小窝、聊天顶栏、空间一起换（只改你这台看到的）</p>
         <div class="avatar-row">
-          <img class="avatar-preview" id="set-avatar-img" src="icons/avatar.png" alt="">
+          <img class="avatar-preview" src="icons/avatar.png" alt="">
           <div class="avatar-btns">
             <button class="btn-soft" id="btn-avatar-pick">从相册选</button>
             <button class="btn-soft" id="btn-avatar-reset">恢复默认</button>
           </div>
         </div>
       </div>
+
       <div class="glass card">
-        <h3>🎨 界面配色</h3>
+        <h3><span class="h3-ico">🎨</span>界面配色</h3>
         <p class="card-sub">八套基础色调，只换界面颜色，图标不动</p>
         <div id="tone-grid" class="tone-grid"></div>
         <label class="chk"><input type="checkbox" id="tone-local"> 只改这台手机的（不写回电脑）</label>
       </div>
+
       <div class="glass card">
-        <h3>🔗 连接</h3>
-        <div class="kv"><span>电脑</span><b id="set-host">–</b></div>
-        <div class="kv"><span>出门</span><b id="set-away">–</b></div>
-        <div class="kv"><span>密钥</span><b id="set-token">–</b></div>
-        <div class="kv"><span>QQ</span><b id="set-qq">–</b></div>
-        <div class="kv"><span>记忆</span><b id="set-mem">–</b></div>
-        <div class="kv"><span>版本</span><b id="set-ver">–</b></div>
-        <button class="btn-soft" id="btn-repair">重新配对</button>
+        <h3><span class="h3-ico">🔗</span>连接</h3>
+        <div class="link-list">
+          <div class="link-row">
+            <span class="l-ico" aria-hidden="true">🖥️</span>
+            <div class="l-meta"><span>电脑（局域网）</span><b id="set-host">–</b></div>
+            <span class="chev" aria-hidden="true">›</span>
+          </div>
+          <div class="link-row">
+            <span class="l-ico" aria-hidden="true">📡</span>
+            <div class="l-meta"><span>出门（外网）</span><b id="set-away">–</b></div>
+            <span class="chev" aria-hidden="true">›</span>
+          </div>
+          <div class="link-row">
+            <span class="l-ico" aria-hidden="true">🔑</span>
+            <div class="l-meta"><span>配对密钥</span><b id="set-token">–</b></div>
+            <span class="chev" aria-hidden="true">›</span>
+          </div>
+          <div class="link-row">
+            <span class="l-ico" aria-hidden="true">💬</span>
+            <div class="l-meta"><span>QQ</span><b id="set-qq">–</b></div>
+            <span class="chev" aria-hidden="true">›</span>
+          </div>
+          <div class="link-row">
+            <span class="l-ico" aria-hidden="true">🧠</span>
+            <div class="l-meta"><span>记忆</span><b id="set-mem">–</b></div>
+            <span class="chev" aria-hidden="true">›</span>
+          </div>
+          <div class="link-row">
+            <span class="l-ico" aria-hidden="true">📦</span>
+            <div class="l-meta"><span>版本</span><b id="set-ver">–</b></div>
+            <span class="chev" aria-hidden="true">›</span>
+          </div>
+        </div>
+        <button class="btn-soft" id="btn-repair" style="margin-top:14px;width:100%">重新配对</button>
       </div>
+
       <div class="glass card">
-        <h3>ℹ️ 关于</h3>
+        <h3><span class="h3-ico">🐋</span>关于</h3>
         <p class="card-sub">口袋aurabot · 她的口袋版。<br>消息走她电脑上的原生对话流：记忆、心情、表情包、语音、模组全都在，和 QQ 端共用同一份记忆。</p>
       </div>
     </div>
@@ -169,10 +236,10 @@
 
   <!-- 底部导航 -->
   <nav id="tabbar" class="glass" hidden>
-    <button data-tab="chat" class="on"><span class="tab-ico">💬</span><span>聊天</span></button>
-    <button data-tab="moments"><span class="tab-ico">🌊</span><span>空间</span></button>
-    <button data-tab="pet"><span class="tab-ico">🐋</span><span>小窝</span></button>
-    <button data-tab="settings"><span class="tab-ico">⚙️</span><span>设置</span></button>
+    <button data-tab="chat" class="on" aria-label="聊天"><span class="tab-ico" aria-hidden="true">💬</span></button>
+    <button data-tab="moments" aria-label="空间"><span class="tab-ico" aria-hidden="true">🌊</span></button>
+    <button data-tab="pet" aria-label="小窝"><span class="tab-ico" aria-hidden="true">🐋</span></button>
+    <button data-tab="settings" aria-label="设置"><span class="tab-ico" aria-hidden="true">⚙️</span></button>
   </nav>
 </div>
 

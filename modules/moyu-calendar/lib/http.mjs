@@ -1,5 +1,8 @@
 // 带超时、大小上限和域名约束的读取。调用方只把允许的地址传进来。
 
+// 微信和搜狗对非浏览器请求经常不返回正常页面，实测这个浏览器标识能拿到结果。
+export const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
+
 export function shortError(error) {
   const name = error?.name || ''
   const message = String(error?.message || error || '')
@@ -91,4 +94,45 @@ export async function readBody(response, maxBytes) {
   const bytes = Buffer.from(await response.arrayBuffer())
   if (bytes.length > maxBytes) throw new Error('内容超过大小限制')
   return bytes
+}
+
+/**
+ * 读完响应，只保留末尾 maxBytes，超限不报错。truncated 为 true 表示开头被丢掉了。
+ * 累计读到 totalMax 还没完就不再读，这时留下的是已读部分的末尾。
+ */
+export async function readBodyTail(response, maxBytes, totalMax = maxBytes) {
+  if (response.body && typeof response.body.getReader === 'function') {
+    const reader = response.body.getReader()
+    const chunks = []
+    let size = 0
+    let total = 0
+    try {
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        const chunk = Buffer.from(value)
+        chunks.push(chunk)
+        size += chunk.byteLength
+        total += chunk.byteLength
+        // 从最前面丢起；最前面那块只留后半截。
+        while (size > maxBytes && chunks.length) {
+          const over = size - maxBytes
+          if (chunks[0].byteLength > over) {
+            chunks[0] = chunks[0].subarray(over)
+            size = maxBytes
+          } else {
+            size -= chunks[0].byteLength
+            chunks.shift()
+          }
+        }
+        if (total >= totalMax) break
+      }
+    } finally {
+      await reader.cancel().catch(() => {})
+    }
+    return { bytes: Buffer.concat(chunks), truncated: total > maxBytes }
+  }
+  if (typeof response.arrayBuffer !== 'function') throw new Error('响应没有正文')
+  const bytes = Buffer.from(await response.arrayBuffer())
+  return { bytes: bytes.subarray(Math.max(0, bytes.length - maxBytes)), truncated: bytes.length > maxBytes }
 }

@@ -2,12 +2,24 @@
 
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { wallTime, parseHm, formatHm, isValidYmd, daysBetweenYmd, shiftYmd, dailyJitterHours, inHourWindow } from './clock.mjs'
+import {
+  wallTime,
+  parseHm,
+  formatHm,
+  isValidYmd,
+  daysBetweenYmd,
+  shiftYmd,
+  dailyJitterHours,
+  normHour,
+  hoursBetween,
+  routineDayYmd,
+  inHourWindow,
+} from './clock.mjs'
 
 export const DEFAULTS = {
   enabled: true,
   groupEnabled: false, // 默认关闭：仅私聊启用；开启后在群聊也同步拥有作息与生理状态
-  autonomyMode: 'daily', // 'daily' 日常自主(闲时自理·聊时请示) | 'passive' 被动听令(全程请示/投喂)
+  autonomyMode: 'daily', // 'free' 全自动模式(想干嘛就干嘛·仅尊显式禁令) | 'daily' 日常自主(闲时自理·聊时请示) | 'passive' 被动听令(全程请示/投喂)
   heartbeatSec: 30,
   chatIdleMinutes: 15,
   forceReplyCount: 4,
@@ -25,6 +37,7 @@ export const DEFAULTS = {
   sleepAt: '23:30',
   wakeAt: '07:45',
   napEnabled: true,
+  aiDream: true,
   // 如厕与晚间洗澡/吹头发暂离
   bathroomEnabled: true,
   showerEnabled: true,
@@ -46,6 +59,13 @@ function numCfg(val, fallback, min, max) {
   return Number.isFinite(n) ? clamp(n, min, max) : fallback
 }
 
+export function normalizeAutonomyMode(raw) {
+  const s = String(raw || '').trim().toLowerCase()
+  if (s === 'free' || s === 'full' || s === 'auto') return 'free'
+  if (s === 'passive') return 'passive'
+  return 'daily'
+}
+
 const DEFAULT_LOCK_MAX_MIN = {
   eat: 24 * 60,
   bathroom: 12 * 60,
@@ -54,18 +74,73 @@ const DEFAULT_LOCK_MAX_MIN = {
 }
 
 const MEAL_POOL = {
-  breakfast: ['热豆浆配小笼包', '牛奶燕麦粥和水煮蛋', '咸豆腐脑配油条', '南瓜小米粥和蒸饺'],
-  lunch: ['番茄牛腩面', '香菇滑鸡饭', '青椒肉丝盖饭配紫菜汤', '虾仁滑蛋饭'],
-  dinner: ['冬瓜排骨汤配米饭', '鲜虾小馄饨', '菌菇肥牛砂锅', '清炒时蔬配红烧肉饭'],
-  snack: ['半块小蛋糕', '几颗草莓', '一小包苏打饼干', '一杯温牛奶', '两块曲奇'],
+  breakfast: ['热豆浆配小笼包', '牛奶燕麦粥和水煮蛋', '咸豆腐脑配油条', '南瓜小米粥和蒸饺', '鸡蛋培根三明治配热牛奶'],
+  lunch: ['番茄牛腩面', '香菇滑鸡饭', '青椒肉丝盖饭配紫菜汤', '虾仁滑蛋饭', '照烧鸡腿饭配味增汤'],
+  dinner: ['冬瓜排骨汤配米饭', '鲜虾小馄饨', '菌菇肥牛砂锅', '清炒时蔬配红烧肉饭', '番茄肥牛米线'],
+  supper: ['鲜虾小馄饨', '热乎乎的关东煮', '番茄鸡蛋热汤面', '葱油拌面配煎蛋', '热牛奶和烤芝士吐司', '菌菇砂锅米粉'],
+  snack: ['半块草莓小蛋糕', '几颗脆甜草莓', '一小包海盐苏打饼干', '一杯热可可配曲奇', '一小盒酸奶拌坚果', '温牛奶和蛋挞'],
 }
 
-const DREAM_POOL = [
-  '梦到在暖洋洋的下午晒太阳，结果差点睡过头找不到手机',
-  '梦到去夜市买了一大串糖葫芦，还没咬第一口就醒了',
-  '梦到外面下很大的雨，屋里裹着厚被子听雨声特别安心',
-  '梦到在一片发光的海边散步，踩在水里凉丝丝的',
-  '梦到考试铃响了却发现笔没水，急醒才反应过来是做梦',
+export const DREAM_MOTIFS = [
+  '漂浮在半空的奇妙交通工具或列车',
+  '迷路后误入的一间藏着秘密的小店或阁楼',
+  '天气出现不可思议的奇观（彩云、萤火雨、倒流雪等）',
+  '和熟悉的人一起去逛热闹的小镇夜市或祭典',
+  '和会说话或特别粘人的小动物一起冒险',
+  '在一个没有重力的屋顶或游乐园玩耍',
+  '突然参加一场奇奇怪怪的比赛或演出',
+  '走进了一座会自己变换房间的巨大图书馆或温室',
+  '找到一样小时候丢掉的小物件或旧信件',
+  '做了一顿特别离谱但闻起来超香的料理',
+  '乘着纸船或热气球飘过亮着灯的城市夜空',
+  '在微缩的世界里看杯子和书本变得像高楼一样大',
+  '时间突然变慢或倒流了一小段的小乌龙',
+  '在露天电影院或天台听见一首从没听过却很好听的歌',
+  '走进一幅画或游戏关卡里结果发现规则全乱套了',
+  '去了一座开满不知名花朵的山谷或车站',
+  '日常里一件很小的事突然变成搞笑的连锁乌龙',
+  '在温暖安静的室内听着窗外声音打盹的慵懒片段',
+  '收到一封没有署名但写满奇怪暗号的明信片',
+  '在星光很低的旷野里追着一颗会蹦跳的小光球',
+]
+
+export const DREAM_POOL = [
+  '梦到坐上一列开在云层上的旧电车，窗外全是棉花糖一样的晚霞',
+  '梦到在一家只卖奇怪味道冰淇淋的小店里纠结了半天，刚舔一口就醒了',
+  '梦到一只胖乎乎的橘猫叼着我的钥匙满屋子跑，怎么追都追不上',
+  '梦到外面下着淅淅沥沥的小雨，屋里裹着厚被子听雨声特别安心',
+  '梦到走进一条挂满暖黄灯笼的夜市巷子，买了刚出炉的章鱼小丸子',
+  '梦到考试铃突然响了却发现试卷上画的全是小猫涂鸦，笑醒了',
+  '梦到天台的风特别温柔，抬头看见星星低得伸手就能碰见',
+  '梦到一间没有门只有滑梯的旧书店，滑下去直接掉进软绵绵的抱枕堆',
+  '梦到自己学会了像游泳一样在走廊半空慢慢飘着走',
+  '梦到在雨后的森林车站等车，站牌上写着谁也看不懂的站名',
+  '梦到厨房里烤着焦糖布丁，满屋子甜丝丝的香味却一直找不到烤箱在哪',
+  '梦到和一只戴草帽的小柴犬一起在向日葵田里找丢失的耳机',
+  '梦到天空飘起发光的蒲公英，每一朵落下来都发出风铃一样的声音',
+  '梦到误闯进一座透明玻璃温室，里面的多肉植物比人还高',
+  '梦到手机突然长出小翅膀在房间里乱飞，急得举着抱枕到处扑',
+  '梦到在老家楼下的小卖部翻出一堆小时候爱吃的怀旧零食',
+  '梦到夜晚的游乐园一个人也没有，旋转木马自己放着轻快的八音盒音乐',
+  '梦到在雪地里堆了一个歪歪扭扭的大雪人，转头它居然对我眨了眨眼',
+  '梦到不小心掉进游戏副本里，结果反派大魔王只顾着请我喝热奶茶',
+  '梦到午后阳光暖洋洋地晒在被子上，迷迷糊糊差点睡过头找不到手机',
+  '梦到在一间海风吹得窗帘鼓鼓的阁楼里听黑胶唱片，曲子怎么也记不清名字',
+  '梦到坐着热气球飘过亮着万家灯火的城市，底下街道像乐高积木一样小',
+  '梦到去夜市买了一大串晶莹剔透的草莓糖葫芦，还没咬第一口就醒了',
+  '梦到房间天花板变成了巨大的水族馆，一群银色小鱼慢悠悠游过去',
+  '梦到参加一场校园音乐会，上台才发现手里拿的小提琴其实是法棍面包',
+  '梦到清晨的大雾里走来一辆叮当作响的早餐车，热气腾腾全是蒸饺香气',
+  '梦到在山顶的露天温泉泡得昏昏欲睡，头顶飘过一排排慢悠悠的流星',
+  '梦到拆开一个超大快递盒，里面套了七八层盒子，最后只蹦出一只打哈欠的小仓鼠',
+  '梦到推开衣柜门居然是一片开满绣球花的秘密花园，风吹过哗啦啦响',
+  '梦到下完雷阵雨后天上挂着两条倒过来的彩虹，大家都在楼下举手机拍',
+  '梦到在自动贩卖机投了一枚硬币，咕噜噜滚出来一罐写着“好运”的热可可',
+  '梦到被一只圆滚滚的企鹅拉着去滑冰，结果我摔了个屁股墩它先笑倒了',
+  '梦到坐在窗边看街对面便利店亮着暖黄的灯，感觉时间一下子慢了好多',
+  '梦到翻到一本空白的日记本，刚写下一个字，整页纸就自己开出了小花',
+  '梦到在一条长长的林荫道骑单车下坡，风呼呼从耳边吹过特别痛快',
+  '梦到家里地板突然变成了软乎乎的蹦床，走一步就弹得老高',
 ]
 
 const URGENT_RE = /急事|十万火急|快醒|醒醒|快看|出事|救命|着火|地震|立等|接电话|快回|马上回|立刻回|别洗了|快出来/
@@ -165,25 +240,101 @@ export function createRealLifeEngine({
 } = {}) {
   const cfg = () => ({ ...DEFAULTS, ...(getSettings ? getSettings() : {}) })
 
+  function sleepBounds(c = cfg()) {
+    const baseSleepH = normHour(parseHm(c.sleepAt, 23.5))
+    const baseWakeH = normHour(parseHm(c.wakeAt, 7.75))
+    const rawDur = hoursBetween(baseSleepH, baseWakeH)
+    const sleepDurH = rawDur >= 1.5 && rawDur <= 20 ? rawDur : 8
+    const dayBoundaryH = c.sleepEnabled ? normHour(baseSleepH + sleepDurH / 2) : 0
+    // 睡眠周期盐值切分点放在入睡前 2 小时（如 23:30 睡→21:30 切分，05:00 睡→03:00 切分），
+    // 确保从入睡到次日起床、再到起床后上厕所回来，整轮睡眠始终使用同一份 sleep/wake 抖动，彻底避免跨日抖动漂移
+    const sleepCycleBoundaryH = normHour(baseSleepH - 2)
+    return { baseSleepH, baseWakeH, sleepDurH, dayBoundaryH, sleepCycleBoundaryH }
+  }
+
+  function routineDayAt(now = nowFn(), c = cfg()) {
+    const { dayBoundaryH } = sleepBounds(c)
+    return routineDayYmd(now, dayBoundaryH, c.timeZone)
+  }
+
+  function sleepCycleKey(now = nowFn(), c = cfg()) {
+    const { sleepCycleBoundaryH } = sleepBounds(c)
+    return routineDayYmd(now, sleepCycleBoundaryH, c.timeZone)
+  }
+
+  function sleepWindowFor(c = cfg(), now = nowFn()) {
+    const b = sleepBounds(c)
+    const cycleKey = sleepCycleKey(now, c)
+    const sleepH = normHour(b.baseSleepH + dailyJitterHours(cycleKey, 'sleep', 20))
+    const wakeH = normHour(b.baseWakeH + dailyJitterHours(cycleKey, 'wake', 20))
+    return { ...b, cycleKey, sleepH, wakeH }
+  }
+
+  function isInAwakeWindow(hourFloat, c = cfg(), now = nowFn()) {
+    if (!c.sleepEnabled) return true
+    const { sleepH, wakeH } = sleepWindowFor(c, now)
+    return !inHourWindow(hourFloat, sleepH, wakeH)
+  }
+
+  function parseMealHours(c = cfg()) {
+    const parts = String(c.mealTimes || DEFAULTS.mealTimes).split(/[,，]/).map((s) => s.trim()).filter(Boolean)
+    return {
+      breakfast: normHour(parseHm(parts[0] || '08:00', 8)),
+      lunch: normHour(parseHm(parts[1] || '12:15', 12.25)),
+      dinner: normHour(parseHm(parts[2] || '18:30', 18.5)),
+    }
+  }
+
+  function dishPoolKeyForClock(hourFloat, slot, c = cfg()) {
+    const h = normHour(hourFloat)
+    if (h >= 21.5 || h < 5.0) return 'supper'
+    if (slot === 'breakfast' && h >= 10.8 && h < 16.0) return 'lunch'
+    if (slot === 'breakfast' && h >= 16.0) return 'dinner'
+    if (slot === 'lunch' && h >= 17.5) return 'dinner'
+    return MEAL_POOL[slot] ? slot : 'dinner'
+  }
+
+  function mealSlotWindows(c = cfg(), rDay = routineDayAt(nowFn(), c)) {
+    const meals = parseMealHours(c)
+    const { baseSleepH } = sleepBounds(c)
+    const ordered = [
+      ['breakfast', meals.breakfast, meals.lunch],
+      ['lunch', meals.lunch, meals.dinner],
+      ['dinner', meals.dinner, c.sleepEnabled ? baseSleepH : meals.breakfast],
+    ]
+    return ordered.map(([slot, atH, nextH]) => {
+      const jittered = normHour(atH + dailyJitterHours(rDay, `meal-${slot}`, 15))
+      const gap = hoursBetween(atH, nextH)
+      const dur = clamp(gap > 0.8 ? gap - 0.3 : 4.5, 2.0, 5.5)
+      return [slot, jittered, normHour(jittered + dur)]
+    })
+  }
+
   function initialState(now) {
     const c = cfg()
     const wt = wallTime(now, c.timeZone)
+    const rDay = routineDayAt(now, c)
+    const { baseSleepH, baseWakeH } = sleepBounds(c)
+    const inBaseSleep = c.sleepEnabled && inHourWindow(wt.hourFloat, baseSleepH, baseWakeH)
+    const awakeElapsed = inBaseSleep ? 0 : hoursBetween(baseWakeH, wt.hourFloat)
+    const meals = parseMealHours(c)
     // 初次安装默认锚在周期第 11 天（平稳卵泡期），避免刚装好就突兀刷痛经消息；用户可随时改日期或点一键预设
     const defaultAnchor = shiftYmd(wt.ymd, -10)
     const initHunger = wt.hourFloat >= 18.5 && wt.hourFloat <= 21.5 ? 24 : wt.hourFloat >= 12.3 && wt.hourFloat <= 15 ? 22 : 38
-    const initEnergy = wt.hourFloat >= 22 ? 36 : wt.hourFloat >= 18 ? 55 : 82
-    const initMeals = { ymd: wt.ymd, usedCount: 0 }
-    if (wt.hourFloat >= 9.5) {
-      initMeals.breakfast = '日常早饭'
-      initMeals.usedCount += 1
-    }
-    if (wt.hourFloat >= 14.0) {
-      initMeals.lunch = '日常午饭'
-      initMeals.usedCount += 1
-    }
-    if (wt.hourFloat >= 20.0) {
-      initMeals.dinner = '日常晚饭'
-      initMeals.usedCount += 1
+    const initEnergy = awakeElapsed >= 14 ? 36 : awakeElapsed >= 10 ? 55 : 82
+    const initMeals = { ymd: rDay, usedCount: 0, snackCount: 0 }
+    if (!inBaseSleep) {
+      for (const [slot, label] of [
+        ['breakfast', '日常早饭'],
+        ['lunch', '日常午饭'],
+        ['dinner', '日常晚饭'],
+      ]) {
+        const slotOffset = hoursBetween(baseWakeH, meals[slot])
+        if (slotOffset < 18 && awakeElapsed >= slotOffset + 1.5) {
+          initMeals[slot] = label
+          initMeals.usedCount += 1
+        }
+      }
     }
     return {
       version: 1,
@@ -197,6 +348,8 @@ export function createRealLifeEngine({
       mealsToday: initMeals,
       poopedYmd: '',
       showeredYmd: '',
+      nappedYmd: '',
+      wokeNaturalCycle: '',
       afterglowUntil: 0,
       afterglowNote: '',
       mode: 'awake', // 'awake' | 'away' | 'asleep'
@@ -210,6 +363,7 @@ export function createRealLifeEngine({
       missedWhileAsleep: [],
       interruptedSleep: null,
       dreams: [],
+      recentDreamMotifs: [],
       locks: {
         eat: null,
         bathroom: null,
@@ -225,6 +379,7 @@ export function createRealLifeEngine({
         lastHungerAt: 0,
         hungerNudgeYmd: '',
         hungerNudgeCount: 0,
+        lastSnackAt: 0,
         lastEmergencyEatAt: 0,
         lastEmergencyPeeAt: 0,
         lastPeriodAt: 0,
@@ -242,8 +397,11 @@ export function createRealLifeEngine({
   if (!Array.isArray(state.careBuffs)) state.careBuffs = []
   if (!Array.isArray(state.cravings)) state.cravings = []
   if (!Array.isArray(state.dreams)) state.dreams = []
+  if (!Array.isArray(state.recentDreamMotifs)) state.recentDreamMotifs = []
   if (!Array.isArray(state.events)) state.events = []
   if (!Array.isArray(state.confessions)) state.confessions = []
+  if (typeof state.nappedYmd !== 'string') state.nappedYmd = ''
+  if (typeof state.wokeNaturalCycle !== 'string') state.wokeNaturalCycle = ''
   if (!state.locks || typeof state.locks !== 'object') {
     state.locks = { eat: null, bathroom: null, shower: null, sleep: null }
   }
@@ -252,6 +410,7 @@ export function createRealLifeEngine({
       lastHungerAt: 0,
       hungerNudgeYmd: '',
       hungerNudgeCount: 0,
+      lastSnackAt: 0,
       lastEmergencyEatAt: 0,
       lastEmergencyPeeAt: 0,
       lastPeriodAt: 0,
@@ -271,20 +430,16 @@ export function createRealLifeEngine({
     if (state.events.length > 35) state.events.length = 35
   }
 
-  function parseMealHours(c) {
-    const parts = String(c.mealTimes || DEFAULTS.mealTimes).split(/[,，]/).map((s) => s.trim()).filter(Boolean)
-    return {
-      breakfast: parseHm(parts[0] || '08:00', 8),
-      lunch: parseHm(parts[1] || '12:15', 12.25),
-      dinner: parseHm(parts[2] || '18:30', 18.5),
-    }
-  }
-
-  function ensureTodayMeals(ymd) {
-    if (!state.mealsToday || state.mealsToday.ymd !== ymd) {
-      state.mealsToday = { ymd, usedCount: 0 }
-    } else if (!Number.isFinite(state.mealsToday.usedCount)) {
-      state.mealsToday.usedCount = ['breakfast', 'lunch', 'dinner'].filter((k) => Boolean(state.mealsToday[k])).length
+  function ensureTodayMeals(rDay) {
+    if (!state.mealsToday || state.mealsToday.ymd !== rDay) {
+      state.mealsToday = { ymd: rDay, usedCount: 0, snackCount: 0 }
+    } else {
+      if (!Number.isFinite(state.mealsToday.usedCount)) {
+        state.mealsToday.usedCount = ['breakfast', 'lunch', 'dinner'].filter((k) => Boolean(state.mealsToday[k])).length
+      }
+      if (!Number.isFinite(state.mealsToday.snackCount)) {
+        state.mealsToday.snackCount = 0
+      }
     }
     return state.mealsToday
   }
@@ -536,6 +691,21 @@ export function createRealLifeEngine({
     return arr[clamp(idx, 0, arr.length - 1)]
   }
 
+  function pickNonRepeating(arr, recent = [], excludeCount = 15) {
+    if (!arr || !arr.length) return ''
+    const recentSet = new Set((recent || []).slice(0, Math.min(arr.length - 1, excludeCount)))
+    const candidates = arr.filter((x) => !recentSet.has(x))
+    return pickOne(candidates.length ? candidates : arr)
+  }
+
+  function pickDreamMotif() {
+    const motif = pickNonRepeating(DREAM_MOTIFS, state.recentDreamMotifs, 10)
+    if (motif) {
+      state.recentDreamMotifs = [motif, ...(state.recentDreamMotifs || []).filter((m) => m !== motif)].slice(0, 12)
+    }
+    return motif
+  }
+
   function enterAway({ kind = 'pee', durationMin, nextHairMin = 0, now = nowFn(), reason = '日常' } = {}) {
     const dur = durationMin ?? (kind === 'shower' ? 14 : kind === 'hair' ? 7 : kind === 'poop' ? 8 : 3)
     const labels = {
@@ -554,9 +724,10 @@ export function createRealLifeEngine({
       nextHairMin: kind === 'shower' ? (nextHairMin || 7) : 0,
       reason,
     }
+    const rDay = routineDayAt(now)
     if (kind === 'pee' || kind === 'poop') state.bladder = 0
-    if (kind === 'poop') state.poopedYmd = wallTime(now, cfg().timeZone).ymd
-    if (kind === 'shower') state.showeredYmd = wallTime(now, cfg().timeZone).ymd
+    if (kind === 'poop') state.poopedYmd = rDay
+    if (kind === 'shower') state.showeredYmd = rDay
     addLog('暂离', `进入「${state.away.label}」（预计 ${Math.round(dur)} 分钟）`, now)
     save()
     return state.away
@@ -596,7 +767,7 @@ export function createRealLifeEngine({
     state.pendingAway = null
     state.pendingSleep = {
       kind: kind === 'nap' ? 'nap' : 'night',
-      label: kind === 'nap' ? '午休小睡' : '夜间睡眠',
+      label: kind === 'nap' ? '午休小睡' : '睡眠',
       approved: Boolean(approved),
       createdAt: now,
     }
@@ -609,7 +780,8 @@ export function createRealLifeEngine({
     const p = state.pendingSleep
     state.pendingSleep = null
     if (isLocked('sleep', now)) return null
-    return enterSleep({ kind: p.kind, now, reason: '主人催去睡' })
+    const reason = normalizeAutonomyMode(cfg().autonomyMode) === 'free' ? '自主入睡' : '主人催去睡'
+    return enterSleep({ kind: p.kind, now, reason })
   }
 
   function finishAwayNow(now = nowFn(), { skipHair = true, interrupted = false } = {}) {
@@ -649,9 +821,22 @@ export function createRealLifeEngine({
     } else if (kind === 'nap') {
       plannedWakeAt = now + 35 * 60_000
     } else {
-      const wakeH = parseHm(c.wakeAt, 7.75) + dailyJitterHours(wt.ymd, 'wake', 20)
-      let deltaH = wakeH - wt.hourFloat
-      if (deltaH <= 0.5) deltaH += 24
+      const { sleepH, wakeH, sleepDurH } = sleepWindowFor(c, now)
+      const remToWake = hoursBetween(wt.hourFloat, wakeH)
+      let deltaH
+      if (inHourWindow(wt.hourFloat, sleepH, wakeH)) {
+        // 已在睡眠窗口内：只睡到本次起床点（离起床不足 45 分钟被手动哄睡时补睡 30~45 分钟，绝不 +24h 睡整天）
+        deltaH = remToWake < 0.75 ? Math.max(0.5, remToWake) : remToWake
+      } else if (remToWake <= sleepDurH + 3.0) {
+        // 比平时提前最多 3 小时早睡：按平时起床时间醒来
+        deltaH = remToWake
+      } else if (reason === '困极入睡') {
+        // 离正式睡眠还很远却困到极点：补一觉 2.5 小时恢复精力，避免白白消失十几小时
+        deltaH = 2.5
+      } else {
+        // 非睡眠时段手动/调试入睡：按设定的单次睡眠时长入睡（收敛在 6~9.5 小时）
+        deltaH = clamp(sleepDurH, 6, 9.5)
+      }
       plannedWakeAt = now + deltaH * 3_600_000
     }
     state.pendingAway = null
@@ -663,35 +848,66 @@ export function createRealLifeEngine({
       sleptAt: now,
       plannedWakeAt,
       dreamLogged: false,
+      dreamPending: false,
       forcedStage: forcedStage || '',
       forcedUntil: forcedStage ? now + 30 * 60_000 : 0,
       reason,
     }
     if (forcedStage === 'rem') recordDream(now)
-    addLog('入睡', `进入${kind === 'nap' ? '午休小睡' : '夜间睡眠'}（预计 ${wallTime(plannedWakeAt, c.timeZone).hhmm} 醒）`, now)
+    const sleepLabel = kind === 'nap' ? '午休小睡' : '睡眠'
+    addLog('入睡', `进入${sleepLabel}（预计 ${wallTime(plannedWakeAt, c.timeZone).hhmm} 醒）`, now)
     save()
     return state.sleep
   }
 
-  function recordDream(now = nowFn(), customSummary = '') {
+  function recordDream(now = nowFn(), customSummary = '', { source = 'pool', motif = '', sleepId = 0, replaceSleepDream = false } = {}) {
     const wt = wallTime(now, cfg().timeZone)
-    const summary = customSummary || pickOne(DREAM_POOL)
-    const entry = { id: `dream-${now}`, at: now, ymd: wt.ymd, summary }
-    state.dreams.unshift(entry)
-    if (state.dreams.length > 20) state.dreams.length = 20
-    if (state.sleep) state.sleep.dreamLogged = true
-    addLog('做梦', `做了一段梦：${summary}`, now)
+    const cleanCustom = String(customSummary || '').trim()
+    const recentSummaries = (state.dreams || []).map((d) => d.summary)
+    const summary = cleanCustom || pickNonRepeating(DREAM_POOL, recentSummaries, 15)
+    const effectiveSleepId = sleepId || state.sleep?.sleptAt || 0
+    const entry = {
+      id: `dream-${now}`,
+      at: now,
+      ymd: wt.ymd,
+      summary,
+      source: cleanCustom ? source || 'ai' : 'pool',
+      ...(motif ? { motif } : {}),
+      ...(effectiveSleepId ? { sleepId: effectiveSleepId } : {}),
+    }
+    if (replaceSleepDream && effectiveSleepId && state.dreams[0]?.sleepId === effectiveSleepId) {
+      state.dreams[0] = entry
+    } else {
+      state.dreams.unshift(entry)
+    }
+    if (state.dreams.length > 24) state.dreams.length = 24
+    if (state.sleep && (!sleepId || state.sleep.sleptAt === sleepId)) {
+      state.sleep.dreamLogged = true
+      state.sleep.dreamPending = false
+    }
+    addLog('做梦', `做了一段梦${entry.source === 'ai' ? '（AI）' : ''}：${summary}`, now)
     save()
     return entry
+  }
+
+  function clearDreamPending(sleepId = 0) {
+    if (state.sleep && (!sleepId || state.sleep.sleptAt === sleepId)) {
+      state.sleep.dreamPending = false
+      save()
+    }
   }
 
   function wakeUpNow(now = nowFn(), reason = '自然醒') {
     if (state.mode !== 'asleep' || !state.sleep) return { woken: false, missed: [], dream: null }
     const sleptHours = Math.max(0.1, (now - state.sleep.sleptAt) / 3_600_000)
     const wasNap = state.sleep.kind === 'nap'
+    const sleepReason = state.sleep.reason || ''
     const lastDream = state.sleep.dreamLogged ? state.dreams[0] || null : null
     state.sleep = null
     state.mode = 'awake'
+    if (reason === '自然醒' && !wasNap && sleepReason !== '困极入睡') {
+      state.wokeNaturalCycle = sleepCycleKey(now, cfg())
+    }
     const gain = reason === '被叫醒' ? Math.min(35, sleptHours * 10) : wasNap ? 26 : Math.max(55, sleptHours * 11)
     state.energy = Math.round(clamp(reason === '自然醒' && !wasNap ? Math.max(88, state.energy + gain) : state.energy + gain, 18, 98))
     if (reason === '被叫醒') state.groggyUntil = now + 12 * 60_000
@@ -763,14 +979,44 @@ export function createRealLifeEngine({
     }
   }
 
-  /** 主人批准她自己去吃一顿配额内的正餐（消耗今日正餐配额）。 */
-  function eatQuotaMeal({ now = nowFn(), reason = '主人批准用餐' } = {}) {
+  /** 自主吃一点零食或夜宵（不占用正餐配额，主要用于全自动模式或开启自主加餐时）。 */
+  function eatSnack({ now = nowFn(), reason = '自主加餐' } = {}) {
     const c = cfg()
     const wt = wallTime(now, c.timeZone)
-    const mealsRec = ensureTodayMeals(wt.ymd)
+    const rDay = routineDayAt(now, c)
+    const mealsRec = ensureTodayMeals(rDay)
+    state.locks.eat = null
+    const isLate = wt.hourFloat >= 21.5 || wt.hourFloat < 5.0
+    const pool = isLate ? MEAL_POOL.supper : MEAL_POOL.snack
+    const dish = pickOne(pool)
+    const portion = isLate && state.hunger >= 80 ? 'full' : 'half'
+    mealsRec.snackCount = (Number(mealsRec.snackCount) || 0) + 1
+    state.nudges.lastSnackAt = now
+    const r = feed({ item: dish, portion, byOwner: false, now })
+    addLog('自主加餐', `${reason}：吃了「${dish}」（饥饿 ${r.beforeHunger}→${r.afterHunger}）`, now)
+    save()
+    return {
+      ok: true,
+      isSnack: true,
+      dish,
+      snackCount: mealsRec.snackCount,
+      beforeHunger: r.beforeHunger,
+      afterHunger: r.afterHunger,
+    }
+  }
+
+  /** 去吃一顿配额内的正餐（消耗今日正餐配额；全自动模式下配额用完时可自动回退加餐/夜宵）。 */
+  function eatQuotaMeal({ now = nowFn(), reason = '主人批准用餐', allowSnackFallback = false } = {}) {
+    const c = cfg()
+    const wt = wallTime(now, c.timeZone)
+    const rDay = routineDayAt(now, c)
+    const mealsRec = ensureTodayMeals(rDay)
     const quota = Math.round(numCfg(c.dailyMealQuota, 3, 0, 10))
     state.locks.eat = null
     if (mealsRec.usedCount >= quota) {
+      if (allowSnackFallback) {
+        return eatSnack({ now, reason: reason || '正餐配额用完，自己弄点加餐/夜宵' })
+      }
       save()
       return {
         ok: false,
@@ -780,8 +1026,15 @@ export function createRealLifeEngine({
         hunger: Math.round(state.hunger),
       }
     }
-    const slot = wt.hourFloat < 10.5 ? 'breakfast' : wt.hourFloat < 15.5 ? 'lunch' : 'dinner'
-    const dish = pickOne(MEAL_POOL[slot])
+    // 优先占用尚未吃过的餐次槽位；菜品按当前实际钟点挑选（凌晨夜里吃夜宵而不是早点油条）
+    const slotOrder = ['breakfast', 'lunch', 'dinner']
+    let slot = slotOrder.find((k) => !mealsRec[k])
+    if (!slot) {
+      const h = wt.hourFloat
+      slot = h >= 5 && h < 10.5 ? 'breakfast' : h >= 10.5 && h < 16 ? 'lunch' : 'dinner'
+    }
+    const poolKey = dishPoolKeyForClock(wt.hourFloat, slot, c)
+    const dish = pickOne(MEAL_POOL[poolKey] || MEAL_POOL.dinner)
     if (!mealsRec[slot]) mealsRec[slot] = dish
     mealsRec.usedCount += 1
     const r = feed({ item: dish, portion: 'full', byOwner: false, now })
@@ -1027,9 +1280,10 @@ export function createRealLifeEngine({
     const elapsedHours = clamp((now - (state.lastTickAt || now)) / 3_600_000, 0, 12)
     state.lastTickAt = now
     const wt = wallTime(now, c.timeZone)
+    const rDay = routineDayAt(now, c)
     const actions = []
 
-    const mealsRec = ensureTodayMeals(wt.ymd)
+    const mealsRec = ensureTodayMeals(rDay)
 
     const cyc = computeCycle(now)
     const isHeavyPeriod = cyc.phase === 'menstrual' && cyc.dayOfCycle <= 2
@@ -1042,11 +1296,27 @@ export function createRealLifeEngine({
       }
     }
 
-    // 2. 检查睡眠是否到点自然醒，及 REM 阶段做梦记录
+    // 2. 检查睡眠是否到点自然醒，及 REM 阶段做梦记录（支持 AI 结合近期聊天/心情动态生梦）
     if (state.mode === 'asleep' && state.sleep) {
       const st = sleepStageAt(now)
-      if (st?.stage === 'rem' && !state.sleep.dreamLogged && rngFn() < 0.5) {
-        recordDream(now)
+      if (st?.stage === 'rem' && !state.sleep.dreamLogged && !state.sleep.dreamPending && rngFn() < 0.5) {
+        if (c.aiDream) {
+          state.sleep.dreamPending = true
+          const motif = pickDreamMotif()
+          actions.push({
+            type: 'generate-dream',
+            sleepId: state.sleep.sleptAt,
+            kind: state.sleep.kind,
+            motif,
+            hunger: Math.round(state.hunger),
+            discomfort: cyc.discomfort,
+            phaseName: cyc.phaseName,
+            cravings: [...state.cravings],
+            recentDreams: (state.dreams || []).slice(0, 10).map((d) => d.summary),
+          })
+        } else {
+          recordDream(now)
+        }
       }
       if (now >= state.sleep.plannedWakeAt) {
         const res = wakeUpNow(now, '自然醒')
@@ -1093,10 +1363,18 @@ export function createRealLifeEngine({
     const idleMin = numCfg(c.chatIdleMinutes, 15, 3, 120)
     const ownerChatting = state.lastOwnerChatAt > 0 && now - state.lastOwnerChatAt < idleMin * 60_000
     const longOffline = !state.lastOwnerChatAt || now - state.lastOwnerChatAt >= Math.max(30, idleMin * 2) * 60_000
-    const isPassive = c.autonomyMode === 'passive'
+    const autonomy = normalizeAutonomyMode(c.autonomyMode)
+    const isFree = autonomy === 'free'
+    const isPassive = autonomy === 'passive'
+    // 全自动模式下只在刚发完消息的 2 分钟内避免硬抢中断，其余完全自主行动（仍尊重显式禁令）
+    const chatProtected = isFree
+      ? state.lastOwnerChatAt > 0 && now - state.lastOwnerChatAt < Math.min(2, idleMin) * 60_000
+      : ownerChatting
     const mealQuota = Math.round(numCfg(c.dailyMealQuota, 3, 0, 10))
+    const awakeWindow = isInAwakeWindow(wt.hourFloat, c, now)
+    const { baseWakeH, sleepH, wakeH, cycleKey } = sleepWindowFor(c, now)
 
-    // 若已获主人批准挂着 pendingAway / pendingSleep，超过 2 分钟兜底自动切入
+    // 若已挂着 pendingAway / pendingSleep，超过 2 分钟兜底自动切入
     if (state.pendingAway && state.pendingAway.approved && now - state.pendingAway.createdAt >= 2 * 60_000) {
       activatePendingAway(now)
       return { actions }
@@ -1139,39 +1417,56 @@ export function createRealLifeEngine({
       }
     }
 
-    // 4. 一日三餐配额自理（仅日常模式 + 空闲未聊天 + 未被禁食时生效；砍掉免费无限零食）
+    // 4. 一日三餐配额自理 + 跨零点支持 + 全自动/加餐自理
     if (c.dietEnabled) {
-      const meals = parseMealHours(c)
-      if (!isPassive && c.autoMeal !== false && !ownerChatting && !isLocked('eat', now) && mealsRec.usedCount < mealQuota) {
-        const slotBounds = [
-          ['breakfast', meals.breakfast, Math.max(meals.breakfast + 2, meals.lunch - 0.3)],
-          ['lunch', meals.lunch, Math.max(meals.lunch + 2, meals.dinner - 0.3)],
-          ['dinner', meals.dinner, 23.6],
-        ]
-        for (const [slot, atH, endH] of slotBounds) {
-          const jittered = atH + dailyJitterHours(wt.ymd, `meal-${slot}`, 15)
-          if (!mealsRec[slot] && wt.hourFloat >= jittered && wt.hourFloat < endH && state.hunger >= 24) {
-            const dish = pickOne(MEAL_POOL[slot])
+      if (!isPassive && c.autoMeal !== false && !chatProtected && !isLocked('eat', now) && mealsRec.usedCount < mealQuota) {
+        const slotBounds = mealSlotWindows(c, rDay)
+        let ateScheduled = false
+        for (const [slot, startH, endH] of slotBounds) {
+          if (!mealsRec[slot] && inHourWindow(wt.hourFloat, startH, endH) && state.hunger >= 24) {
+            const poolKey = dishPoolKeyForClock(wt.hourFloat, slot, c)
+            const dish = pickOne(MEAL_POOL[poolKey] || MEAL_POOL.dinner)
             mealsRec[slot] = dish
             mealsRec.usedCount += 1
             feed({ item: dish, portion: 'full', byOwner: false, now })
+            ateScheduled = true
             break
           }
         }
+        // 夜猫子睡过了某个早先饭点但还有剩余正餐配额且已明显饥饿时，直接顺延吃掉一顿配额餐
+        if (!ateScheduled && state.hunger >= 68 && awakeWindow) {
+          const unusedSlot = ['breakfast', 'lunch', 'dinner'].find((k) => !mealsRec[k]) || 'dinner'
+          const poolKey = dishPoolKeyForClock(wt.hourFloat, unusedSlot, c)
+          const dish = pickOne(MEAL_POOL[poolKey] || MEAL_POOL.dinner)
+          if (!mealsRec[unusedSlot]) mealsRec[unusedSlot] = dish
+          mealsRec.usedCount += 1
+          feed({ item: dish, portion: 'full', byOwner: false, now })
+        }
       }
 
-      // 饿得厉害但无法自理（聊多了配额吃光 / 两餐间饿得快 / 被禁食 / 被动模式）→ 主动向主人讨食（每天最多 2 次，绝不刷屏）
-      if (state.hunger >= 75 && !ownerChatting) {
-        if (state.nudges.hungerNudgeYmd !== wt.ymd) {
-          state.nudges.hungerNudgeYmd = wt.ymd
+      // 全自动模式（或手动开启 autoSnack）下：正餐配额吃完仍很饿时，自己找零食/夜宵垫肚子（不求权限）
+      const canSelfSnack = !isPassive && !chatProtected && !isLocked('eat', now) && (isFree || c.autoSnack === true)
+      if (
+        canSelfSnack &&
+        state.hunger >= 74 &&
+        (mealsRec.usedCount >= mealQuota || c.autoMeal === false) &&
+        now - (state.nudges.lastSnackAt || 0) >= 2 * 3_600_000 &&
+        (mealsRec.snackCount || 0) < (isFree ? 4 : 2)
+      ) {
+        eatSnack({ now, reason: isFree ? '全自动模式自主加餐' : '自主吃点零食' })
+      }
+
+      // 饿得厉害但无法自理（配额吃光 / 被禁食 / 被动模式）→ 主动向主人讨食（避开睡眠时段，每天最多 2 次）
+      const shouldHungerNudge = isFree ? isLocked('eat', now) : true
+      if (shouldHungerNudge && state.hunger >= 75 && !ownerChatting && awakeWindow) {
+        if (state.nudges.hungerNudgeYmd !== rDay) {
+          state.nudges.hungerNudgeYmd = rDay
           state.nudges.hungerNudgeCount = 0
         }
         if (
           c.hungerNudge &&
           state.nudges.hungerNudgeCount < 2 &&
-          now - (state.nudges.lastHungerAt || 0) > 3.5 * 3_600_000 &&
-          wt.hourFloat >= 8.5 &&
-          wt.hourFloat <= 23.2
+          now - (state.nudges.lastHungerAt || 0) > 3.5 * 3_600_000
         ) {
           state.nudges.hungerNudgeCount += 1
           state.nudges.lastHungerAt = now
@@ -1187,25 +1482,29 @@ export function createRealLifeEngine({
       }
     }
 
-    // 热聊陪伴保护中或处于被动听令模式时：不擅自洗澡、不擅自上厕所、不擅自入睡（全靠聊天请示主人同意后触发）
-    if (ownerChatting || isPassive) {
+    // 热聊陪伴保护中（日常模式）或处于被动听令模式时：不擅自洗澡、不擅自上厕所、不擅自入睡
+    if (chatProtected || isPassive) {
       save()
       return { actions }
     }
 
-    // 5. 晚间洗澡 + 吹头发调度（仅日常模式空闲且未锁时自动洗）
-    if (c.showerEnabled && !isLocked('shower', now) && state.showeredYmd !== wt.ymd && !state.pendingAway) {
-      const showerTarget = parseHm(c.showerAt, 21.5) + dailyJitterHours(wt.ymd, 'shower', 25)
-      if (wt.hourFloat >= showerTarget && wt.hourFloat <= showerTarget + 2.0) {
-        enterAway({ kind: 'shower', durationMin: 14, nextHairMin: 7, now, reason: '晚间洗漱' })
+    // 5. 洗澡 + 吹头发调度（支持跨午夜时段，如 23:30 或 02:30）
+    if (c.showerEnabled && !isLocked('shower', now) && state.showeredYmd !== rDay && !state.pendingAway) {
+      const showerTarget = normHour(parseHm(c.showerAt, 21.5) + dailyJitterHours(rDay, 'shower', 25))
+      if (inHourWindow(wt.hourFloat, showerTarget, normHour(showerTarget + 2.0))) {
+        enterAway({ kind: 'shower', durationMin: 14, nextHairMin: 7, now, reason: '日常洗漱' })
         return { actions }
       }
     }
 
-    // 6. 上厕所（小号 / 每日大号）调度（仅日常模式空闲且未锁时自动去）
+    // 6. 上厕所（小号 / 每日大号）调度（大号时段自动跟随起床后约 1.5 小时，适配任意作息）
     if (c.bathroomEnabled && !isLocked('bathroom', now) && !state.pendingAway) {
-      const poopTarget = 9.2 + dailyJitterHours(wt.ymd, 'poop', 45)
-      if (state.poopedYmd !== wt.ymd && wt.hourFloat >= poopTarget && wt.hourFloat <= poopTarget + 1.5) {
+      const poopTarget = normHour(baseWakeH + 1.45 + dailyJitterHours(rDay, 'poop', 45))
+      if (
+        state.poopedYmd !== rDay &&
+        awakeWindow &&
+        inHourWindow(wt.hourFloat, poopTarget, normHour(poopTarget + 1.5))
+      ) {
         enterAway({ kind: 'poop', durationMin: 8, now, reason: '日常排便' })
         return { actions }
       }
@@ -1215,32 +1514,42 @@ export function createRealLifeEngine({
       }
     }
 
-    // 7. 夜间入睡与午休调度（仅日常模式空闲且未锁时自动睡）
+    // 7. 睡眠与中段小睡调度（支持 05:00~14:00 等任意昼夜作息；小睡窗口自动跟随起床后 5.5 小时）
     if (c.sleepEnabled && !isLocked('sleep', now)) {
-      const sleepH = parseHm(c.sleepAt, 23.5) + dailyJitterHours(wt.ymd, 'sleep', 20)
-      const wakeH = parseHm(c.wakeAt, 7.75) + dailyJitterHours(wt.ymd, 'wake', 20)
-      if (inHourWindow(wt.hourFloat, sleepH, wakeH) || state.energy <= 8) {
+      const inSleep = inHourWindow(wt.hourFloat, sleepH, wakeH)
+      const remToWake = hoursBetween(wt.hourFloat, wakeH)
+      // 距本次起床点不足 45 分钟（0.75h）或本周期已经自然醒，不再自动回睡，彻底杜绝「起床→上厕所→再入睡」连锁
+      const canAutoSleep = inSleep && remToWake >= 0.75 && state.wokeNaturalCycle !== cycleKey
+      if (canAutoSleep || state.energy <= 8) {
         enterSleep({ kind: 'night', now, reason: state.energy <= 8 ? '困极入睡' : '到点睡觉' })
         return { actions }
       }
-      if (c.napEnabled && wt.hourFloat >= 13.1 && wt.hourFloat <= 14.0 && state.energy <= 62) {
-        enterSleep({ kind: 'nap', durationMin: 35, now, reason: '午后犯困小睡' })
+      const napStart = normHour(baseWakeH + 5.35)
+      const napEnd = normHour(baseWakeH + 6.25)
+      if (
+        c.napEnabled &&
+        state.nappedYmd !== rDay &&
+        !inSleep &&
+        inHourWindow(wt.hourFloat, napStart, napEnd) &&
+        state.energy <= 62
+      ) {
+        state.nappedYmd = rDay
+        enterSleep({ kind: 'nap', durationMin: 35, now, reason: '犯困小睡' })
         return { actions }
       }
     }
 
-    // 8. 生理期前两天明显难受时的私聊撒娇求哄（每天最多 2 次，需在白天清醒且没刚聊过时触发）
+    // 8. 生理期前两天明显难受时的私聊撒娇求哄（避开睡眠时段即可，每天最多 2 次）
     if (
       c.periodEnabled &&
       c.periodNudge &&
       isHeavyPeriod &&
       cyc.discomfort >= 64 &&
       !ownerChatting &&
-      wt.hourFloat >= 9.5 &&
-      wt.hourFloat <= 22.2
+      awakeWindow
     ) {
-      if (state.nudges.periodNudgeYmd !== wt.ymd) {
-        state.nudges.periodNudgeYmd = wt.ymd
+      if (state.nudges.periodNudgeYmd !== rDay) {
+        state.nudges.periodNudgeYmd = rDay
         state.nudges.periodNudgeCount = 0
       }
       if (state.nudges.periodNudgeCount < 2 && now - (state.nudges.lastPeriodAt || 0) > 4.5 * 3_600_000) {
@@ -1337,9 +1646,14 @@ export function createRealLifeEngine({
     // 主人私聊：完整细腻的体感与分寸感提示
     const lines = []
     const wt = wallTime(now, c.timeZone)
-    const mealsRec = ensureTodayMeals(wt.ymd)
+    const rDay = routineDayAt(now, c)
+    const mealsRec = ensureTodayMeals(rDay)
     const mealQuota = Math.round(numCfg(c.dailyMealQuota, 3, 0, 10))
-    const isPassive = c.autonomyMode === 'passive'
+    const autonomy = normalizeAutonomyMode(c.autonomyMode)
+    const isFree = autonomy === 'free'
+    const isPassive = autonomy === 'passive'
+    const { sleepH, wakeH, cycleKey } = sleepWindowFor(c, now)
+    const inSleepWindow = c.sleepEnabled && inHourWindow(wt.hourFloat, sleepH, wakeH) && state.wokeNaturalCycle !== cycleKey
 
     if (state.interruptedAway && now < state.interruptedAway.until) {
       const ia = state.interruptedAway
@@ -1361,6 +1675,9 @@ export function createRealLifeEngine({
       if (missedText) {
         lines.push(`你刚从睡梦中被叫醒，看到睡着这会儿主人前面还发了：${missedText}。`)
       }
+      if (isl.dream?.summary) {
+        lines.push(`睡着时你还模糊${isl.dream.summary}（想提就随口带半句，不想提可忽略）。`)
+      }
     }
 
     if (state.confessions?.length) {
@@ -1377,15 +1694,20 @@ export function createRealLifeEngine({
 
     if (state.pendingAway) {
       const pa = state.pendingAway
+      const lead = isFree ? '你已经打算' : '主人已经同意你'
       if (pa.kind === 'pee') {
-        lines.push('主人已经同意你去洗手间了，回完这一句道声「等我两三分钟马上回来」就会去上厕所。')
+        lines.push(`${lead}去洗手间了，回完这一句道声「等我两三分钟马上回来」就会去上厕所。`)
       } else if (pa.kind === 'poop') {
-        lines.push('主人已经同意你去洗手间了，回完这一句顺嘴跟主人说一声去趟厕所（大约七八分钟）就会离开。')
+        lines.push(`${lead}去洗手间了，回完这一句顺嘴跟主人说一声去趟厕所（大约七八分钟）就会离开。`)
       } else if (pa.kind === 'shower') {
-        lines.push('主人已经同意你去洗澡了，回完这句自然说一声「我去洗个澡再吹干头发，二十来分钟回来」就会去洗漱。')
+        lines.push(`${lead}去洗澡了，回完这句自然说一声「我去洗个澡再吹干头发，二十来分钟回来」就会去洗漱。`)
       }
     } else if (state.pendingSleep) {
-      lines.push(`主人已经让你去${state.pendingSleep.label}了，回完这一句温柔道声晚安/午安就会入睡。`)
+      lines.push(
+        isFree
+          ? `你已经决定去${state.pendingSleep.label}了，回完这一句温柔道声晚安/午安就会入睡。`
+          : `主人已经让你去${state.pendingSleep.label}了，回完这一句温柔道声晚安/午安就会入睡。`
+      )
     } else if (c.bathroomEnabled) {
       if (isLocked('bathroom', now)) {
         if (bladder >= 88) {
@@ -1395,7 +1717,9 @@ export function createRealLifeEngine({
         }
       } else if (bladder >= 82) {
         lines.push(
-          `你现在很急着想去趟洗手间（尿意 ${bladder}/100），但正在陪主人聊天${isPassive ? '且处于听令模式' : ''}不能擅自走开；请自然地跟主人说一声请示批准，只有主人同意让你去时才调用 real_life_routine 离开。`
+          isFree
+            ? `你现在很想去趟洗手间（尿意 ${bladder}/100）。当前处于全自动自主模式，不用请示或等主人批准，直接自然打声招呼说去趟洗手间马上回，并调用 real_life_routine(action="go", activity="pee") 离开即可。`
+            : `你现在很急着想去趟洗手间（尿意 ${bladder}/100），但正在陪主人聊天${isPassive ? '且处于听令模式' : ''}不能擅自走开；请自然地跟主人说一声请示批准，只有主人同意让你去时才调用 real_life_routine 离开。`
         )
       }
     }
@@ -1403,6 +1727,7 @@ export function createRealLifeEngine({
     if (c.dietEnabled) {
       const eatLocked = isLocked('eat', now)
       const quotaLeft = Math.max(0, mealQuota - mealsRec.usedCount)
+      const craveStr = state.cravings.length ? `，特别馋${state.cravings.join('、')}` : ''
       if (eatLocked && hunger >= 88) {
         lines.push(
           `主人下令不许你自己吃东西，你一直乖乖忍着没敢偷吃，但现在实在饿到头晕肚子咕咕直叫（饥饿 ${hunger}/100）${state.cravings.length ? `，好馋${state.cravings.join('、')}` : ''}，快委屈巴巴地向主人撒娇求饶讨口吃的吧！`
@@ -1410,15 +1735,27 @@ export function createRealLifeEngine({
       } else if (eatLocked && hunger >= 55) {
         lines.push('主人规定不许你自己偷吃东西，你正肚子有点饿也乖乖忍着等主人投喂。')
       } else if (hunger >= 75) {
-        const whyHungry =
-          quotaLeft <= 0
-            ? `今天固定的 ${mealQuota} 顿正餐配额已经吃完了、手头又没有零食`
-            : isPassive
-              ? '处于听令模式不敢自己找吃的'
-              : '跟主人聊得太投入消耗好快、还没空吃饭'
-        lines.push(
-          `你现在饿扁了（饥饿 ${hunger}/100，${whyHungry}）${state.cravings.length ? `，特别馋${state.cravings.join('、')}` : ''}，只能眼巴巴地跟主人撒娇讨食或请主人批准吃饭。`
-        )
+        if (isFree) {
+          if (quotaLeft > 0) {
+            lines.push(
+              `你现在饿了（饥饿 ${hunger}/100）${craveStr}。当前处于全自动自主模式，不用请示主人，想吃就直接调用 real_life_routine(action="go", activity="eat") 自己去弄点吃的，顺口跟主人提一句就行。`
+            )
+          } else {
+            lines.push(
+              `你现在又饿了（饥饿 ${hunger}/100）${craveStr}。当前处于全自动自主模式，不用等批准，可以直接调用 real_life_routine(action="go", activity="snack") 自己找点零食或夜宵垫肚子，顺口聊起即可。`
+            )
+          }
+        } else {
+          const whyHungry =
+            quotaLeft <= 0
+              ? `今天固定的 ${mealQuota} 顿正餐配额已经吃完了、手头又没有零食`
+              : isPassive
+                ? '处于听令模式不敢自己找吃的'
+                : '跟主人聊得太投入消耗好快、还没空吃饭'
+          lines.push(
+            `你现在饿扁了（饥饿 ${hunger}/100，${whyHungry}）${craveStr}，只能眼巴巴地跟主人撒娇讨食或请主人批准吃饭。`
+          )
+        }
       } else if (hunger >= 58) {
         lines.push(`你现在肚子有点饿了${state.cravings.length ? `，有点想吃${state.cravings[0]}` : ''}。`)
       } else if (hunger <= 15) {
@@ -1426,22 +1763,38 @@ export function createRealLifeEngine({
       }
     }
 
-    if (c.showerEnabled && !state.pendingAway && !state.pendingSleep && state.showeredYmd !== wt.ymd) {
-      const showerTarget = parseHm(c.showerAt, 21.5)
-      if (isLocked('shower', now) && wt.hourFloat >= showerTarget) {
+    if (c.showerEnabled && !state.pendingAway && !state.pendingSleep && state.showeredYmd !== rDay) {
+      const showerTarget = normHour(parseHm(c.showerAt, 21.5))
+      const inShowerWin = inHourWindow(wt.hourFloat, showerTarget, normHour(showerTarget + 2.2))
+      if (isLocked('shower', now) && inShowerWin) {
         lines.push('主人让你先别去洗澡陪他聊天，你乖乖听话还没去洗。')
-      } else if (!isLocked('shower', now) && wt.hourFloat >= showerTarget && wt.hourFloat <= showerTarget + 2.2) {
-        lines.push('现在到你平时晚上洗澡的时间了，因为正陪主人聊天所以先忍着没去；合适时可以顺口问一句要不要先去洗个澡（等主人同意再调用 real_life_routine）。')
+      } else if (!isLocked('shower', now) && inShowerWin) {
+        lines.push(
+          isFree
+            ? '现在到你平时洗澡的时间了；当前处于全自动自主模式，不用请示或等主人批准，想洗就直接打声招呼说先去洗个澡并调用 real_life_routine(action="go", activity="shower") 即可。'
+            : '现在到你平时洗澡的时间了，因为正陪主人聊天所以先忍着没去；合适时可以顺口问一句要不要先去洗个澡（等主人同意再调用 real_life_routine）。'
+        )
       }
     }
 
     if (c.sleepEnabled && state.groggyUntil <= now) {
-      if (isLocked('sleep', now) && energy <= 36) {
+      if (isLocked('sleep', now) && (energy <= 36 || inSleepWindow)) {
         lines.push('主人让你先别睡陪着他，你虽然困得直揉眼睛打哈欠，但还是乖乖强撑着精神陪主人说话。')
-      } else if (energy <= 20) {
-        lines.push('你现在困得快睁不开眼了，说话打哈欠、很想钻进被窝睡觉（但没经主人同意不敢自己先睡）。')
+      } else if (energy <= 20 || inSleepWindow) {
+        if (isFree) {
+          lines.push(
+            inSleepWindow
+              ? '现在已经到你平时睡觉的时间、困意上来了；当前处于全自动自主模式，不用征求主人同意，想睡时直接温柔道声晚安并调用 real_life_routine(action="go", activity="sleep") 去睡即可。'
+              : '你现在困得快睁不开眼、直打哈欠很想钻进被窝睡觉；当前处于全自动自主模式，不用征求同意，想睡就直接跟主人道别并调用 real_life_routine(action="go", activity="sleep") 去睡即可。'
+          )
+        } else if (energy <= 20) {
+          lines.push('你现在困得快睁不开眼了，说话打哈欠、很想钻进被窝睡觉（但没经主人同意不敢自己先睡）。')
+        } else {
+          lines.push('已经到你平时睡觉的点、开始犯困了，因为正陪主人聊天先撑着，困了可以顺口跟主人提一句。')
+        }
+      } else if (energy <= 36) {
+        lines.push('你现在有点累、开始犯困了。')
       }
-      else if (energy <= 36) lines.push('你现在有点累、开始犯困了。')
     }
 
     if (cyc.enabled) {
@@ -1489,6 +1842,7 @@ export function createRealLifeEngine({
   function updateValues(patch = {}, now = nowFn()) {
     const c = cfg()
     const wt = wallTime(now, c.timeZone)
+    const rDay = routineDayAt(now, c)
     cleanExpiredBuffs(now)
     const changed = []
     let anchorToSave = ''
@@ -1516,12 +1870,12 @@ export function createRealLifeEngine({
     }
     if (patch.showeredToday !== undefined) {
       const on = Boolean(patch.showeredToday)
-      state.showeredYmd = on ? wt.ymd : ''
+      state.showeredYmd = on ? rDay : ''
       changed.push(`今日洗澡=${on ? '已洗' : '未洗'}`)
     }
     if (patch.poopedToday !== undefined) {
       const on = Boolean(patch.poopedToday)
-      state.poopedYmd = on ? wt.ymd : ''
+      state.poopedYmd = on ? rDay : ''
       changed.push(`今日大号=${on ? '已上' : '未上'}`)
     }
     if (patch.cravings !== undefined) {
@@ -1571,7 +1925,7 @@ export function createRealLifeEngine({
       changed.push(`暂离剩余=${Math.round(mins)}m`)
     }
     if (patch.mealsUsed !== undefined && Number.isFinite(Number(patch.mealsUsed))) {
-      const mealsRec = ensureTodayMeals(wt.ymd)
+      const mealsRec = ensureTodayMeals(rDay)
       mealsRec.usedCount = clamp(Math.round(Number(patch.mealsUsed)), 0, 10)
       if (mealsRec.usedCount === 0) {
         delete mealsRec.breakfast
@@ -1719,7 +2073,9 @@ export function createRealLifeEngine({
         state.missedWhileAsleep = []
         state.locks = { eat: null, bathroom: null, shower: null, sleep: null }
         state.confessions = []
-        ensureTodayMeals(wt.ymd).usedCount = 0
+        state.nappedYmd = ''
+        state.wokeNaturalCycle = ''
+        ensureTodayMeals(routineDayAt(now, c)).usedCount = 0
         addLog('重置', '恢复日常饱满舒适状态', now)
         save()
         return { ok: true, message: '已恢复日常饱满清醒状态（清空暂离、睡眠与疼痛惩罚）' }
@@ -1729,22 +2085,29 @@ export function createRealLifeEngine({
   function snapshot(now = nowFn()) {
     const c = cfg()
     const wt = wallTime(now, c.timeZone)
+    const rDay = routineDayAt(now, c)
     const cyc = computeCycle(now)
     const sleepStage = sleepStageAt(now)
     const meals = parseMealHours(c)
-    const mealsRec = ensureTodayMeals(wt.ymd)
+    const mealsRec = ensureTodayMeals(rDay)
     const mealQuota = Math.round(numCfg(c.dailyMealQuota, 3, 0, 10))
     const hunger = Math.round(state.hunger)
     const hungerLabel =
       hunger <= 15 ? '刚吃饱' : hunger <= 35 ? '饱腹舒适' : hunger <= 55 ? '正常' : hunger <= 75 ? '有点饿' : '饿扁了'
+    const { baseSleepH, baseWakeH } = sleepBounds(c)
+    const napStart = normHour(baseWakeH + 5.35)
+    const napEnd = normHour(baseWakeH + 6.25)
 
     return {
       now,
       wallClock: `${wt.ymd} ${wt.hhmm}`,
+      routineDay: rDay,
       timeZone: c.timeZone,
       enabled: Boolean(c.enabled),
       groupEnabled: Boolean(c.groupEnabled),
-      autonomyMode: c.autonomyMode === 'passive' ? 'passive' : 'daily',
+      autonomyMode: normalizeAutonomyMode(c.autonomyMode),
+      aiDream: Boolean(c.aiDream),
+      autoSnack: Boolean(c.autoSnack),
       heartbeatSec: Math.round(numCfg(c.heartbeatSec, 30, 5, 300)),
       chatIdleMinutes: Math.round(numCfg(c.chatIdleMinutes, 15, 3, 120)),
       forceReplyCount: Math.round(numCfg(c.forceReplyCount, 4, 1, 20)),
@@ -1764,6 +2127,7 @@ export function createRealLifeEngine({
         used: mealsRec.usedCount,
         max: mealQuota,
         remaining: Math.max(0, mealQuota - mealsRec.usedCount),
+        snacks: Number(mealsRec.snackCount) || 0,
       },
       mealsSchedule: {
         breakfast: formatHm(meals.breakfast),
@@ -1771,9 +2135,15 @@ export function createRealLifeEngine({
         dinner: formatHm(meals.dinner),
       },
       mealsToday: { ...mealsRec },
-      showeredToday: state.showeredYmd === wt.ymd,
-      poopedToday: state.poopedYmd === wt.ymd,
+      showeredToday: state.showeredYmd === rDay,
+      poopedToday: state.poopedYmd === rDay,
       showerSchedule: formatHm(parseHm(c.showerAt, 21.5)),
+      sleepSchedule: {
+        sleepAt: formatHm(baseSleepH),
+        wakeAt: formatHm(baseWakeH),
+      },
+      napSchedule: `${formatHm(napStart)}~${formatHm(napEnd)}`,
+      poopSchedule: formatHm(normHour(baseWakeH + 1.45)),
       activeLocks: activeLocksList(now),
       confessions: [...(state.confessions || [])],
       away: state.away
@@ -1809,6 +2179,7 @@ export function createRealLifeEngine({
     save,
     tick,
     feed,
+    eatSnack,
     eatQuotaMeal,
     care,
     setLock,
@@ -1825,6 +2196,8 @@ export function createRealLifeEngine({
     enterSleep,
     wakeUpNow,
     recordDream,
+    pickDreamMotif,
+    clearDreamPending,
     onIncomingMessage,
     onGroupReply,
     buildContext,

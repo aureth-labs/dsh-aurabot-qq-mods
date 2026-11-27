@@ -1,17 +1,17 @@
-import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises';
+import { writeFile, rename, mkdir, unlink } from 'node:fs/promises';
+import { preserveFailedPreference, readPreference } from './preference-file.mjs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 export class ListenerPreference {
   constructor(file) { this.file = file; this.enabled = false; this.queue = Promise.resolve(); }
   async open() {
-    try {
-      const value = JSON.parse(await readFile(this.file, 'utf8'));
-      if (value.schema !== 1 || typeof value.enabled !== 'boolean') throw new Error();
-      this.enabled = value.enabled;
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw new Error('常驻入口设置不可读，未自动开启。');
-    }
+    const result = await readPreference(this.file, '常驻入口开关', value => {
+      if (value?.schema !== 1 || typeof value.enabled !== 'boolean') throw new Error();
+      return value.enabled;
+    });
+    this.enabled = result.value ?? false;
+    this.error = result.error;
   }
   setEnabled(enabled) {
     if (typeof enabled !== 'boolean') return Promise.reject(new Error('常驻入口开关不可用。'));
@@ -21,6 +21,7 @@ export class ListenerPreference {
       try {
         await mkdir(dirname(this.file), { recursive: true });
         await writeFile(temporary, JSON.stringify({ schema: 1, enabled }), { mode: 0o600 });
+        await preserveFailedPreference(this.file, this.error);
         await rename(temporary, this.file);
       } catch {
         await unlink(temporary).catch(() => {});
@@ -28,6 +29,7 @@ export class ListenerPreference {
         throw new Error('常驻入口开关未能保存。');
       }
       this.enabled = enabled;
+      this.error = undefined;
     });
     this.queue = operation.catch(() => {});
     return operation;

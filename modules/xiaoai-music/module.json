@@ -1,7 +1,7 @@
 {
   "id": "xiaoai-music",
-  "name": "xiaoai music · 小爱音响接入",
-  "version": "0.15.4",
+  "name": "小爱音箱",
+  "version": "0.16.0",
   "description": "小爱音箱接入、歌曲与歌单播放、提醒、称呼拼音匹配与识别日志。",
   "category": "creative",
   "tags": [

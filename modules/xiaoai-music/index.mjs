@@ -11,7 +11,7 @@ import { readFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { FamilySongError, songFailure } from './lib/songs/library.mjs';
 import { FamilyPlayback } from './lib/songs/playback.mjs';
-import { SongPlaylists } from './lib/songs/playlists.mjs';
+import { DAILY_PLAYLIST_ID, SongPlaylists, makeDailyPlaylist } from './lib/songs/playlists.mjs';
 import { resourcePaths } from './lib/songs/storage.mjs';
 import { companionFailure } from './lib/companion/runtime.mjs';
 import { createDialogueSpeech } from './lib/companion/speech.mjs';
@@ -41,9 +41,12 @@ export function localPost(req) {
 }
 
 export function speakerFailure(error) {
-  if (typeof error?.code === 'string' && error.code.startsWith('HISTORY_')) return {
-    ...historyFailure(error), message: '语音记录暂时读取失败，请查看错误分类。',
-  };
+  if (typeof error?.code === 'string' && error.code.startsWith('HISTORY_')) {
+    const detail = historyFailure(error);
+    const message = detail.code === 'HISTORY_NETWORK' ? '连接小米语音记录服务超时，请检查网络后重试。'
+      : '小米语音记录暂时不可读，请检查音箱登录与连接后重试。';
+    return { ...detail, message };
+  }
   const value = String(error?.message || '');
   if (value === '正在扫码登录，请完成后再操作音箱。') return { code: 'SPEAKER_LOGIN_PENDING', message: value };
   const auth = /^authentication code (\d+);/.exec(value);
@@ -51,13 +54,15 @@ export function speakerFailure(error) {
     code: 'SPEAKER_AUTH_REJECTED',
     authCode: Number(auth[1]),
     authObservation: error.authObservation ? authObservation(error.authObservation) : null,
-    message: '小米登录被拒绝（' + auth[1] + '），请更新已保存的音箱登录凭据。',
+    message: '小米登录被拒绝，请在面板重新扫码更新登录。',
   };
   if (value === 'additional verification required') return {
     code: 'SPEAKER_VERIFICATION_REQUIRED',
     authObservation: error.authObservation ? authObservation(error.authObservation) : null,
     message: '小米账号需要完成安全验证，请在小米账号页面处理。',
   };
+  if (value === '音箱未报告在线。') return { code: 'SPEAKER_OFFLINE', message: '小爱音箱当前离线，请确认音箱已开机并联网。' };
+  if (value.startsWith('需要唯一的 L05C')) return { code: 'SPEAKER_DEVICE_SELECTION', message: '未找到唯一的 L05C 音箱。有多台时，请在面板选择要使用的设备。' };
   return {
     code: 'SPEAKER_OPERATION_FAILED',
     message: '检查或操作失败，请检查音箱登录、在线状态和所选网卡。',
@@ -66,8 +71,8 @@ export function speakerFailure(error) {
 
 export default {
   id: 'xiaoai-music',
-  name: 'xiaoai music · 小爱音响接入',
-  version: '0.15.4',
+  name: '小爱音箱',
+  version: '0.16.0',
   api: 1,
   description: '小爱音箱接入、歌曲与歌单播放、提醒、称呼拼音匹配与识别日志。',
   defaults: { networkInterface: '', speakerDevice: '', resourceRoot: '' },
@@ -117,10 +122,15 @@ async function setupRuntime(api) {
       },
       deliver: deliverReminder,
     });
-    await reminders.open();
+    let reminderLoadError;
+    try { await reminders.open(); }
+    catch (error) {
+      if (!['FAMILY_REMINDER_INVALID', 'FAMILY_REMINDER_STORAGE'].includes(error.code)) throw error;
+      reminderLoadError = { code: error.code, message: '定时提醒已暂停。请检查或从备份恢复“定时提醒.json”，然后重新加载模块。' };
+    }
     await mkdir(dirname(resources.cursorFile), { recursive: true });
     const cursor = new VoiceCursor(resources.cursorFile);
-    await cursor.open();
+    await cursor.open(api.log);
     const preference = new ListenerPreference(resources.listenerFile);
     await preference.open();
     const wakePreference = new WakePreference(join(dirname(resources.listenerFile), '家庭称呼.json'));
@@ -138,7 +148,7 @@ async function setupRuntime(api) {
     });
     const warmWakeAudio = () => {
       try {
-        if (getVoiceOptions(api).dialogue?.configured) void wakeAudio.generate(wakeReply()).catch(() => {});
+        if (!wakePreference.error && getVoiceOptions(api).dialogue?.configured) void wakeAudio.generate(wakeReply()).catch(() => {});
       } catch { /* An unconfigured voice must not prevent the module from starting. */ }
     };
     const login = new SpeakerLogin({
@@ -216,7 +226,14 @@ async function setupRuntime(api) {
         const savedLists = new SongPlaylists({ file: resources.playlistsFile, library: service.library });
         await savedLists.open();
         playlists = savedLists;
-        playback = new FamilyPlayback({ library: service.library, getSpeaker: prepare });
+        playback = new FamilyPlayback({ library: service.library, log: api.log, getSpeaker: async () => {
+          try { return await prepare(); }
+          catch (error) {
+            const failure = speakerFailure(error);
+            if (failure.code === 'SPEAKER_OPERATION_FAILED') throw error;
+            throw new FamilySongError(failure.code, failure.message);
+          }
+        } });
         songs = service;
         return songs;
       })();
@@ -254,7 +271,8 @@ async function setupRuntime(api) {
         if (!isCurrent() || !['idle', 'paused', 'stopped'].includes(deviceState.playback) ||
             !['idle', 'paused', 'stopped', 'completed', 'failed'].includes(playback.status().phase)) throw new Error('speaker busy');
         ticket = ++familyIntent;
-        await playback.audio({ id: 'family-reminder:' + reminder.id, absoluteFile: prepared.file, duration: prepared.duration }, { isCurrent });
+        await playback.audio({ id: 'family-reminder:' + reminder.id, absoluteFile: prepared.file, duration: prepared.duration },
+          { isCurrent, beforeSubmit: options.beforeSubmit });
         await playback.task;
         if (!isCurrent() || playback.error) throw new Error('reminder playback failed');
         return { accepted: true };
@@ -269,6 +287,7 @@ async function setupRuntime(api) {
     }
     async function callReminder(args, options = {}) {
       if (disposed || shutdowns || options.isCurrent?.() === false) return { ok: false, cancelled: true };
+      if (reminderLoadError && args?.action !== 'preview') return { ok: false, ...reminderLoadError };
       try {
         if (args?.action === 'preview') {
           if (typeof args.text !== 'string' || !args.text.trim() || [...args.text].length > 500) return { ok: false, message: '请填写500字以内的提醒提示词。' };
@@ -286,7 +305,7 @@ async function setupRuntime(api) {
         if (args?.action === 'list') return { ok: true, reminders: reminders.list(), session: reminderDialogue?.status() || null, error: reminderError };
         if (args?.action === 'create') {
           const reminder = await reminders.create({ text: args.text, schedule: args.schedule, startsAt: args.startsAt });
-          return { ok: true, reminder, message: '提醒已保存，到时按AuraBot当前人设生成并投送小爱；播放繁忙时等空闲，不代表已经播报。' };
+          return { ok: true, reminder, message: '提醒已保存。到点后会在音箱空闲时播报。' };
         }
         if (args?.action === 'cancel') return { ok: true, reminder: await reminders.cancel(args.id), message: '提醒已取消。' };
         return { ok: false, message: '请选择create、list、cancel或preview。' };
@@ -345,12 +364,21 @@ async function setupRuntime(api) {
       if (!current()) return { cancelled: true };
       const service = await ensureCompanion();
       if (!current()) return { cancelled: true };
-      await service.ensureSession();
+      try { await service.ensureSession(); }
+      catch (error) {
+        if (!['FAMILY_SESSION_STORAGE', 'FAMILY_SESSION_RESOLVE'].includes(error.code)) throw error;
+      }
       if (!current()) return { cancelled: true };
-      if (!probe) probe = new SpeakerProbe({ speaker, cursor, familyAction, sessionRouting: true, getWakeConfig: () => wakePreference.get(),
+      if (!probe) probe = new SpeakerProbe({ speaker, cursor, familyAction, sessionRouting: true,
+        preferLocalControls: () => ['FAMILY_SESSION_STORAGE', 'FAMILY_SESSION_RESOLVE'].includes(service.status().session?.error?.code),
+        getWakeConfig: () => wakePreference.get(),
         onInvalidate: () => { familyIntent++; return companion?.cancel(); },
         ask: async (text, options) => {
           if (!options.isCurrent()) return '';
+          if (service.status().session?.error) {
+            await service.ensureSession();
+            if (!options.isCurrent()) return '';
+          }
           const own = playback?.status();
           if (!own?.selected && !own?.playlist) await speaker.operate('pause');
           if (!options.isCurrent()) return '';
@@ -389,24 +417,30 @@ async function setupRuntime(api) {
       })();
       return listenerStarting;
     }
-    const status = () => ({
-      ok: true, connected: Boolean(speaker),
-      probe: probe?.status() || lastProbe,
-      model: lastModel,
-      login: login.status(),
-      songs: songs?.library.status() || { entries: [], jobs: [] },
-      playback: playback?.status() || { phase: 'idle' },
-      playlists: playlists?.status() || [],
-      storage: { root: resourceRoot, songs: songs?.library.root || resources.songRoot },
-      companion: companion?.status() || { checked: false, voiceChecked: false },
-      listener: { enabled: preference.enabled, active: Boolean(probe?.active() && probe?.persistent),
-        starting: Boolean(listenerStarting), retrySeconds: Math.max(0, Math.ceil((listenerRetryAt - Date.now()) / 1000)), error: listenerError },
-      stage: 'resident-family-session',
-    });
+    const status = () => {
+      const songStatus = songs?.library.status() || { entries: [], jobs: [] };
+      return {
+        ok: true, connected: Boolean(speaker),
+        probe: probe?.status() || lastProbe,
+        model: lastModel,
+        login: login.status(),
+        songs: songStatus,
+        playback: playback?.status() || { phase: 'idle' },
+        playlists: playlists?.status() || [],
+        dailyPlaylist: makeDailyPlaylist(songStatus.entries),
+        storage: { root: resourceRoot, songs: songs?.library.root || resources.songRoot },
+        companion: companion?.status() || { checked: false, voiceChecked: false },
+        listener: { enabled: preference.enabled, active: Boolean(probe?.active() && probe?.persistent),
+          starting: Boolean(listenerStarting), retrySeconds: Math.max(0, Math.ceil((listenerRetryAt - Date.now()) / 1000)),
+          error: preference.error || listenerError, wakeError: wakePreference.error },
+        stage: 'resident-family-session',
+      };
+    };
     api.route('/status', async () => status());
     api.route('/storage/verification', async req => localRequest(req) && req.method === 'GET'
       ? { ok: true, verification: resourceVerification } : { ok: false, message: '需要本机读取核验状态。' });
-    const wakeView = wake => ({ wake, readings: wakeReadings(wake), acknowledgementAudio: wakeAudio.state(wake.acknowledgement) });
+    const wakeView = wake => ({ wake, readings: wakeReadings(wake), error: wakePreference.error,
+      acknowledgementAudio: wakeAudio.state(wake.acknowledgement) });
     api.route('/speaker/wake', async req => localRequest(req) && req.method === 'GET'
       ? { ok: true, ...wakeView(wakePreference.get()) }
       : { ok: false, message: '需要本机读取家庭称呼。' });
@@ -465,7 +499,7 @@ async function setupRuntime(api) {
         ? '称呼已保存，语音生成失败。' : '称呼已保存。' };
     });
     api.route('/capabilities', async () => ({ ok: true,
-      module: 'xiaoai-music', version: '0.15.4',
+      module: 'xiaoai-music', version: '0.16.0',
       tools: [{ name: 'xiaoai_music', parameters: { type: 'object', properties: PLAYBACK_PROPERTIES, required: ['action'], additionalProperties: false } },
         { name: 'xiaoai_reminder', parameters: { type: 'object', properties: REMINDER_PROPERTIES, required: ['action'], additionalProperties: false } }],
       moduleCalls: { playback: "api.use('xiaoai-music').execute(args)", reminders: "api.use('xiaoai-music').remind(args)" },
@@ -486,6 +520,11 @@ async function setupRuntime(api) {
       } catch { return { ok: false, message: '提醒会话暂时无法连接。' }; }
     });
     api.route('/settings/options', async () => ({ ok: true, voices: getVoiceOptions(api) }));
+    post('/songs/local-voice/check', async body => {
+      const { checkLocalFullVoice } = await import('./lib/songs/runtime.mjs');
+      await checkLocalFullVoice(api, body?.voice);
+      return { message: '可以生成原调整曲。' };
+    });
     post('/settings/save', async body => {
       const keys = ['networkInterface', 'speakerDevice', 'motherVoice'];
       if (keys.some(key => typeof body[key] !== 'string' || body[key].length > 160)) {
@@ -541,16 +580,19 @@ async function setupRuntime(api) {
       return { historyReadable: true, historyCount: records.length };
     });
     post('/speaker/history/read', async () => {
+      if (wakePreference.error) return { ok: false, ...wakePreference.error };
       const records = await (await prepare()).conversations();
       return { records: recognitionRows(records, wakePreference.get(), probe?.observations),
         listenerActive: Boolean(probe?.active()),
         message: '最近10条云端识别文字；匹配按当前已保存称呼计算。处理结果仅保留本轮接入的最近30条，重载后清空。读取不会补执行旧指令。' };
     });
     post('/speaker/arm', async () => {
-      await preference.setEnabled(false);
+      if (wakePreference.error) return { ok: false, ...wakePreference.error };
+      if (!preference.error) await preference.setEnabled(false);
       return beginListening(false);
     });
     post('/speaker/listener/start', async () => {
+      if (wakePreference.error) return { ok: false, ...wakePreference.error };
       await preference.setEnabled(true);
       await startResident();
       return status();
@@ -654,6 +696,12 @@ async function setupRuntime(api) {
       const playlist = await playlists.update(body.id, { name: body.name, ids: body.ids });
       return { playlist, ...status() };
     });
+    post('/songs/playlist/add', async body => {
+      await ensureSongs();
+      const result = await playlists.append(body.id, body.ids);
+      return { ...result, ...status(), message: '已加入 ' + result.added + ' 首，跳过 ' + result.skipped +
+        ' 首' + (result.skipped ? '（已在歌单中或歌曲不可用）。' : '。') };
+    });
     post('/songs/playlist/delete', async body => {
       await ensureSongs();
       await playlists.remove(body.id);
@@ -664,19 +712,19 @@ async function setupRuntime(api) {
       const intent = ++familyIntent;
       await ensureSongs();
       if (intent !== familyIntent) return { cancelled: true, ...status() };
-      const list = playlists.get(body.id);
+      const list = body.id === DAILY_PLAYLIST_ID ? makeDailyPlaylist(songs.library.status().entries) : playlists.get(body.id);
       await playback.playlist(list.ids, { mode: body.mode || 'sequential', announce: body.announce === true });
       return status();
     });
     api.every(2000, async () => {
       if (disposed || shutdowns || loginPending()) return;
-      void reminders.tick().then(() => { reminderError = null; }, () => {
+      if (!reminderLoadError) void reminders.tick().then(() => { reminderError = null; }, () => {
         reminderError = { code: 'FAMILY_REMINDER_TICK', message: '定时提醒检查未完成，请检查提醒文件和音箱状态。' };
       });
       const epoch = listenerEpoch;
       await playback?.syncNativePlayback();
       if (disposed || shutdowns || epoch !== listenerEpoch) return;
-      if (preference.enabled && !probe?.active()) {
+      if (preference.enabled && !wakePreference.error && !probe?.active()) {
         if (!listenerStarting && Date.now() >= listenerRetryAt && !loginPending()) {
           await startResident().catch(() => {});
         }
@@ -723,5 +771,5 @@ async function setupRuntime(api) {
       } finally { await dispose(); await companion?.close(); }
     });
     warmWakeAudio();
-    return { status, execute: callFamily, remind: callReminder };
+    return { status, execute: callFamily, remind: callReminder, wakeSaved: wakePreference.saved };
 }

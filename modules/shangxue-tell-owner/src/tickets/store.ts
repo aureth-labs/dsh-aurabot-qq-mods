@@ -147,9 +147,13 @@ export class TicketStore {
     }> = []
     for (const agg of map.values()) {
       const resetAt = this.userResets[agg.userId] || 0
-      const from = Math.max(dayStart, resetAt)
+      // 重置时刻用「严格大于」：同一毫秒内提交的工单也算重置之前，避免归零后仍显示 1 条。
       agg.todayCount = this.tickets.filter(
-        (t) => String(t.userId) === agg.userId && t.createdAt >= from && t.createdAt < dayEnd,
+        (t) =>
+          String(t.userId) === agg.userId &&
+          t.createdAt >= dayStart &&
+          t.createdAt < dayEnd &&
+          (!resetAt || t.createdAt > resetAt),
       ).length
       out.push({
         userId: agg.userId,
@@ -222,9 +226,12 @@ export class TicketStore {
    */
   countUserBetween(userId: string, dayStart: number, dayEnd: number): number {
     const resetAt = this.userResets[String(userId)] || 0
-    const from = Math.max(dayStart, resetAt)
     return this.tickets.filter(
-      (t) => String(t.userId) === String(userId) && t.createdAt >= from && t.createdAt < dayEnd,
+      (t) =>
+        String(t.userId) === String(userId) &&
+        t.createdAt >= dayStart &&
+        t.createdAt < dayEnd &&
+        (!resetAt || t.createdAt > resetAt),
     ).length
   }
 

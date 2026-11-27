@@ -63,9 +63,32 @@ export function initialState(stamp, settings) {
     noUpdate: '',
     // 首次安装如果已经过了开始时间，今天不再补发，从明天开始。
     firstSkip: isHm(time) && stamp.time >= time ? stamp.date : '',
+    // 最近一次取到图的日期。
+    fetched: '',
     title: '',
     source: '',
   }
+}
+
+/**
+ * 面板「清除已获取」后的任务记录：今天删掉的缓存图对应的进度从头算，定时任务会重新取图并发送。
+ * removed 是删掉的缓存图数量；没删到图时不动「上次取图」的记录，它可能说的是前几天还留着的图。
+ */
+export function clearedState(state, stamp, removed = 0) {
+  const before = state || {}
+  const today = key => (before[key] === stamp.date ? '' : before[key] || '')
+  const next = { ...before, completed: today('completed'), noUpdate: today('noUpdate') }
+  if (before.date === stamp.date) {
+    next.attempts = 0
+    next.lastAttempt = 0
+    next.sent = []
+  }
+  if (removed || before.fetched === stamp.date) {
+    next.fetched = ''
+    next.title = ''
+    next.source = ''
+  }
+  return next
 }
 
 /**

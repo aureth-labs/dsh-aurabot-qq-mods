@@ -15,7 +15,7 @@ import { buildCalibration } from './lib/calibrate.mjs'
 import { TERMS_TITLE, TERMS_VERSION, termsAccepted, termsGate, termsPublic, termsText } from './lib/terms.mjs'
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024
-const VERSION = '0.10.0'
+const VERSION = '0.10.3'
 const STAGE = '测试'
 
 const TRIGGER_LABELS = {
@@ -702,7 +702,7 @@ export default {
       }
       return {
         ok: true,
-        message: `校准页已发到「${printer.name}」（${paper.paperMm}mm / 有效 ${paper.effectiveMm}mm / ${paper.columns} 列）。找出末尾 ] 和 mm 在同一行的最长一条，把那个数字填到「有效宽度」。`,
+        message: `校准页已发到「${printer.name}」（${paper.paperMm}mm / 有效 ${paper.effectiveMm}mm / ${paper.columns} 列）。找出末尾 ] 还在同一行的最长一条，把它开头的毫米数填到「有效宽度」。`,
       }
     }
 

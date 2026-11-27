@@ -11,8 +11,8 @@ export function mmColumns(mm) {
   return Math.floor((Number(mm) * dotsPerMm) / 12)
 }
 
-// 每行都是「###...] 48mm」的形式，整行宽度恰好等于该毫米数对应的列数。
-// 末尾的 ] 和毫米标签在同一行，说明那一行没超宽；掉行或被切就说明超了。
+// 每行都是「48mm ###...]」的形式：毫米数在最前面，末尾的 ] 在同一行说明没超宽。
+// 数字放前面便于直接读数，末尾的方括号用来判断这一行有没有被截断或换行。
 export function calibrationCandidates(paperWidthMm) {
   const paper = clamp(Math.round(Number(paperWidthMm) || 58), 20, 120)
   const rows = []
@@ -21,7 +21,7 @@ export function calibrationCandidates(paperWidthMm) {
     const label = `${mm}mm`
     const barLength = columns - label.length - 2
     if (barLength < 4) continue
-    rows.push({ mm, text: `${'#'.repeat(barLength)}] ${label}` })
+    rows.push({ mm, text: `${label} ${'#'.repeat(barLength)}]` })
   }
   return rows
 }
@@ -71,7 +71,7 @@ export function buildCalibration({ paperWidthMm = 58, effectiveWidthMm = 0, colu
   lines.push({ text: '打印校准页', style: 'title' })
   lines.push({ text: `纸宽 ${paper}mm · 有效 ${effective}mm · ${cols} 列` })
 
-  for (const line of wrapText('用法：找末尾 ] 和毫米标签在同一行、且没有换行的最长一条，那个毫米数就是实际有效宽度。', cols)) {
+  for (const line of wrapText('用法：看每行开头的毫米数，末尾的 ] 还在同一行、没有换行，这一行就没超宽。找满足条件的最长一行，那个数字就是实际有效宽度。', cols)) {
     lines.push({ text: line })
   }
   lines.push({ text: '' })
@@ -80,7 +80,7 @@ export function buildCalibration({ paperWidthMm = 58, effectiveWidthMm = 0, colu
   for (const row of candidates) lines.push({ text: row.text })
 
   lines.push({ text: '' })
-  for (const line of wrapText('标签掉到下一行、或 ] 不见了，都说明那一行超宽。数字行全部按 12 点字符估算。', cols)) {
+  for (const line of wrapText('末尾的 ] 掉到下一行、或者 ] 不见了，都说明那一行超宽。数字按 12 点字符估算。', cols)) {
     lines.push({ text: line })
   }
   lines.push({ text: '-'.repeat(cols), style: 'sep' })

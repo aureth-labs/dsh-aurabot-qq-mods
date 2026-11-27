@@ -259,7 +259,7 @@ async function absorbInbox({ inbox, api, log, memory, max = 300 } = {}) {
 export default {
   id: 'memory-grade',
   name: '记忆总库',
-  version: '2.1.2',
+  version: '2.1.3',
   api: 1,
   description: '存记忆、判密级、贴标签、算时效，还能顺手标八卦。写库前自动盖章，过期的只标「当时」不删除。东西全在自己机器上，不联网、不外传。',
   panel: 'panel.js',
@@ -868,7 +868,18 @@ export default {
             }
             if (!fixes.length) return
             for (const f of fixes) {
-              patchClsWithRetry(dbFile, f.id, f.to, api.log).catch(() => {})
+              patchClsWithRetry(dbFile, f.id, f.to, api.log)
+                .then((done) => {
+                  if (!done) return
+                  // 2026-11-26 修：补完把内存那份也改掉，不然下一轮又扫出来、永远修不完
+                  try {
+                    const it = store.get(f.id)
+                    if (it && it.cls !== f.to) it.cls = f.to
+                  } catch {
+                    /* 内存更新失败不影响库 */
+                  }
+                })
+                .catch(() => {})
             }
             api.log?.info?.('[memory-grade] 密级自检：补了 ' + fixes.length + ' 条')
           } catch (error) {

@@ -2,7 +2,7 @@ const { useState, useEffect } = React
 const { Card, Btn, Switch, Row, Select, Range, Empty } = ui
 
 const MODULE_DESC =
-  '让你的bot拥有真人一般的作息和生理状态！目前支持：一日三餐饥饿与讨食、喝水与上厕所暂离、晚间洗澡吹头发、困倦入睡与做梦概率唤醒、28天生理周期（痛经怕冷与投喂哄人互动），以及日常自主/被动听令双模式。'
+  '让你的bot拥有真人一般的作息和生理状态！目前支持：任意昼夜作息睡眠与AI动态做梦、一日三餐饥饿与自主加餐、喝水与上厕所暂离、洗澡吹头发、28天生理周期（痛经怕冷与投喂哄人互动），以及全自动自主/日常自主/被动听令三模式。'
 
 const DEFAULT_CFG = {
   enabled: true,
@@ -23,6 +23,7 @@ const DEFAULT_CFG = {
   sleepAt: '23:30',
   wakeAt: '07:45',
   napEnabled: true,
+  aiDream: true,
   bathroomEnabled: true,
   showerEnabled: true,
   showerAt: '21:30',
@@ -294,6 +295,13 @@ return function RealLifePanel({ settings = {}, draftSettings, setSettings, save,
     toast(r?.message || '已切换场景', 'ok')
   }
 
+  const doGenerateDream = async () => {
+    const r = await safeCall('/dream', {})
+    if (!r) return
+    if (r?.state) setSnap(r.state)
+    toast(r?.message || '已生成新梦境', r?.ok ? 'ok' : 'err')
+  }
+
   const doSettle = async () => {
     const r = await safeCall('/settle', {})
     if (!r) return
@@ -365,6 +373,13 @@ return function RealLifePanel({ settings = {}, draftSettings, setSettings, save,
               ? '✨ 刚洗完澡香香松弛中'
               : '🟢 在线清醒'
 
+    const autoModeLabel =
+      snap.autonomyMode === 'free'
+        ? '🤖 全自动自主模式'
+        : snap.autonomyMode === 'passive'
+          ? '🐾 被动听令模式'
+          : '🏠 日常自主模式'
+
     return h(
       'div',
       { className: 'ab-grid' },
@@ -372,7 +387,7 @@ return function RealLifePanel({ settings = {}, draftSettings, setSettings, save,
         Card,
         {
           title: '此刻的身体与作息',
-          desc: `${snap.wallClock} · ${snap.autonomyMode === 'passive' ? '🐾 被动听令模式' : '🏠 日常自主模式'}${snap.ownerChatting ? '（💬 热聊陪伴保护中）' : ''} · ${snap.groupEnabled ? '👥 群聊已启用' : '🔒 仅私聊生效'} · 连发 ${snap.forceReplyCount || 4} 条强召回 · ❤️ ${snap.affection}`,
+          desc: `${snap.wallClock} | ${autoModeLabel}${snap.autonomyMode !== 'free' && snap.ownerChatting ? '（💬 热聊陪伴保护中）' : ''} | ${snap.groupEnabled ? '👥 群聊已启用' : '🔒 仅私聊生效'} | 睡眠 ${snap.sleepSchedule?.sleepAt || '23:30'}~${snap.sleepSchedule?.wakeAt || '07:45'} | ❤️ ${snap.affection}`,
           right: h(
             'div',
             { className: 'ab-flex', style: { gap: 6, flexWrap: 'wrap' } },
@@ -570,14 +585,15 @@ return function RealLifePanel({ settings = {}, draftSettings, setSettings, save,
         Row,
         {
           label: '生活自主模式',
-          hint: '日常模式：闲时自理三餐如厕，正在聊天时先忍着等主人同意；被动模式：全程等主人批准或投喂',
+          hint: '全自动：吃喝拉撒睡与加餐全由她自己决定，聊着天也只打声招呼就去，仅尊重你明确下令禁止；日常：闲时自理、聊时请示；被动：全程等批准或投喂',
         },
         Select
           ? h(Select, {
               value: curCfg.autonomyMode || 'daily',
               onChange: (v) => putCfg({ autonomyMode: v }),
               options: [
-                { value: 'daily', label: '日常自主模式（闲时自理 · 聊天请示，推荐）' },
+                { value: 'free', label: '全自动自主模式（想干嘛就干嘛 · 仅尊重显式禁令）' },
+                { value: 'daily', label: '日常自主模式（闲时自理 · 聊天请示）' },
                 { value: 'passive', label: '被动听令模式（全程听令请示 / 投喂养成）' },
               ],
             })
@@ -587,7 +603,7 @@ return function RealLifePanel({ settings = {}, draftSettings, setSettings, save,
         Row,
         {
           label: '聊天陪伴保护时长',
-          hint: '跟主人私聊后的这段时间内视为「正在聊天」，期间绝不自作主张去上厕所、洗澡、睡觉或自己吃饭',
+          hint: '日常/被动模式下，跟主人私聊后的这段时间内不会擅自离开；全自动模式下仅保留最多 2 分钟防打断缓冲，其余由她自由决定',
         },
         h(CfgNum, {
           value: curCfg.chatIdleMinutes,
@@ -663,8 +679,8 @@ return function RealLifePanel({ settings = {}, draftSettings, setSettings, save,
         h(
           Row,
           {
-            label: '早 / 午 / 晚饭点',
-            hint: '用逗号分隔三个时间（HH:MM），每天自带 ±15 分钟自然浮动',
+            label: '三餐饭点（支持跨零点）',
+            hint: '用逗号分隔三个时间（HH:MM），自带 ±15 分钟自然浮动。夜猫子作息可填如 14:30, 19:30, 01:00',
           },
           h('input', {
             className: 'ab-input',
@@ -709,10 +725,18 @@ return function RealLifePanel({ settings = {}, draftSettings, setSettings, save,
         h(
           Row,
           {
-            label: '日常模式闲时按配额自理三餐',
-            hint: '关闭后即使在日常模式也不会自己吃饭，纯靠主人投喂或批准',
+            label: '允许按配额自理正餐',
+            hint: '关闭后即使在日常/全自动模式也不会自动吃正餐',
           },
           h(Switch, { on: !!curCfg.autoMeal, onChange: (v) => putCfg({ autoMeal: v }) })
+        ),
+        h(
+          Row,
+          {
+            label: '允许饿时自主找零食 / 夜宵加餐',
+            hint: '全自动模式下默认允许自主加餐；日常模式下打开后，正餐吃完仍很饿时她也会自己找点小零食或夜宵垫肚子',
+          },
+          h(Switch, { on: !!curCfg.autoSnack, onChange: (v) => putCfg({ autoSnack: v }) })
         ),
         h(
           Row,
@@ -750,8 +774,8 @@ return function RealLifePanel({ settings = {}, draftSettings, setSettings, save,
         h(
           Row,
           {
-            label: '晚间洗澡时间',
-            hint: '格式 HH:MM（默认 21:30）',
+            label: '洗澡时间（支持跨零点）',
+            hint: '格式 HH:MM（默认 21:30，夜猫子作息也可填 23:30 或 03:00）',
           },
           h('input', {
             className: 'ab-input sm',
@@ -771,14 +795,14 @@ return function RealLifePanel({ settings = {}, draftSettings, setSettings, save,
       Card,
       {
         title: '睡眠作息、做梦与概率叫醒',
-        desc: '睡着后按浅睡（65%）、REM 做梦（30%）、深睡（12%）阶段概率决定能不能被消息吵醒；连发达到强召回条数则 100% 秒醒。',
+        desc: '支持任意昼夜作息（如 23:30~07:45 或凌晨 05:00~下午 14:00）；睡着后按浅睡（65%）、REM 做梦（30%）、深睡（12%）概率决定叫醒。',
         right: h(Switch, { on: !!curCfg.sleepEnabled, onChange: (v) => putCfg({ sleepEnabled: v }) }),
       },
       h(
         Row,
         {
           label: '平时入睡时间',
-          hint: '格式 HH:MM（默认 23:30）。若到点仍在陪主人聊天，会犯困但不会擅自断联入睡',
+          hint: '格式 HH:MM（如 23:30 或 05:00）。大号、小睡与提醒时段会自动跟随作息，无需手动改代码',
         },
         h('input', {
           className: 'ab-input sm',
@@ -792,7 +816,7 @@ return function RealLifePanel({ settings = {}, draftSettings, setSettings, save,
         Row,
         {
           label: '平时起床时间',
-          hint: '格式 HH:MM（默认 07:45）。自然醒来后会把夜里错过的私聊汇总回复',
+          hint: '格式 HH:MM（如 07:45 或 14:00）。自然醒来后会把睡觉期间错过的私聊汇总回复',
         },
         h('input', {
           className: 'ab-input sm',
@@ -805,10 +829,18 @@ return function RealLifePanel({ settings = {}, draftSettings, setSettings, save,
       h(
         Row,
         {
-          label: '允许午后犯困小睡',
-          hint: '13:10~14:00 精力偏低且没人聊天时小睡约 35 分钟',
+          label: '允许清醒中段犯困小睡',
+          hint: `自动跟随起床后约 5.5 小时（当前预计 ${snap?.napSchedule || '起床后 5.5 小时'}）精力偏低时小睡约 35 分钟`,
         },
         h(Switch, { on: !!curCfg.napEnabled, onChange: (v) => putCfg({ napEnabled: v }) })
+      ),
+      h(
+        Row,
+        {
+          label: 'AI 动态生成专属梦境',
+          hint: '开启后每次进入 REM 睡眠调用一次轻量模型，结合近期聊天、心情与体感生成不重复的梦境；关闭或失败时自动回退至 36+ 条防重复梦境池',
+        },
+        h(Switch, { on: curCfg.aiDream !== false, onChange: (v) => putCfg({ aiDream: v }) })
       ),
       renderSaveHint()
     )
@@ -1095,7 +1127,8 @@ return function RealLifePanel({ settings = {}, draftSettings, setSettings, save,
           h(Btn, { small: true, onClick: () => doScenario('hair') }, '💨 仅吹头发暂离'),
           h(Btn, { small: true, onClick: () => doScenario('deep-sleep') }, '🌙 深睡（12%叫醒）'),
           h(Btn, { small: true, onClick: () => doScenario('light-sleep') }, '😴 浅睡（65%叫醒）'),
-          h(Btn, { small: true, onClick: () => doScenario('rem-dream') }, '💭 REM 做梦（30%叫醒）')
+          h(Btn, { small: true, onClick: () => doScenario('rem-dream') }, '💭 REM 做梦（30%叫醒）'),
+          h(Btn, { small: true, onClick: doGenerateDream }, '✨ 立即生成新梦')
         ),
         h(
           'div',
@@ -1137,8 +1170,12 @@ return function RealLifePanel({ settings = {}, draftSettings, setSettings, save,
               'div',
               { style: boxStyle },
               h('b', { style: { fontSize: 13 } }, '💭 最近做过的梦（仅私密保存，不进群聊）：'),
-              snap.dreams.slice(0, 3).map((d) =>
-                h('div', { key: d.id, className: 'ab-small', style: { marginTop: 4 } }, `· [${d.ymd}] ${d.summary}`)
+              snap.dreams.slice(0, 5).map((d) =>
+                h(
+                  'div',
+                  { key: d.id, className: 'ab-small', style: { marginTop: 4 } },
+                  `- [${d.ymd}${d.source === 'ai' ? ' AI' : ''}] ${d.summary}`
+                )
               )
             )
           : null,

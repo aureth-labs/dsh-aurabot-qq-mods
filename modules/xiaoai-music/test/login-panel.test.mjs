@@ -86,6 +86,9 @@ test('a song shared with the primary cannot be deleted while viewing an external
 
 test('unmatched playlist ids are visible and cleanup refreshes the currently open playlist', async t => {
   const h = await harness({ music: musicFixture(), playlists: [{id:'synthetic-list',name:'Synthetic playlist',ids:['c'.repeat(64)]}] }); t.after(h.close);
+  assert.ok(h.nodes().some(n => n.props['aria-label'] === '全部歌曲内容'));
+  h.nodes().find(n => n.type === 'button' && n.children.some(child => child?.children?.includes('Synthetic playlist'))).props.onClick();
+  h.render();
   assert.ok(h.nodes().some(n => n.children.includes('找不到的歌曲（找不到或无法读取，请重新添加）')));
   await h.button('一键清除失效歌曲').props.onClick(); h.render();
   assert.equal(h.nodes().some(n => n.children.includes('找不到的歌曲（找不到或无法读取，请重新添加）')),false);
@@ -140,7 +143,7 @@ test('first-use panel gates music until storage, connection and names, with opti
   assert.equal(h.button('完成配置，进入模块').props.disabled, true);
   assert.equal(h.button('AI 补足同音词'), undefined);
   await h.button('检查登录与连接').props.onClick(); h.render();
-  assert.match(notice().children[0], /保存主要称呼/);
+  assert.match(notice().children[0], /点击「保存称呼」/);
   assert.equal(switchProps().disabled, true);
   await h.button('保存称呼').props.onClick(); h.render();
   assert.equal(h.button('完成配置，进入模块').props.disabled, false);

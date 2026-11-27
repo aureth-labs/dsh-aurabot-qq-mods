@@ -2,11 +2,10 @@
 // 搜狗对非浏览器请求经常直接给验证页，所以搜索用实测能返回结果页的浏览器标识。
 // 不提交验证码；遇到验证页就失败，等下一轮再试。Cookie 只留在这一轮内存里。
 import { decodeBasic } from './article.mjs'
-import { cookieHeader, pinnedUrl, readBody, rememberCookies, shortError, signalWithTimeout, wait } from './http.mjs'
+import { BROWSER_UA, cookieHeader, pinnedUrl, readBody, rememberCookies, shortError, signalWithTimeout, wait } from './http.mjs'
 import { ACCOUNT, searchQuery, titleMatches, beijing } from './time.mjs'
 
 const SOGOU = ['weixin.sogou.com']
-const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
 const RESULT_RE = /<h3>\s*<a\b[^>]*\bhref="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?class="[^"]*\ball-time-y2\b[^"]*"[^>]*>([^<]*)<\/span>[\s\S]*?timeConvert\((['"])(\d+)\4\)/g
 
 export function searchPageUrl(stamp) {
@@ -92,6 +91,8 @@ export async function locateArticle(stamp, { fetchImpl = (...args) => fetch(...a
   const jar = new Map()
   const search = await fetchHtml(pageUrl, { fetchImpl, signal, jar })
   if (!search.ok) return search
+  // 搜狗拦请求时会回一个正文为空的 200，不能当成「没有收录」。
+  if (!String(search.html).trim()) return { ok: false, missing: false, error: '搜狗返回了空页面，稍后再试' }
   const items = parseResults(search.html)
   if (blocked(search.html) && !items.length) return { ok: false, missing: false, error: '搜狗要求验证，稍后再试' }
   const hit = matchToday(items, stamp)

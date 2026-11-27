@@ -1,12 +1,32 @@
 // 摸鱼人日历。模块接口见宿主 API.md；不修改插件代码。
-// 入口只放设置、定时和发送。搜狗、RSS、文章和图片在 lib/。
+// 入口只放设置、定时、面板接口和发送。合集、搜狗、RSS、文章和图片在 lib/。
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { downloadImage, pruneCache, readCache, writeCache } from './lib/image.mjs'
-import { decideTick, initialState, matchBareCommand, parseCommandAliases, parseTargets, splitLegacyTargets } from './lib/schedule.mjs'
-import { resolveCalendar } from './lib/source.mjs'
+import { downloadImage, pruneCache, readCache, removeCache, writeCache } from './lib/image.mjs'
+import { clearedState, decideTick, initialState, matchBareCommand, parseCommandAliases, parseTargets, splitLegacyTargets } from './lib/schedule.mjs'
+import { resolveCalendar, sourceLabel, traceText } from './lib/source.mjs'
 import { beijing } from './lib/time.mjs'
 
 const DESCRIPTION = '每天从公众号「摸鱼人日历」取当日日历图，定时发到指定 QQ 聊天。'
+
+/** 写接口只给面板用：不接受 GET；跨站请求、Origin 和 Host 对不上的都拒绝。 */
+export function sameOriginRequest(req) {
+  const method = String(req?.method || 'GET').toUpperCase()
+  if (method === 'GET' || method === 'HEAD') return false
+  const site = String(req?.headers?.['sec-fetch-site'] || '').trim().toLowerCase()
+  if (site && !['same-origin', 'same-site', 'none'].includes(site)) return false
+  const origin = String(req?.headers?.origin || '').trim()
+  if (!origin) return true
+  try { return new URL(origin).host === String(req?.headers?.host || '') } catch { return false }
+}
+
+export async function readJsonBody(req, maxBytes = 4096) {
+  let raw = ''
+  for await (const chunk of req) {
+    raw += chunk
+    if (raw.length > maxBytes) throw new Error('请求体太大')
+  }
+  return raw ? JSON.parse(raw) : {}
+}
 
 function defaultBrowser(api) {
   try {
@@ -25,9 +45,11 @@ export function createModule({ fetchImpl, now = () => Date.now(), browserOf, sle
   return {
     id: 'moyu-calendar',
     name: '摸鱼人日历',
-    version: '1.0.6',
+    version: '1.0.9',
     api: 1,
     description: DESCRIPTION,
+    // 面板多一块：看今天从哪取的图，清除已获取的图让模块重新取。
+    panel: 'panel.js',
     defaults: {
       daily: true,
       time: '08:00',
@@ -35,6 +57,7 @@ export function createModule({ fetchImpl, now = () => Date.now(), browserOf, sle
       privateChats: '',
       groupChats: '',
       rssUrl: '',
+      rssAllowPrivate: false,
       caption: '来源：公众号 摸鱼人日历',
       commands: '摸鱼日历\n摸鱼\n摸鱼人日历',
     },
@@ -44,7 +67,8 @@ export function createModule({ fetchImpl, now = () => Date.now(), browserOf, sle
       { key: 'deadline', label: '截止时间（北京时间）', type: 'text', hint: '默认 12:00，要晚于开始时间。到点仍没有今天的文章就记为今日无更新，不再重试。已经下到的图还会补发给没收到的聊天。' },
       { key: 'privateChats', label: '私聊接收', type: 'textarea', hint: '一行一个 QQ 号，不用写 private:。留空发给主人。手动命令仍回复当前聊天。' },
       { key: 'groupChats', label: '群聊接收', type: 'textarea', hint: '一行一个群号，不用写 group:。留空则不发到群。' },
-      { key: 'rssUrl', label: 'RSS 地址（可选）', type: 'text', hint: '自建 we-mp-rss / wechat2rss 订阅「摸鱼人日历」的地址。填了就优先用，失败再走搜狗和逛网页。' },
+      { key: 'rssUrl', label: 'RSS 地址（可选）', type: 'text', hint: '自建 wechat-mp-tools / we-mp-rss 订阅「摸鱼人日历」的地址。填了就优先用，失败再走合集、搜狗和逛网页。' },
+      { key: 'rssAllowPrivate', label: '允许内网 RSS', type: 'switch', hint: '默认关。RSS 跑在本机或局域网（如 192.168.x.x、10.x.x.x、localhost）时打开，否则会被拒绝。地址仍须是 HTTP(S) 且不带账号密码。' },
       { key: 'caption', label: '图片附言', type: 'text', hint: '跟在图片后面。留空则只发图。默认注明来源。' },
       { key: 'commands', label: '发送指令', type: 'textarea', hint: '一行一个。直接发「摸鱼人日历」或 /摸鱼人日历 都会发图。最多 20 个。/moyu 一直可用；后面加「状态」只看任务、不发图。' },
     ],
@@ -57,6 +81,7 @@ export function createModule({ fetchImpl, now = () => Date.now(), browserOf, sle
       let busy = false
       let stopped = false
       let lastError = ''
+      let lastRemoved = 0
 
       const persist = async () => {
         await mkdir(dir, { recursive: true })
@@ -98,6 +123,8 @@ export function createModule({ fetchImpl, now = () => Date.now(), browserOf, sle
           rss: Boolean(String(settings.rssUrl || '').trim()),
           source: state.source || '',
           title: state.title || '',
+          // 最近一次取到图的日期，用来区分「今天取过」和「上次取是哪天」。
+          fetched: state.fetched || '',
           today: state.noUpdate === stamp.date ? 'none' : state.completed === stamp.date ? 'sent' : 'pending',
           state: {
             date: state.date || '',
@@ -116,7 +143,9 @@ export function createModule({ fetchImpl, now = () => Date.now(), browserOf, sle
         const shownError = String(info.lastError || '无').replace(/(private|group):\d+/g, '接收聊天')
         return [
           `自动发送：${info.daily ? '开启' : '关闭'}，北京时间 ${info.time} 至 ${info.deadline}`,
-          `来源：${info.rss ? 'RSS 优先，失败再用搜狗' : '搜狗 + 逛网页'}`,
+          `取图顺序：${info.rss ? 'RSS → 合集 → 搜狗' : '合集 → 搜狗'}`,
+          // 这是实际用了哪一路，和上面的顺序不是一回事。
+          `实际来源：${info.fetched ? `${sourceLabel(info.source)}，${info.fetched}${info.title ? `《${info.title}》` : ''}` : '还没取过'}`,
           `任务：${info.busy ? '获取中' : '空闲'}`,
           `今天：${progress}`,
           `上次完成：${info.state.completed || '暂无'}`,
@@ -144,10 +173,18 @@ export function createModule({ fetchImpl, now = () => Date.now(), browserOf, sle
       }
       async function loadCard(stamp) {
         const cached = await readCache(dir, stamp.date)
-        if (cached) return { ...cached, title: state.title || '', source: state.source || 'cache' }
+        if (cached) {
+          // source 是「这一次从哪拿的」，缓存命中就是 cache；origin 记这张图最初是哪一路取的。
+          if (state.fetched !== stamp.date) {
+            state = { ...state, fetched: stamp.date }
+            await persist().catch(error => api.log.warn('写任务记录失败', error.message))
+          }
+          return { ...cached, title: state.title || '', source: 'cache', origin: state.source || '' }
+        }
         const resolved = await resolveCalendar({
           stamp,
           rssUrl: api.settings().rssUrl,
+          rssAllowPrivate: api.settings().rssAllowPrivate === true,
           fetchImpl: netFetch,
           getBrowser: () => (browserOf || defaultBrowser)(api),
           signal: controller.signal,
@@ -156,15 +193,23 @@ export function createModule({ fetchImpl, now = () => Date.now(), browserOf, sle
         if (!resolved.ok) {
           const error = new Error(resolved.error || '没找到今天的摸鱼人日历')
           error.missing = Boolean(resolved.missing)
+          error.trace = resolved.trace
           throw error
         }
-        const downloaded = await downloadImage(resolved.imageUrl, { fetchImpl: netFetch, signal: controller.signal })
+        const downloaded = await downloadImage(resolved.imageUrl, {
+          fetchImpl: netFetch,
+          signal: controller.signal,
+          // RSS 把图片放在自己服务器上时，只认 RSS 自己的站点。
+          allowedOrigin: resolved.imageOrigin || '',
+        })
         if (!downloaded.ok) throw new Error(downloaded.error)
         const saved = await writeCache(dir, stamp.date, downloaded.bytes, downloaded.mime)
         await pruneCache(dir, 14, now()).catch(error => api.log.warn('清理旧日历图失败', error.message))
-        state = { ...state, title: resolved.title || '', source: resolved.source || '' }
+        state = { ...state, title: resolved.title || '', source: resolved.source || '', fetched: stamp.date }
         await persist()
-        return { ...saved, title: state.title, source: state.source }
+        // 每次真正去取都留一条来源，连同前面几路为什么没用上。手动命令和定时任务都从这里过。
+        api.log.info('摸鱼日历取到图', `来源：${sourceLabel(resolved.source)}`, traceText(resolved.trace), resolved.title || '')
+        return { ...saved, title: state.title, source: state.source, origin: state.source }
       }
       async function exclusive(fn) {
         if (busy) throw new Error('摸鱼日历正在获取中，请稍后再试')
@@ -175,6 +220,17 @@ export function createModule({ fetchImpl, now = () => Date.now(), browserOf, sle
         } finally { busy = false }
       }
 
+      // 面板的「清除已获取」：删掉今天缓存的图，今天的进度从头算，定时任务会重新取图并发送。
+      async function clearToday() {
+        const stamp = clock()
+        const removed = await removeCache(dir, stamp.date)
+        state = clearedState(state, stamp, removed)
+        await persist()
+        lastRemoved = removed
+        api.log.info('已清除今天获取的摸鱼日历', `删掉 ${removed} 张缓存图`)
+        return removed
+      }
+
       async function command(arg, msg) {
         if (stopped) return '摸鱼日历模块已停止'
         if (/^(状态|status)$/i.test(String(arg || '').trim())) return statusText()
@@ -183,12 +239,16 @@ export function createModule({ fetchImpl, now = () => Date.now(), browserOf, sle
         try {
           await exclusive(async () => {
             const card = await loadCard(clock())
+            api.log.info('摸鱼日历手动取图',
+              card.source === 'cache' ? `用的是缓存里的图，最初来源：${sourceLabel(card.origin)}` : `来源：${sourceLabel(card.source)}`,
+              card.title || '')
             await deliver(msg.chatId, card)
             lastError = ''
           })
           // 图已经发到当前聊天。空字符串宿主不会再跟一条文字。
           return ''
         } catch (error) {
+          api.log.warn('摸鱼日历手动获取没取到', error.message, traceText(error.trace))
           return `摸鱼日历没取到：${error.message}`
         }
       }
@@ -272,11 +332,11 @@ export function createModule({ fetchImpl, now = () => Date.now(), browserOf, sle
             state.completed = stamp.date
             lastError = ''
             await persist()
-            api.log.info('今天的摸鱼人日历已发送', card.source || 'cache')
+            api.log.info('今天的摸鱼人日历已发送', card.source === 'cache' ? '来源：缓存' : `来源：${sourceLabel(card.source)}`, card.title || '')
           })
         } catch (error) {
-          if (error.settled) api.log.info('摸鱼日历今天没有更新', error.message)
-          else api.log.warn('摸鱼日历稍后重试', error.message)
+          if (error.settled) api.log.info('摸鱼日历今天没有更新', error.message, traceText(error.trace))
+          else api.log.warn('摸鱼日历稍后重试', error.message, traceText(error.trace))
         }
       }
 
@@ -311,6 +371,19 @@ export function createModule({ fetchImpl, now = () => Date.now(), browserOf, sle
         return true
       })
       api.route('/status', () => ({ ok: true, ...status() }))
+      // 面板的「清除已获取」。只收同源的 POST，并且要带 confirm，别的网页借不到这个接口。
+      api.route('/clear', async (req) => {
+        if (!sameOriginRequest(req)) return { ok: false, message: '只允许在面板里清除' }
+        const body = await readJsonBody(req).catch(() => ({}))
+        if (body.confirm !== true) return { ok: false, message: '请点面板上的按钮来清除' }
+        if (stopped) return { ok: false, message: '摸鱼日历模块已停止' }
+        if (busy) return { ok: false, message: '正在获取中，稍后再清除' }
+        try { await clearToday() } catch (error) {
+          api.log.warn('清除摸鱼日历缓存失败', error.message)
+          return { ok: false, message: `清除失败：${error.message}` }
+        }
+        return { ok: true, removed: lastRemoved, ...status() }
+      })
       api.every(60000, () => { tick().catch(error => api.log.warn('摸鱼日历定时任务出错', error.message)) }, '摸鱼人日历')
       api.onDispose(() => { stopped = true; controller.abort() })
       return { status, tick }
