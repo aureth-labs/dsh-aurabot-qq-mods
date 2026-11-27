@@ -7,3 +7,4 @@ await import('./search.test.mjs');
 await import('./timeouts.test.mjs');
 await import('./errors.test.mjs');
 await import('./page-images.test.mjs');
+await import('./source-guidance.test.mjs');
