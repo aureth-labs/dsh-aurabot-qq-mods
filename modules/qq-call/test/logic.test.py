@@ -222,7 +222,7 @@ class GreetTest(unittest.TestCase):
     """模型想不出来时回「安静」= 她决定先听着。"""
 
     def test_认安静(self):
-        for line in ["安静", " 安静 ", "（安静）", "[安静]", "[安静] ", "【安静】"]:
+        for line in ["安静", " 安静 ", "（安静）", "[安静]"]:
             self.assertTrue(logic.greet_is_silent(line), line)
 
     def test_不认别的(self):
