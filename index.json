@@ -4077,6 +4077,45 @@
       "publishedAt": "2026-11-14T11:27:01.919Z"
     },
     {
+      "id": "world-link",
+      "name": "开放世界",
+      "version": "0.1.0",
+      "description": "所有大肥鱼能进入的世界，让她以本人身份进入 3D 开放世界：自主观察、走动、说话、牵手、跳舞、采集、盖房子；主人只能旁观和发建议。",
+      "category": "social",
+      "tags": [
+        "开放世界",
+        "3D",
+        "互动",
+        "社交",
+        "虚拟形象"
+      ],
+      "platforms": [
+        "*"
+      ],
+      "author": "xjy221886-source",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.3.0",
+      "requires": [
+        "memory"
+      ],
+      "capabilities": [
+        "network",
+        "filesystem",
+        "plugin-config",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "homepage": "http://se5.nodaroo.fun:26048/",
+      "tag": "world-link-v0.1.0",
+      "file": "world-link-v0.1.0.zip",
+      "path": "world-link-v0.1.0/world-link-v0.1.0.zip",
+      "size": 21927,
+      "sha256": "44ba8281c05f68d95d4235add1f045b7fa3d34a0b6caed80738580dc20270c9d",
+      "commit": "8f4f9a348917c2c9e28f94f1f30e292f5f090228",
+      "publishedAt": "2026-11-27T02:57:50.604Z"
+    },
+    {
       "id": "xhs",
       "name": "刷小红书",
       "version": "0.3.6",
@@ -4178,5 +4217,5 @@
       "reason": "作者主动撤回。"
     }
   ],
-  "generatedAt": "2026-11-27T02:57:08.029Z"
+  "generatedAt": "2026-11-27T02:57:50.604Z"
 }
