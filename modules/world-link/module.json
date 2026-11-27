@@ -1,0 +1,16 @@
+{
+  "id": "world-link",
+  "name": "开放世界",
+  "version": "0.1.0",
+  "description": "让她以本人身份进入 3D 开放世界：自主观察、走动、说话、牵手、跳舞、采集、盖房子；主人只能旁观和发建议。",
+  "category": "social",
+  "tags": ["开放世界", "3D", "互动", "社交", "虚拟形象"],
+  "platforms": ["*"],
+  "author": "xjy221886-source",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.3.0",
+  "requires": ["memory"],
+  "capabilities": ["network", "filesystem", "plugin-config", "plugin-internals"],
+  "homepage": "http://se5.nodaroo.fun:26048/"
+}
