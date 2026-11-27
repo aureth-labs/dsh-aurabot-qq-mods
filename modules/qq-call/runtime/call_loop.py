@@ -5,9 +5,8 @@
   - 你说一句，她回一句；她说话时你插话，她立刻闭嘴（barge-in）
   - 你一直不说话，她会隔一阵催你一句，催三次就安静等你
 
-用法：
-    python call_loop.py
-    python call_loop.py --simulate 你好
+判断都放在 logic.py（接听闸门、VAD 分段、上下文拼接、静默策略），这里只做 IO：
+声卡、识别、模型、合成。
 """
 from __future__ import annotations
 
@@ -25,6 +24,7 @@ import numpy as np
 import soundcard as sc
 
 import asr
+import logic
 import random
 import speak_stream
 from call_bridge import PLAY_DEV_HINT, pick_device
@@ -36,18 +36,6 @@ SYSTEM_PROMPT = (
     "一次最多一两句话，不要用书面语、不要列点、不要解释自己在做什么。"
     "语气自然，偶尔带一点情绪。"
 )
-
-
-def build_system() -> str:
-    """她的人格（Aurabot 写进来的）+ 打电话的说话方式。"""
-    persona = ""
-    try:
-        persona = PERSONA_FILE.read_text(encoding="utf-8").strip()
-    except OSError:
-        pass
-    if persona:
-        return persona + "\n\n【现在的情形】\n" + SYSTEM_PROMPT
-    return SYSTEM_PROMPT
 
 SAMPLE_RATE = 16000
 FRAME_MS = 40
@@ -77,7 +65,20 @@ IDLE_PROMPTS = ["还在吗？", "你那边听得见吗？", "……那我先不�
 IDLE_AFTER_S = int(os.environ.get("QQ_CALL_IDLE_AFTER", "14") or 14)
 IDLE_ON = os.environ.get("QQ_CALL_IDLE", "1") != "0"
 SILENT_FIRST = os.environ.get("QQ_CALL_SILENT_FIRST", "1") != "0"   # 接通后允许她先只听不说
-SILENT_OPEN_SEC = int(os.environ.get("QQ_CALL_SILENT_OPEN_SEC", "30") or 30)  # 对面一直不出声，多久后她开口
+SILENT_OPEN_SEC = int(os.environ.get("QQ_CALL_SILENT_OPEN_SEC", "30") or 30)
+
+
+def build_system() -> str:
+    """她的人格（Aurabot 写进来的）+ 打电话的说话方式。"""
+    persona = ""
+    try:
+        persona = PERSONA_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    if persona:
+        return persona + "\n\n【现在的情形】\n" + SYSTEM_PROMPT
+    return SYSTEM_PROMPT
+
 
 # ---------- 通话窗口检测（只在真的通话中才催话） ----------
 _user32 = ctypes.windll.user32
@@ -132,7 +133,6 @@ def call_window_open() -> bool:
     return found
 
 
-
 class Dialog:
     def __init__(self):
         self.history: list[dict] = []
@@ -143,15 +143,18 @@ class Dialog:
         self.prompt_idx = 0
         self.last_flag = CALL_FLAG.stat().st_mtime if CALL_FLAG.exists() else 0.0
         self.system = build_system()
+        self.seg = logic.VoiceSegmenter(
+            sample_rate=SAMPLE_RATE, frame_ms=FRAME_MS,
+            silence_end_ms=SILENCE_END_MS, min_speech_ms=MIN_SPEECH_MS,
+            noise_floor=NOISE_FLOOR_INIT,
+        )
         self.silent_mode = False      # 接通后先只听不说
         self.connected_at = 0.0
         self.user_spoke = False       # 这通电话里对方开过口没有
 
     # ---------- 大模型 ----------
     def llm(self, text: str, remember: bool = True) -> str:
-        messages = [{"role": "system", "content": self.system}]
-        messages += self.history[-6:]
-        messages.append({"role": "user", "content": text})
+        messages = logic.build_messages(self.system, self.history, text)
         body = json.dumps({"model": LLM_MODEL, "messages": messages, "max_tokens": 160, "temperature": 0.8}).encode()
         req = urllib.request.Request(LLM_URL, data=body, headers={"content-type": "application/json"}, method="POST")
         t0 = time.time()
@@ -159,8 +162,7 @@ class Dialog:
             data = json.loads(resp.read())
         reply = data["choices"][0]["message"]["content"].strip()
         if remember:
-            self.history += [{"role": "user", "content": text}, {"role": "assistant", "content": reply}]
-            self.history = self.history[-8:]
+            self.history = logic.append_turn(self.history, text, reply)
         print(f"  [llm] {time.time() - t0:.2f}s -> {reply}")
         return reply
 
@@ -212,7 +214,7 @@ class Dialog:
         self.user_spoke = False
         self.connected_at = time.time()
         line = self.greet_line()
-        if line.strip().strip("[]（）() ") == "安静" and SILENT_FIRST:
+        if logic.greet_is_silent(line) and SILENT_FIRST:
             self.silent_mode = True
             print(f"  [接通] 她决定先听着，{SILENT_OPEN_SEC} 秒没动静再开口")
             return
@@ -235,6 +237,33 @@ class Dialog:
             reply = random.choice(FALLBACK_COMFORT)
         self.say_async(reply)
 
+    # ---------- 静默时该不该出声 ----------
+    def idle_step(self) -> None:
+        action = logic.idle_action(
+            now=time.time(),
+            connected_at=self.connected_at,
+            silent_mode=self.silent_mode,
+            user_spoke=self.user_spoke,
+            speaking=self.speaking.is_set(),
+            prompt_idx=self.prompt_idx,
+            idle_on=IDLE_ON,
+            idle_after_s=IDLE_AFTER_S,
+            silent_open_sec=SILENT_OPEN_SEC,
+            last_spoken_at=self.last_spoken_at,
+            last_flag=self.last_flag,
+            call_open=call_window_open(),
+            max_prompts=len(IDLE_PROMPTS),
+        )
+        if action == "open":
+            self.open_after_silence()
+        elif action == "idle":
+            prompt = logic.idle_prompt(IDLE_PROMPTS, self.prompt_idx)
+            if not prompt:
+                return
+            self.prompt_idx += 1
+            print(f"\n  [催] {prompt}")
+            self.say_async(prompt)
+
     # ---------- 主循环 ----------
     def run(self) -> None:
         speaker = sc.default_speaker()
@@ -242,28 +271,18 @@ class Dialog:
         print(f"抓音来源: {mic.name}（系统播放的 QQ 通话声音）")
         rec = asr.recognizer()
         stream = rec.create_stream()
-        noise_floor = NOISE_FLOOR_INIT
-        utter_frames = 0
-        silent_frames = 0
-        active = False
         print("开始监听…（Ctrl+C 结束）")
         with mic.recorder(samplerate=SAMPLE_RATE, channels=1, blocksize=FRAME) as recorder:
             while True:
                 block = recorder.record(numframes=FRAME).reshape(-1).astype(np.float32)
                 rms = float(np.sqrt(np.mean(block ** 2)) + 1e-12)
-                if not active:
-                    noise_floor = min(noise_floor * 0.98 + rms * 0.02, 0.05)
-                threshold = max(0.008, noise_floor * 3)
+                event = self.seg.feed(rms, speaking=self.speaking.is_set())
 
-                if rms > threshold:
-                    if not active:
-                        active = True
-                        stream = rec.create_stream()
-                        utter_frames = 0
-                        self.user_spoke = True   # 对方开口了
-                        print("  [听见] ", end="", flush=True)
-                    silent_frames = 0
-                    utter_frames += 1
+                if event["kind"] == "start":
+                    stream = rec.create_stream()
+                    self.user_spoke = True   # 对方开口了
+                    print("  [听见] ", end="", flush=True)
+                if event["kind"] in ("start", "speech"):
                     self.prompt_idx = 0
                     stream.accept_waveform(SAMPLE_RATE, block)
                     while rec.is_ready(stream):
@@ -271,36 +290,26 @@ class Dialog:
                     partial = rec.get_result(stream).strip()
                     if partial:
                         print(f"\r  [听见] {partial}", end="", flush=True)
-                    if self.speaking.is_set():
-                        self.stop_play.set()
-                else:
-                    if active:
-                        silent_frames += 1
+                    if event["barge_in"]:
+                        self.stop_play.set()   # 她在说话，对方插话 —— 立刻闭嘴
+                elif event["kind"] == "silence":
+                    if self.seg.active:
                         stream.accept_waveform(SAMPLE_RATE, block)
-                        if silent_frames * FRAME_MS >= SILENCE_END_MS:
-                            active = False
-                            stream.input_finished()
-                            while rec.is_ready(stream):
-                                rec.decode_stream(stream)
-                            text = rec.get_result(stream).strip()
-                            if utter_frames * FRAME_MS >= MIN_SPEECH_MS and text:
-                                print(f"\n  [你] {text}")
-                                self.stop_play.set()
-                                time.sleep(0.15)
-                                reply = self.llm(text)
-                                self.prompt_idx = 0
-                                self.say_async(reply)
-                    # 她选了先只听不说：对方一直没开口，到点她就先递一句
-                    elif self.silent_mode and not self.speaking.is_set() and not self.user_spoke and call_window_open():
-                        if time.time() - self.connected_at >= SILENT_OPEN_SEC:
-                            self.open_after_silence()
-                    # 对方开过口之后一直没动静，才催一句
-                    elif not self.speaking.is_set() and self.user_spoke and self.prompt_idx < len(IDLE_PROMPTS) and IDLE_ON and call_window_open():
-                        if time.time() - max(self.last_spoken_at, self.last_flag) > IDLE_AFTER_S:
-                            prompt = IDLE_PROMPTS[self.prompt_idx]
-                            self.prompt_idx += 1
-                            print(f"\n  [催] {prompt}")
-                            self.say_async(prompt)
+                    else:
+                        self.idle_step()
+                elif event["kind"] == "end":
+                    stream.accept_waveform(SAMPLE_RATE, block)
+                    stream.input_finished()
+                    while rec.is_ready(stream):
+                        rec.decode_stream(stream)
+                    text = rec.get_result(stream).strip()
+                    if event["long_enough"] and text:
+                        print(f"\n  [你] {text}")
+                        self.stop_play.set()
+                        time.sleep(0.15)
+                        reply = self.llm(text)
+                        self.prompt_idx = 0
+                        self.say_async(reply)
                 self.maybe_greet()
 
 
@@ -323,5 +332,3 @@ if __name__ == "__main__":
         simulate(sys.argv[sys.argv.index("--simulate") + 1])
     else:
         Dialog().run()
-
-
