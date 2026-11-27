@@ -137,7 +137,7 @@ return function QQCallPanel({ settings, draftSettings, setSettings, toast }) {
       h('p', { className: 'ab-note', style: { marginTop: 8, marginBottom: 0 } },
         '纯 CPU 的机器上，GPT-SoVITS 一句要 7 秒、RVC 转 2 秒音频要 15 秒，所以实时对话里先不给这两个选项；有显卡了自己加进引擎列表。'),
       h('p', { className: 'ab-note', style: { marginTop: 6, marginBottom: 0 } },
-        '接通后第一句她自己现想：用她现成的人格编，每次都不一样，也可能是“先不叽声、只听”。她一时说不出话时会从几句随机的话里挑一句；这格留作最底线的备用。'),
+        '接通后第一句她自己现想：用她现成的人格编，每次都不一样，也可能是“先不吭声、只听”。她一时说不出话时会从几句随机的话里挑一句；这格留作最底线的备用。'),
       h('div', { style: { marginTop: 12, marginBottom: 4, fontSize: 12, opacity: 0.75 } }, '兜底开场白（只在生成失败时用）'),
       h('input', {
         className: 'ab-input', type: 'text', value: d.greeting || '',
