@@ -79,7 +79,9 @@ test('周期计算：跨天、重置小时、跨年', () => {
   assert.equal(prevDayKey('2026-01-01'), '2025-12-31')
   assert.equal(prevDayKey('bad'), '')
   assert.equal(dayKey(new Date(2026, 1, 3)), '2026-02-03')
-  assert.ok(nextResetAt(new Date(2026, 10, 26, 9, 0), 0) > Date.now() - 1)
+  // 用固定日期比较，别拿 Date.now()：这条用例过了一天就会因为「下次重置时间已过去」而假挂。
+  assert.equal(nextResetAt(new Date(2026, 10, 26, 9, 0), 0), new Date(2026, 10, 27, 0, 0).getTime())
+  assert.equal(nextResetAt(new Date(2026, 10, 26, 9, 0), 3), new Date(2026, 10, 27, 3, 0).getTime())
 })
 
 test('聊天流水提炼：按 chatId 过滤、跳过遗忘、限量', () => {
