@@ -3,6 +3,7 @@ import { createReadStream, constants } from 'node:fs';
 import { mkdir, readFile, writeFile, copyFile, rename, readdir, rm, unlink, realpath, lstat } from 'node:fs/promises';
 import { join, relative, isAbsolute, resolve } from 'node:path';
 import { audioFileName } from './storage.mjs';
+import { validLocalVoiceId } from './local-voices.mjs';
 
 export class FamilySongError extends Error {
   constructor(code, message) { super(message); this.code = code; }
@@ -15,6 +16,12 @@ export function songFailure(error) {
   if (/size mismatch|state_dict|unexpected key|Missing key/i.test(text)) return { code: 'FAMILY_VOICE_INCOMPATIBLE', message: '妈妈音色模型与当前推理引擎不兼容，本次未生成。' };
   if (/没有人声|纯音乐|伴奏版/.test(text)) return { code: 'FAMILY_NO_VOCAL', message: '选定版本没有可用人声，请另选版本。' };
   if (/会员|版权|下载不了/.test(text)) return { code: 'FAMILY_SOURCE_UNAVAILABLE', message: '选定版本暂时无法获取完整音频，请另选版本。' };
+  if (/本地整曲渲染版本不匹配|渲染版本不匹配/.test(text)) return { code: 'FAMILY_LOCAL_VERSION_MISMATCH', message: text.slice(0, 300) };
+  if (/本地整曲音色.*(未登记|不可用)|已不可用/.test(text)) return { code: 'FAMILY_LOCAL_VOICE_UNAVAILABLE', message: text.slice(0, 300) };
+  if (/本地整曲钩子未开启|本地接口/.test(text)) return { code: 'FAMILY_LOCAL_HOOK_OFF', message: text.slice(0, 300) };
+  if (/钩子.*(失败|未按约定|音色不一致)|未返回标记为 master|成品不在任务目录|没写出有效成品/.test(text)) return { code: 'FAMILY_LOCAL_HOOK_ERROR', message: text.slice(0, 300) };
+  if (/只支持原调|不支持变调/.test(text)) return { code: 'FAMILY_LOCAL_PITCH_UNSUPPORTED', message: text.slice(0, 300) };
+  if (/本地整曲/.test(text)) return { code: 'FAMILY_LOCAL_GENERATION_FAILED', message: text.slice(0, 300) };
   return { code: 'FAMILY_GENERATION_FAILED', message: '完整歌曲生成未完成，请检查翻唱环境和所选音色。' };
 }
 
@@ -41,6 +48,7 @@ export class SongLibrary {
     this.metadataRoot = join(root, '歌曲信息');
     this.sources = new Map();
     this.entries = new Map();
+    this.invalidIds = new Set();
     this.jobs = new Map();
     this.tail = Promise.resolve();
     this.removing = new Set();
@@ -59,8 +67,16 @@ export class SongLibrary {
     for (const item of metadata) {
       if (item.isFile() && /^[a-f0-9]{64}\.json$/.test(item.name)) ids.add(item.name.slice(0, -5));
     }
+    this.invalidIds.clear();
     for (const id of ids) {
-      const entry = await this.readEntry(id, { allowMissing });
+      let entry;
+      try { entry = await this.readEntry(id, { allowMissing }); }
+      catch (error) {
+        if (!allowMissing || error.code !== 'FAMILY_CACHE_INVALID') throw error;
+        this.invalidIds.add(id);
+        this.entries.delete(id);
+        continue;
+      }
       if (entry) { this.entries.set(entry.id, entry); this.addSources([entry.source]); }
     }
   }
@@ -90,18 +106,24 @@ export class SongLibrary {
     let legacy = false;
     try { text = await readFile(join(this.metadataRoot, id + '.json'), 'utf8'); }
     catch (error) {
-      if (error.code !== 'ENOENT') throw error;
+      if (error.code !== 'ENOENT') throw new FamilySongError('FAMILY_CACHE_INVALID', '歌曲元数据不可读，原文件已保留。');
       legacy = true;
       try { text = await readFile(join(this.root, id, 'manifest.json'), 'utf8'); }
-      catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+      catch (error) {
+        if (error.code === 'ENOENT') return null;
+        throw new FamilySongError('FAMILY_CACHE_INVALID', '歌曲元数据不可读，原文件已保留。');
+      }
     }
     try {
       const entry = JSON.parse(text);
+      const localVoice = entry.identity?.voice?.role === 'local';
       if (entry.schema !== (legacy ? 1 : 2) || entry.id !== id || entry.full !== true ||
           entry.file !== (legacy ? 'audio.mp3' : audioFileName(entry)) ||
           !(entry.duration > 0) || !(entry.sourceDuration > 0) || Math.abs(entry.duration - entry.sourceDuration) > 1 ||
           (entry.source?.durationSec > 0 && Math.abs(entry.sourceDuration - entry.source.durationSec) > 2) ||
-          !['mother', 'original'].includes(entry.identity?.voice?.role) || !entry.source?.title ||
+          !['mother', 'original', 'local'].includes(entry.identity?.voice?.role) || !entry.source?.title ||
+          (localVoice && (typeof entry.identity.voice.id !== 'string' || !validLocalVoiceId(entry.identity.voice.id) ||
+            typeof entry.identity.voice.renderVersion !== 'string' || !entry.identity.voice.renderVersion.trim())) ||
           !/^[a-f0-9]{64}$/.test(entry.audioSha256) ||
           createHash('sha256').update(JSON.stringify(stable(entry.identity))).digest('hex') !== id ||
           await hashFile(legacy ? join(this.root, id, entry.file) : join(this.root, entry.file)) !== entry.audioSha256) throw new Error();
@@ -119,7 +141,8 @@ export class SongLibrary {
     if (!['cover', 'original'].includes(mode) || typeof voice !== 'string') throw new FamilySongError('FAMILY_MODE_INVALID', '请选择原曲或有效翻唱音色。');
     const recipe = await this.describe(source, pitch, { mode, voice });
     const identity = stable(recipe.identity);
-    if (identity.voice?.role !== (mode === 'original' ? 'original' : 'mother')) throw new FamilySongError('FAMILY_VOICE_REQUIRED', '歌曲类型不匹配。');
+    const allowed = mode === 'original' ? ['original'] : ['mother', 'local'];
+    if (!allowed.includes(identity.voice?.role)) throw new FamilySongError('FAMILY_VOICE_REQUIRED', '歌曲类型不匹配。');
     const id = createHash('sha256').update(JSON.stringify(identity)).digest('hex');
     const changedByRemoval = () => this.removing.has(id) || (this.removedVersions.get(id) || 0) > startedBeforeRemoval;
     if (changedByRemoval()) throw new FamilySongError('FAMILY_ENTRY_BUSY', '这首歌曲正在删除或已被移除，请刷新曲库。');
@@ -136,8 +159,8 @@ export class SongLibrary {
     job.promise = this.tail.then(async () => {
       job.state = 'generating';
       const work = join(this.workRoot, randomUUID());
-      await mkdir(work, { recursive: true });
       try {
+        await mkdir(work, { recursive: true });
         const result = await recipe.render(work, provider => { job.stageProvider = provider; });
         if (!within(work, result.file) || !within(work, result.source) ||
             !(result.duration > 0) || !(result.sourceDuration > 0) ||
@@ -165,7 +188,8 @@ export class SongLibrary {
         const failure = songFailure(error);
         job.state = 'failed';
         job.error = failure;
-        if (['准备完整歌曲', '下载歌曲', '截取要唱的那一段', '分离人声和伴奏', '换成她的声音', '混音', '换一版重下'].includes(error?.familyStage)) job.error.stage = error.familyStage;
+        if (['准备完整歌曲', '下载歌曲', '截取要唱的那一段', '分离人声和伴奏', '换成她的声音', '混音', '换一版重下',
+          '准备本地整曲', '本地整曲生成', '成品转码'].includes(error?.familyStage)) job.error.stage = error.familyStage;
         throw new FamilySongError(failure.code, failure.message);
       } finally {
         job.stageProvider = null;

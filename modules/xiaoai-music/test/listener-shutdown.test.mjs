@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import { SpeakerProbe, matchSavedSongSources, WAKE_ACK_LEAD_IN_MS } from '../lib/speaker/probe.mjs';
 import { recognitionRows } from '../lib/speaker/recognition.mjs';
+import { DAILY_PLAYLIST_ID, makeDailyPlaylist } from '../lib/songs/playlists.mjs';
 
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 const settle = () => new Promise(resolve => setImmediate(resolve));
@@ -29,8 +30,15 @@ async function fixture() {
   const speaker = { conversations: async () => { arms++; return []; }, conversationsSince: async () => records,
     close: async () => {}, operate: async action => { if (action === 'pause') pauses++; }, releasePlayback() {},
     status: async () => { if (hold.reminderStatus) { reminderStatusStarted.resolve(); await reminderStatusWait.promise; } return { playback: 'paused' }; } };
-  const service = { status: () => ({}),
-    ensureSession: async () => { sessions++; if (hold.session) { sessionStarted.resolve(); await sessionWait.promise; } return {}; },
+  let sessionError = null;
+  const service = { status: () => ({ session: { error: sessionError } }),
+    ensureSession: async () => {
+      sessions++;
+      if (hold.session) { sessionStarted.resolve(); await sessionWait.promise; }
+      sessionError = hold.damagedMapping ? { code: 'FAMILY_SESSION_STORAGE', message: 'synthetic damaged mapping' } : null;
+      if (sessionError) throw Object.assign(new Error(sessionError.message), sessionError);
+      return {};
+    },
     cancel: () => { if (hold.cancel) { cancelStarted.resolve(); return cancelWait.promise; } }, close: async () => {},
     converse: async text => { questions.push(text); return { text: '隔离无声回复', suppressSpeech: true }; },
     prepare: async () => ({ file: 'synthetic-reminder.wav', duration: 1, cleanup: async () => { reminderCleanups++; } }) };
@@ -53,6 +61,7 @@ async function fixture() {
     async close() {}
     async audio(entry, options) {
       if (!options.isCurrent()) return;
+      if (options.beforeSubmit && !await options.beforeSubmit()) return;
       reminderAudio.push(entry.id); this.task = Promise.resolve(); ownPlayback = { phase: 'playing' };
     }
     async syncNativePlayback() { if (hold.sync) { syncStarted.resolve(); await syncWait.promise; } }
@@ -73,7 +82,8 @@ async function fixture() {
     './lib/speaker/transport.mjs': { authObservation: () => ({}), completeServiceLogin: async () => {} },
     'node:fs/promises': { readFile, mkdir: async () => {} }, 'node:path': { join, dirname },
     './lib/songs/library.mjs': { FamilySongError: class extends Error {}, songFailure: () => ({}) },
-    './lib/songs/playback.mjs': { FamilyPlayback: Playback }, './lib/songs/playlists.mjs': { SongPlaylists: Lists },
+    './lib/songs/playback.mjs': { FamilyPlayback: Playback },
+    './lib/songs/playlists.mjs': { DAILY_PLAYLIST_ID, SongPlaylists: Lists, makeDailyPlaylist },
     './lib/songs/runtime.mjs': { createFamilySongs: async () => ({ library }) },
     './lib/songs/storage.mjs': { resourcePaths: () => ({ cursorFile: join(root, 'cursor.json'), listenerFile: join(root, 'listener.json') }) },
     './lib/companion/speech.mjs': { createDialogueSpeech: () => ({}) },
@@ -119,7 +129,8 @@ async function fixture() {
     sessionWait, sessionStarted, syncWait, syncStarted, reminderWait, reminderStarted, reminderStatusWait, reminderStatusStarted,
     reminderAudio, reminderCleanups: () => reminderCleanups,
     loginPhase: value => { loginPhase = value; },
-    deliverReminder: () => reminderCallbacks.deliver({ id: 'synthetic-reminder', text: 'Synthetic prompt' }, { isCurrent: () => true }),
+    deliverReminder: beforeSubmit => reminderCallbacks.deliver({ id: 'synthetic-reminder', text: 'Synthetic prompt' },
+      { isCurrent: () => true, beforeSubmit }),
     canDeliverReminder: () => reminderCallbacks.canDeliver(),
     post: (path, body = {}) => routes.get(path)({ ...request, body }), tick: () => tick(), unload: () => disposers[0](),
     records: (query = '小伴，关闭期间的问题') => { records = [{ time: Date.now() + 1, requestId: 'synthetic-request', query }]; },
@@ -129,6 +140,23 @@ async function fixture() {
 }
 
 async function verifyShutdowns() {
+  {
+    const h = await fixture();
+    h.hold.damagedMapping = true;
+    assert.equal((await h.post('/speaker/listener/start')).listener.active, true);
+    h.records('小伴，暂停播放'); await h.tick(); await settle();
+    assert.equal(h.counts().pauses, 1);
+    h.records('小伴，继续播放'); await h.tick(); await settle();
+    assert.equal((await h.status()).probe.lastAction, 'resume');
+    h.records('小伴，能聊天吗'); await h.tick(); await settle();
+    assert.deepEqual(h.questions, []);
+    assert.equal(h.counts().pauses, 1);
+    assert.equal((await h.status()).listener.active, true);
+    h.hold.damagedMapping = false;
+    h.records('小伴，恢复后聊天'); await h.tick(); await settle();
+    assert.deepEqual(h.questions, ['恢复后聊天']);
+    await h.unload();
+  }
   for (const phase of ['preparing', 'waiting', 'verifying']) {
     const h = await fixture();
     await h.post('/speaker/listener/start');
@@ -187,7 +215,9 @@ async function verifyShutdowns() {
   }
   {
     const h = await fixture();
-    assert.equal((await h.deliverReminder()).accepted, true);
+    let marked = 0;
+    assert.equal((await h.deliverReminder(async () => { marked++; return true; })).accepted, true);
+    assert.equal(marked, 1);
     assert.deepEqual(h.reminderAudio, ['family-reminder:synthetic-reminder']);
     assert.equal(h.reminderCleanups(), 1);
     await h.unload();
@@ -221,7 +251,7 @@ async function verifyShutdowns() {
     h.reminderWait.resolve(); assert.equal((await preview).ok, true);
     assert.deepEqual(h.reminderAudio, []); await h.unload();
   }
-  return { cases: 14, noVoice: true, noAccounts: true };
+  return { cases: 15, noVoice: true, noAccounts: true };
 }
 
 if (process.env.FAMILY_LISTENER_SHUTDOWN_CHILD === '1') {
@@ -243,6 +273,6 @@ if (process.env.FAMILY_LISTENER_SHUTDOWN_CHILD === '1') {
         else { try { resolve(JSON.parse(output)); } catch { reject(new Error('Invalid isolated shutdown result')); } }
       });
     });
-    assert.deepEqual(result, { cases: 14, noVoice: true, noAccounts: true });
+    assert.deepEqual(result, { cases: 15, noVoice: true, noAccounts: true });
   });
 }

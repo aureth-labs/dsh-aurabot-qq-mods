@@ -1,10 +1,29 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { FamilySongError } from './library.mjs';
 
 const validIds = (ids, allowEmpty = false) => Array.isArray(ids) && (allowEmpty || ids.length > 0) &&
   ids.every(id => typeof id === 'string' && /^[a-f0-9]{64}$/.test(id));
+
+export const DAILY_PLAYLIST_ID = '__daily_random__';
+const beijingDate = new Intl.DateTimeFormat('en-CA', { dateStyle: 'short', timeZone: 'Asia/Shanghai' });
+
+export function makeDailyPlaylist(entries, now = Date.now()) {
+  const day = beijingDate.format(now);
+  const bySong = new Map();
+  for (const entry of entries) {
+    if (entry.available === false) continue;
+    const key = entry.sourceId || entry.id;
+    const previous = bySong.get(key);
+    if (!previous || entry.id < previous.id) bySong.set(key, entry);
+  }
+  const ids = [...bySong].map(([key, entry]) => ({
+    id: entry.id,
+    rank: createHash('sha256').update(day + ':' + key).digest('hex'),
+  })).sort((a, b) => a.rank.localeCompare(b.rank)).slice(0, 20).map(item => item.id);
+  return { id: DAILY_PLAYLIST_ID, name: '每日随机歌单', ids };
+}
 
 export class SongPlaylists {
   constructor({ file, library }) {
@@ -63,7 +82,8 @@ export class SongPlaylists {
       throw new FamilySongError('FAMILY_PLAYLIST_NAME_EXISTS', '已有同名歌单，请换个名称。');
     }
     const unique = [...new Set(ids)];
-    for (const id of unique) await this.library.get(id);
+    const retained = new Set(previous?.ids || []);
+    for (const id of unique) if (!retained.has(id)) await this.library.get(id);
     const list = { id: previous?.id || randomUUID(), name: title, ids: unique };
     const next = previous ? this.lists.map(item => item.id === previous.id ? list : item) : [...this.lists, list];
     await this.persist(next);
@@ -77,6 +97,23 @@ export class SongPlaylists {
       const previous = this.get(id);
       return this.store(changes.name === undefined ? previous.name : changes.name,
         changes.ids === undefined ? previous.ids : changes.ids, previous, true);
+    });
+  }
+  append(id, ids) {
+    return this.enqueue(async () => {
+      if (!validIds(ids)) throw new FamilySongError('FAMILY_PLAYLIST_INPUT', '请选择已保存的歌曲。');
+      const previous = this.get(id);
+      const existing = new Set(previous.ids);
+      const addedIds = [];
+      for (const songId of new Set(ids)) {
+        if (existing.has(songId)) continue;
+        try { await this.library.get(songId); }
+        catch (error) { if (error instanceof FamilySongError) continue; throw error; }
+        addedIds.push(songId);
+      }
+      const playlist = { ...previous, ids: [...previous.ids, ...addedIds] };
+      if (addedIds.length) await this.persist(this.lists.map(list => list.id === id ? playlist : list));
+      return { playlist, added: addedIds.length, skipped: ids.length - addedIds.length };
     });
   }
   remove(id) {

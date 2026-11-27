@@ -3,11 +3,24 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve, basename } from 'node:path';
-import { SongPlaylists } from '../lib/songs/playlists.mjs';
+import { DAILY_PLAYLIST_ID, SongPlaylists, makeDailyPlaylist } from '../lib/songs/playlists.mjs';
 import { FamilySongError } from '../lib/songs/library.mjs';
 
 const a = 'a'.repeat(64);
 const b = 'b'.repeat(64);
+
+test('daily playlist samples up to 20 available songs with one version per source and changes at Beijing midnight', () => {
+  const day = Date.parse('2026-11-19T16:00:00Z');
+  const entries = Array.from({ length: 25 }, (_, n) => ({ id: n.toString(16).padStart(64, '0'), sourceId: String(n) }));
+  const extra = [{ id: a, sourceId: '0' }, { id: b, sourceId: 'offline', available: false }];
+  const first = makeDailyPlaylist([...entries, ...extra], day);
+  assert.equal(first.id, DAILY_PLAYLIST_ID);
+  assert.equal(first.ids.length, 20);
+  assert.ok(first.ids.every(id => id !== a && id !== b));
+  assert.deepEqual(makeDailyPlaylist([...extra, ...entries.toReversed()], day + 23 * 3600000), first);
+  assert.notDeepEqual(makeDailyPlaylist(entries, day - 1).ids, first.ids);
+  assert.deepEqual(makeDailyPlaylist([entries[0], ...extra], day).ids, [entries[0].id]);
+});
 async function harness(t, library = { get: async () => ({ full: true }) }) {
   const root = await mkdtemp(join(tmpdir(), 'family-playlists-isolated-'));
   t.after(() => {
@@ -211,4 +224,33 @@ test('failed reference recovery reports failure without claiming that the song w
   h.lists.persist = async next => { if (++writes === 2) throw new Error('synthetic write failure'); return persist(next); };
   await assert.rejects(h.lists.removeSong(a, async () => { throw new Error('synthetic delete failure'); }), { code: 'FAMILY_PLAYLIST_RESTORE_FAILED' });
   assert.deepEqual(h.lists.get(list.id).ids, [b]);
+});
+
+test('batch append keeps unavailable existing songs and reports duplicates and unavailable additions', async t => {
+  const c = 'c'.repeat(64);
+  const d = 'd'.repeat(64);
+  const unavailable = new Set();
+  const h = await harness(t, { get: async id => {
+    if (unavailable.has(id)) throw new FamilySongError('FAMILY_DIRECTORY', 'Song file unavailable');
+  } });
+  const list = await h.lists.create('Target', [a, b]);
+  unavailable.add(a);
+  unavailable.add(d);
+  const result = await h.lists.append(list.id, [a, c, c, d]);
+  assert.deepEqual(result, { playlist: { ...list, ids: [a, b, c] }, added: 1, skipped: 3 });
+  await h.lists.update(list.id, { ids: [a, c] });
+  const reopened = h.create();
+  await reopened.open();
+  assert.deepEqual(reopened.get(list.id).ids, [a, c]);
+});
+
+test('concurrent appends use the saved playlist in request order', async t => {
+  const c = 'c'.repeat(64);
+  const h = await harness(t);
+  const list = await h.lists.create('Target', [a]);
+  const results = await Promise.all([h.lists.append(list.id, [b]), h.lists.append(list.id, [a, b, c])]);
+  assert.deepEqual(results.map(({ added, skipped }) => [added, skipped]), [[1, 0], [1, 2]]);
+  const reopened = h.create();
+  await reopened.open();
+  assert.deepEqual(reopened.get(list.id).ids, [a, b, c]);
 });

@@ -7,10 +7,10 @@ export const WAKE_ACK_LEAD_IN_MS = 750;
 
 export class SpeakerProbe {
   constructor({ speaker, cursor, ask, familyAction, prepareAnswer, playAnswer,
-    answerFailure = error => modelFailureMessage(error?.code), onInvalidate, sessionRouting = false, getWakeConfig,
+    answerFailure = error => modelFailureMessage(error?.code), onInvalidate, sessionRouting = false, preferLocalControls, getWakeConfig,
     now = Date.now, lifetimeMs = 600000 }) {
     Object.assign(this, { speaker, cursor, ask, familyAction, prepareAnswer, playAnswer, answerFailure,
-      onInvalidate, sessionRouting, getWakeConfig, now, lifetimeMs });
+      onInvalidate, sessionRouting, preferLocalControls, getWakeConfig, now, lifetimeMs });
     this.until = 0;
     this.persistent = false;
     this.generation = 0;
@@ -157,7 +157,8 @@ export class SpeakerProbe {
         const key = recordKey(record);
         if (this.ignoredRecords.has(key)) continue;
         const native = String(record.query || '').replace(/[\s，。！？、,.!?：:]/g, '');
-        const action = parseProbeCommand(record.query, { sessionRouting: this.sessionRouting, wakeConfig: this.getWakeConfig?.() }) || (this.answersPending && record.time >= this.answerSince &&
+        const action = parseProbeCommand(record.query, { sessionRouting: this.sessionRouting, preferLocalControls: this.preferLocalControls?.(),
+          wakeConfig: this.getWakeConfig?.() }) || (this.answersPending && record.time >= this.answerSince &&
           /^(?:小爱同学|你好小爱)?(?:暂停(?:播放)?|停止(?:播放)?|别说了)(?:一下|吧)?$/.test(native)
           ? { action: 'cancel-answer' } : null);
         if (!action) {
@@ -202,7 +203,7 @@ export class SpeakerProbe {
   }
 }
 
-export function parseProbeCommand(query, { sessionRouting = false, wakeConfig } = {}) {
+export function parseProbeCommand(query, { sessionRouting = false, preferLocalControls = false, wakeConfig } = {}) {
   const raw = String(query || '');
   const clean = raw.replace(/[\s，。！？、,.!?：:]/g, '');
   // Keep an explicit invocation; spelling variants do not change the hardware wake word.
@@ -215,6 +216,10 @@ export function parseProbeCommand(query, { sessionRouting = false, wakeConfig } 
   if (/^(?:暂停(?:播放|音乐)?|停|停一停|等|等等|等一等|等会儿?|稍等)$/.test(control)) return { action: 'pause' };
   if (/^(?:停止(?:播放|音乐|唱歌)?|结束播放|停掉|停了|关掉(?:音乐|歌曲)|(?:别|不要)(?:播放|放|播|唱)了|不听了)$/.test(control)) return { action: 'stop' };
   if (sessionRouting) {
+    if (preferLocalControls && text) {
+      const direct = parseProbeCommand(raw, { wakeConfig });
+      if (direct && direct.action !== 'ask-test') return direct;
+    }
     let offset = 0;
     let consumed = 0;
     for (const character of raw) {

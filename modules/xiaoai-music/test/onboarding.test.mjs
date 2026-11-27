@@ -1,10 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, relative, isAbsolute } from 'node:path';
+import { dirname, join, relative, isAbsolute } from 'node:path';
 import definition from '../index.mjs';
 import { setupOnboarding, prepareStorage } from '../lib/companion/onboarding.mjs';
+import { resourcePaths } from '../lib/songs/storage.mjs';
+import { FamilyReminders } from '../lib/companion/reminders.mjs';
+
+globalThis.aurabot = { src: new URL('../', import.meta.url), lib: () => ({}) };
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'xiaoai-first-use-'));
@@ -19,6 +23,97 @@ async function fixture(t) {
     const part=relative(tmpdir(),root); assert.ok(part&&!isAbsolute(part)&&!part.startsWith('..')); await rm(root,{recursive:true,force:true}); });
   return {root,api,settings,routes,patches,timers,disposers,post:(path,body={})=>routes.get(path)({...req,body}),get:path=>routes.get(path)({...req,method:'GET'})};
 }
+
+for (const store of ['listener', 'wake', 'reminders']) {
+  test('isolates damaged ' + store + ' storage and preserves its original bytes', async t => {
+    const h = await fixture(t);
+    h.settings.resourceRoot = h.root;
+    const paths = resourcePaths(h.root);
+    const file = { listener: paths.listenerFile, wake: join(dirname(paths.listenerFile), '家庭称呼.json'),
+      reminders: paths.remindersFile }[store];
+    await mkdir(dirname(file), { recursive: true });
+    const damaged = Buffer.alloc(51);
+    await writeFile(file, damaged);
+    if (store === 'wake') await writeFile(paths.listenerFile, '{"schema":1,"enabled":true}');
+    const ticks = t.mock.method(FamilyReminders.prototype, 'tick');
+    const service = await definition.setup(h.api);
+    assert.equal((await h.post('/songs/check')).ok, true);
+    await h.timers[0]();
+    const state = service.status();
+    assert.equal(state.listener.active, false);
+    assert.deepEqual(await readFile(file), damaged);
+    const reminder = { text: '测试', schedule: { frequency: 'daily', time: '09:00' } };
+    if (store === 'reminders') {
+      assert.equal(ticks.mock.callCount(), 0);
+      for (const result of [await h.get('/reminders'), await h.post('/reminders/create', reminder),
+        await service.remind({ action: 'cancel', id: 'test' })]) {
+        assert.equal(result.ok, false);
+        assert.equal(result.code, 'FAMILY_REMINDER_INVALID');
+      }
+      assert.equal((await h.get('/speaker/wake')).ok, true);
+      assert.deepEqual(await readFile(file), damaged);
+      for (const dispose of h.disposers.splice(0)) await dispose();
+      await writeFile(file, '{"schema":1,"reminders":[]}');
+      await definition.setup(h.api);
+      assert.equal((await h.post('/reminders/create', reminder)).ok, true);
+      return;
+    }
+    assert.equal(ticks.mock.callCount(), 1);
+    assert.equal((await h.post('/reminders/create', reminder)).ok, true);
+    if (store === 'listener') {
+      assert.equal(state.listener.enabled, false);
+      assert.equal(state.listener.error.code, 'PREFERENCE_INVALID');
+      assert.equal((await h.post('/speaker/end')).ok, true);
+      assert.equal(service.status().listener.error, null);
+      assert.equal(JSON.parse(await readFile(file)).enabled, false);
+    } else {
+      assert.equal(state.listener.enabled, true);
+      assert.equal(state.onboarding.wakeSaved, false);
+      for (const route of ['/speaker/arm', '/speaker/listener/start', '/speaker/history/read']) {
+        assert.equal((await h.post(route)).code, 'PREFERENCE_INVALID');
+      }
+      assert.deepEqual(await readFile(file), damaged);
+      assert.equal((await h.post('/speaker/wake/save', { names: ['小伴'], greetingNames: [] })).ok, true);
+      assert.equal(service.status().onboarding.wakeSaved, true);
+      assert.equal(service.status().listener.wakeError, undefined);
+      assert.deepEqual(JSON.parse(await readFile(file)).names, ['小伴']);
+    }
+    const backups = (await readdir(dirname(file))).filter(name => name.endsWith('.bak'));
+    assert.equal(backups.length, 1);
+    assert.deepEqual(await readFile(join(dirname(file), backups[0])), damaged);
+  });
+}
+
+test('music routes retain a malformed directory index and accept the restored index on retry', async t => {
+  const h = await fixture(t);
+  h.settings.resourceRoot = h.root;
+  const { directoriesFile } = resourcePaths(h.root);
+  await mkdir(dirname(directoriesFile), { recursive: true });
+  await writeFile(directoriesFile, 'null');
+  await definition.setup(h.api);
+  assert.equal((await h.post('/songs/check')).ok, false);
+  assert.equal(await readFile(directoriesFile, 'utf8'), 'null');
+  assert.equal((await h.get('/reminders')).ok, true);
+  const primary = join(h.root, 'music');
+  await mkdir(primary);
+  await writeFile(directoriesFile, JSON.stringify({ schema: 1,
+    directories: [{ id: 'primary', path: primary, records: [], phase: 'ready' }] }));
+  assert.equal((await h.post('/songs/check')).ok, true);
+  assert.equal(JSON.parse(await readFile(directoriesFile)).directories[0].path, primary);
+});
+
+test('a filesystem read error keeps wake settings unavailable without attempting corrupt-file recovery', async t => {
+  const h = await fixture(t);
+  h.settings.resourceRoot = h.root;
+  const speakerDir = dirname(resourcePaths(h.root).listenerFile);
+  const wakeFile = join(speakerDir, '家庭称呼.json');
+  await mkdir(wakeFile, { recursive: true });
+  await definition.setup(h.api);
+  assert.equal((await h.get('/speaker/wake')).error.code, 'PREFERENCE_READ');
+  assert.equal((await h.post('/speaker/wake/save', { names: ['小伴'], greetingNames: [] })).ok, false);
+  assert.deepEqual(await readdir(speakerDir), ['家庭称呼.json']);
+  assert.equal((await h.post('/songs/check')).ok, true);
+});
 
 test('fresh actual module waits for storage without creating default library or starting work', async t => {
   const h=await fixture(t); const instance=await definition.setup(h.api);
@@ -41,6 +136,34 @@ test('fresh actual module waits for storage without creating default library or 
   assert.equal((await h.post('/onboarding/complete')).ok,false);
   assert.equal((await h.post('/onboarding/storage',{root:join(h.root,'other')})).ok,false);
   assert.equal(h.settings.resourceRoot,chosen);
+});
+
+test('review confirms the existing location before opening saved settings and keeps the playlist intact', async t => {
+  const h = await fixture(t);
+  const paths = resourcePaths(h.root);
+  Object.assign(h.settings, { resourceRoot: h.root, networkInterface: 'synthetic', setupComplete: false, setupReviewStep: 'storage' });
+  const playlist = join(h.root, 'AuraBot-Family', 'Playlists', '家庭歌单.json');
+  const wake = join(dirname(paths.listenerFile), '家庭称呼.json');
+  await mkdir(dirname(playlist), { recursive: true });
+  await mkdir(dirname(wake), { recursive: true });
+  const saved = JSON.stringify({ schema: 1, playlists: [] });
+  await writeFile(playlist, saved);
+  await writeFile(wake, JSON.stringify({ schema: 1, names: ['小伴'], greetingNames: [] }));
+  const instance = await definition.setup(h.api);
+  assert.equal(instance.status().onboarding.confirmExisting, true);
+  assert.equal(instance.status().onboarding.storageReady, false);
+  assert.equal(h.timers.length, 0);
+  assert.equal((await h.post('/onboarding/storage', { root: join(h.root, 'other') })).ok, false);
+  assert.equal((await h.post('/speaker/listener/start')).code, 'XIAOAI_SETUP_REQUIRED');
+  assert.deepEqual(h.patches, []);
+  const next = await h.post('/onboarding/storage', { root: h.root });
+  assert.equal(next.onboarding.storageReady, true);
+  assert.equal(next.onboarding.speakerVerified, false);
+  assert.equal(next.onboarding.wakeSaved, false);
+  assert.equal((await h.post('/onboarding/complete')).ok, false);
+  assert.deepEqual((await h.get('/speaker/wake')).wake.names, ['小伴']);
+  assert.deepEqual(h.patches, [{ setupReviewStep: 'connection' }]);
+  assert.equal(await readFile(playlist, 'utf8'), saved);
 });
 
 test('existing implicit data root is reused without rewriting configuration', async t => {

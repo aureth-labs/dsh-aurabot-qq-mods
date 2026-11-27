@@ -6,6 +6,13 @@ import { createL05CControl } from './miot.mjs';
 import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 
+export class SpeakerPlaybackError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+}
+
 export function selectDevice(devices, selector = '') {
   if (!Array.isArray(devices)) throw new Error('音箱列表格式不可用。');
   const matches = devices.filter((d) => String(d.hardware).toUpperCase() === 'L05C' &&
@@ -173,13 +180,16 @@ export class MiNASpeaker {
   async playProbe() {
     return this.playAudio(makeProbeAudio(), '.wav', 'audio/wav', 18);
   }
-  async playFile(file, duration) {
+  async playFile(file, duration, beforeSubmit) {
     const extension = extname(file).toLowerCase();
     const contentType = { '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg' }[extension];
-    if (!contentType) throw new Error('对话音频格式不可用。');
-    return this.playAudio(await readFile(file), extension, contentType, duration, true);
+    if (!contentType) throw new SpeakerPlaybackError('FAMILY_AUDIO_FORMAT', '音箱播放只支持 MP3、WAV 或 OGG，请重新选择音频。');
+    let audio;
+    try { audio = await readFile(file); }
+    catch { throw new SpeakerPlaybackError('FAMILY_AUDIO_READ', '读不到已保存的音频，请检查曲库文件或磁盘是否可用。'); }
+    return this.playAudio(audio, extension, contentType, duration, true, beforeSubmit);
   }
-  async playAudio(audio, extension, contentType, duration, waitForRead = false) {
+  async playAudio(audio, extension, contentType, duration, waitForRead = false, beforeSubmit) {
     if (this.server) { this.server.close(); this.server.closeAllConnections(); this.server = null; }
     this.counts = { get: 0, head: 0, matchedGet: 0, invalidRange: 0 };
     const route = '/' + randomUUID() + extension;
@@ -189,27 +199,33 @@ export class MiNASpeaker {
     this.server = audioServer(audio, route, this.counts, contentType, () => {
       if (startedAt === null) { startedAt = Date.now(); readStarted(startedAt); }
     });
+    let failure = new SpeakerPlaybackError('FAMILY_AUDIO_SERVER', '未能启动音频传输，请检查面板选中的电脑网卡。');
     try {
       await new Promise((resolve, reject) => {
         this.server.once('error', reject);
         this.server.listen(0, this.localAddress, resolve);
       });
       const url = 'http://' + this.localAddress + ':' + this.server.address().port + route;
+      failure = new SpeakerPlaybackError('FAMILY_SPEAKER_PLAY_COMMAND', '未能下发播放指令，请检查小爱是否在线，再试一次。');
+      if (beforeSubmit && !await beforeSubmit()) throw failure;
       await this.call('mediaplayer', 'player_play_music', musicMessage(url));
       this.ownsPlayback = true;
       this.canResume = true;
       // A one-item MUSIC list can inherit device repeat-all. Our controller,
       // rather than the speaker loop, owns progression to the next entry.
+      failure = new SpeakerPlaybackError('FAMILY_SPEAKER_PLAY_MODE', '音箱未接受本次单轮播放模式，请在音箱空闲后重试。');
       const loop = await this.call('mediaplayer', 'player_set_loop', { type: 2, media: 'common' });
-      if (loop?.code !== 0) throw new Error('音箱未接受本次单轮播放模式。');
+      if (loop?.code !== 0) throw failure;
       if (waitForRead) {
+        failure = new SpeakerPlaybackError('FAMILY_AUDIO_TRANSFER_TIMEOUT', '播放指令已送达，但音箱没有开始读取歌曲。请确认电脑和音箱在同一局域网，并检查所选网卡。');
         let timer;
         try { await Promise.race([firstRead, new Promise((_, reject) => {
-          timer = setTimeout(() => reject(new Error('音箱没有开始读取歌曲。')), 15000);
+          timer = setTimeout(() => reject(failure), 15000);
         })]); } finally { clearTimeout(timer); }
       }
+      failure = new SpeakerPlaybackError('FAMILY_SPEAKER_PLAY_STATUS', '未能确认音箱播放状态，请在音箱上查看是否已经开始播放。');
       const state = await this.status();
-      if (state.loopType !== null && state.loopType !== 2) throw new Error('音箱单轮播放模式未生效。');
+      if (state.loopType !== null && state.loopType !== 2) throw new SpeakerPlaybackError('FAMILY_SPEAKER_PLAY_MODE', '音箱单轮播放模式未生效，请在音箱空闲后重试。');
       return { accepted: true, expectedSeconds: duration, startedAt, singlePlayVerified: state.loopType === 2, ...state };
     } catch (error) {
       if (this.ownsPlayback) {
@@ -222,7 +238,7 @@ export class MiNASpeaker {
         }
       }
       this.releasePlayback();
-      throw error;
+      throw error instanceof SpeakerPlaybackError ? error : failure;
     }
   }
   async operate(action) {

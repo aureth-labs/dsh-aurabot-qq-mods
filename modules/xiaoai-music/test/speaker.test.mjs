@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { VoiceCursor } from '../lib/speaker/cursor.mjs';
@@ -147,10 +147,34 @@ test('cursor rejects old records, persists duplicate claims across restart, stor
   assert.equal(stored.includes('fresh'), false);
 });
 
-test('corrupt cursor is a failure; it is not silently reset', async (t) => {
+test('corrupt cursors are backed up verbatim and listening resumes without replay', async t => {
+  for (const damaged of [Buffer.alloc(51), Buffer.from('{"since":'), Buffer.from('{"since":1,"claimed":{}}')]) {
+    const cursor = await makeCursor(t);
+    await writeFile(cursor.file, damaged);
+    const warnings = [];
+    const log = { warn: message => warnings.push(message) };
+    await cursor.open(log);
+    const [backup] = await readdir(dirname(cursor.file));
+    assert.match(backup, /^cursor\.json\.corrupt-.+\.bak$/);
+    assert.deepEqual(await readFile(join(dirname(cursor.file), backup)), damaged);
+    const h = harness(cursor);
+    await h.probe.arm();
+    h.setRecords([record(999, 'before-recovery'), record(1001, 'after-recovery')]);
+    await h.probe.poll();
+    await h.probe.pending;
+    assert.deepEqual(h.calls, ['pause']);
+    const reopened = new VoiceCursor(cursor.file);
+    await reopened.open(log);
+    assert.equal(await reopened.claim(record(1001, 'after-recovery')), false);
+    assert.equal(warnings.length, 1);
+  }
+});
+
+test('cursor read errors preserve the original and propagate the filesystem error', async t => {
   const cursor = await makeCursor(t);
-  await writeFile(cursor.file, 'not-json');
-  await assert.rejects(cursor.open(), /游标损坏/);
+  await mkdir(cursor.file);
+  await assert.rejects(cursor.open(), error => ['EISDIR', 'EPERM', 'EACCES'].includes(error.code));
+  assert.deepEqual(await readdir(dirname(cursor.file)), ['cursor.json']);
 });
 
 test('old, repeated and unrelated voice records do not execute; current record executes once', async (t) => {

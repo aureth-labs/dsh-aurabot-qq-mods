@@ -37,9 +37,8 @@ export function configuredFeatures(api) {
   let model = false, songs = false;
   try { const selected = api.lib('core/llm.js').defaultModel(api.dsh, api.config()); model = Boolean(selected?.provider && selected?.model); } catch {}
   try { songs = typeof api.use('song')?.search === 'function'; } catch {}
-  const explicit = api.settings().motherVoice;
   return { original: songs, model, dialogue: model && voices.dialogue.configured,
-    singing: songs && (explicit ? voices.options.some(item => item.id === explicit) : voices.singing.configured) };
+    singing: songs && voices.singing.configured };
 }
 
 // Only the host's empty data directory may exist before a user chooses storage.
@@ -51,16 +50,18 @@ export async function setupOnboarding(api, setupRuntime, { localPost, localReque
     if (await containsSavedFiles(join(legacy, 'song DB')) || await containsSavedFiles(join(legacy, 'AuraBot-Family'))) root = legacy;
   }
   let complete = Boolean(root) && api.settings().setupComplete !== false;
+  const reviewing = !complete && ['storage', 'connection'].includes(api.settings().setupReviewStep);
+  let confirmExisting = reviewing && api.settings().setupReviewStep === 'storage';
   let runtime, starting, closed = false, wakeSaved = false, verifiedConnection = '';
   let connectionCheck = 0;
   const signature = () => JSON.stringify([api.settings().networkInterface || '', api.settings().speakerDevice || '']);
   const blocked = () => ({ ok: false, code: 'XIAOAI_SETUP_REQUIRED', message: '请先完成首次配置，再使用此功能。' });
-  const view = () => ({ resourceRoot: root, storageReady: Boolean(runtime), complete,
+  const view = () => ({ resourceRoot: root, storageReady: Boolean(runtime), complete, confirmExisting,
     speakerVerified: Boolean(verifiedConnection) && verifiedConnection === signature(), wakeSaved,
     features: configuredFeatures(api) });
   const status = () => ({ ...(runtime?.status() || { ok: true, connected: false, songs: { entries: [], jobs: [] }, playlists: [],
     playback: { phase: 'idle' }, listener: { enabled: false }, login: { phase: 'idle' }, storage: { root } }), onboarding: view() });
-  const setupRoutes = new Set(['/status', '/settings/options', '/settings/save', '/speaker/check', '/speaker/login/start',
+  const setupRoutes = new Set(['/status', '/settings/options', '/settings/save', '/songs/local-voice/check', '/speaker/check', '/speaker/login/start',
     '/speaker/login/select', '/speaker/login/qr', '/speaker/login', '/speaker/wake', '/speaker/wake/audio', '/speaker/wake/save', '/speaker/wake/pinyin', '/speaker/wake/suggest', '/capabilities']);
   api.onDispose(() => { closed = true; });
   const start = async () => {
@@ -68,7 +69,6 @@ export async function setupOnboarding(api, setupRuntime, { localPost, localReque
     if (starting) return starting;
     starting = (async () => {
       if (closed) throw new Error('模块已关闭。');
-      wakeSaved = await exists(join(root, 'AuraBot-Family', 'Speaker', '家庭称呼.json'));
       const wrapped = { ...api, settings: () => ({ ...api.settings(), resourceRoot: root }),
         route: (path, handler) => api.route(path, async (...args) => {
           if (!complete && !setupRoutes.has(path)) return blocked();
@@ -92,6 +92,7 @@ export async function setupOnboarding(api, setupRuntime, { localPost, localReque
         rule: builder => api.rule(() => complete ? builder() : ''),
       };
       runtime = await setupRuntime(wrapped);
+      wakeSaved = !reviewing && Boolean(runtime.wakeSaved);
       return runtime;
     })();
     try { return await starting; } finally { starting = null; }
@@ -113,6 +114,13 @@ export async function setupOnboarding(api, setupRuntime, { localPost, localReque
     choosing = true;
     try {
       const body = await api.core.http.body(req);
+      if (confirmExisting) {
+        if (!root || !body?.root || resolve(body.root) !== resolve(root) || !await hasModuleData(root)) {
+          return { ok: false, message: '原资料目录不可用，请确认磁盘已连接后再试。' };
+        }
+        await api.saveSettings({ setupReviewStep: 'connection' });
+        confirmExisting = false;
+      }
       if (!root) {
         const selected = await prepareStorage(body.root);
         if (closed) throw new Error('模块已关闭。');
@@ -128,11 +136,11 @@ export async function setupOnboarding(api, setupRuntime, { localPost, localReque
   api.route('/onboarding/complete', async req => {
     if (!localPost(req)) return { ok: false, message: '需要本机同源 JSON POST。' };
     if (closed || !runtime || !view().speakerVerified || !wakeSaved) return { ok: false, message: '请先检查音箱连接并保存主要称呼。' };
-    await api.saveSettings({ setupComplete: true });
+    await api.saveSettings(reviewing ? { setupComplete: true, setupReviewStep: null } : { setupComplete: true });
     complete = true;
     return status();
   });
-  if (root) await start();
+  if (root && !confirmExisting) await start();
   return { status, execute: (...args) => complete && runtime ? runtime.execute(...args) : Promise.resolve(blocked()),
     remind: (...args) => complete && runtime ? runtime.remind(...args) : Promise.resolve(blocked()) };
 }

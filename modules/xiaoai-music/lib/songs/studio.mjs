@@ -6,7 +6,7 @@ const __lib = globalThis.aurabot.lib // 插件内部源码（复制出来后靠�
 
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, statSync, statfsSync, writeFileSync, readFileSync, rmSync, copyFileSync, renameSync, openSync, readSync, closeSync } from 'node:fs'
-import { join, basename, dirname, isAbsolute } from 'node:path'
+import { join, basename, dirname, isAbsolute, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
 import { createHash } from 'node:crypto'
@@ -16,6 +16,10 @@ const { readZip } = __lib('song/zip.js')
 
 export const APPLIO_REPO = 'https://github.com/IAHispano/Applio.git'
 export const APPLIO_COMMIT = 'c817f1f83f689ef72e0dfeb1c17ae990b9248506'
+/** 本地整曲专用任务标记（带版本）：只有带着它调用 local.call('song', …) 才走本地整曲分支，
+ *  宿主主模块原来的调用不带标记，继续走原有换声逻辑。 */
+export const LOCAL_FULL_SONG_TASK = 'xiaoai-full-song/v1'
+export const LOCAL_FULL_ENVIRONMENT = { python: 'Python', separator: '人声分离程序', ffmpeg: 'FFmpeg', separatorModel: '人声分离模型' }
 const LEGACY_ROOT = 'C:\\Aurabot\\rvc'
 
 /** 在目录里（含子目录）找一个文件名。 */
@@ -346,11 +350,11 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
       separator: existsSync(p.separatorExe),
       ffmpeg: existsSync(p.ffmpeg),
       weights: existsSync(p.rmvpe) && existsSync(p.contentvec),
-      separatorModel: separatorReady(p.separatorModels, cfg().separatorModel),
+      separatorModel: Boolean(cfg().separatorModel) && separatorReady(p.separatorModels, cfg().separatorModel),
     }
     // 换声交给本地脚本时，不需要内置的 Applio / 预训练文件 / 音色模型（下载、分离、混音还是插件做）
     const localSong = Boolean(local?.active('song'))
-    const ready = localSong ? ['python', 'separator', 'ffmpeg', 'separatorModel'].every((k) => parts[k]) : Object.values(parts).every(Boolean) && voices.length > 0
+    const ready = localSong ? Object.keys(LOCAL_FULL_ENVIRONMENT).every((k) => parts[k]) : Object.values(parts).every(Boolean) && voices.length > 0
     return {
       enabled: cfg().enabled,
       ready,
@@ -583,6 +587,63 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
     finally { current = null }
   }
 
+  /** 任务目录内才算本地整曲钩子返回的成品（和曲库入库校验同一口径）。 */
+  function insideWorkDir(dir, file) {
+    const r = relative(resolve(dir), resolve(file))
+    return Boolean(r) && !isAbsolute(r) && r !== '..' && !r.startsWith('..\\') && !r.startsWith('../')
+  }
+
+  /**
+   * 本地整曲：下载/分离仍由小爱完成，换声与混音/母带交给本地钩子。
+   * 钩子只认带 LOCAL_FULL_SONG_TASK 标记的调用；返回明确标记为 master 的完整 WAV、
+   * 实际音色 ID 与渲染版本。本模块把 master 编码一次为 MP3，跳过二次混音，
+   * 输入伴奏原文件保持不变；完整时长与目录校验由曲库入库流程统一执行。
+   */
+  async function makeLocalFull({ song, songId, file, voiceId, renderVersion, pitch = 0 }) {
+    if (!fullLength) throw new Error('完整歌曲接口未启用')
+    if (current || queue.length) throw new Error('已有歌曲正在生成')
+    if (!voiceId || !renderVersion || (!songId && !file)) throw new Error('本地整曲参数未就绪')
+    if (!local || typeof local.active !== 'function' || typeof local.call !== 'function') throw new Error('本地整曲钩子未开启：宿主「本地接口」不可用，请打开「翻唱换声」并放好 song-convert.mjs')
+    if (!local.active('song')) throw new Error('本地整曲钩子未开启：请在宿主「本地接口」打开「翻唱换声」开关')
+    if (!status().ready) throw new Error('本地整曲环境未就绪：请先在宿主翻唱模块准备人声分离与 ffmpeg 环境')
+    if (Number(pitch) !== 0) throw new Error('本地整曲音色首版只支持原调，本次不生成')
+    const job = { query: song || '家庭儿歌', songId, file, pitch: 0, voice: 'local:' + voiceId }
+    const dir = join(work(), Date.now().toString(36))
+    mkdirSync(dir, { recursive: true })
+    current = { query: job.query, title: job.query, stage: '准备本地整曲', startedAt: Date.now() }
+    try {
+      current.stage = '下载歌曲'
+      const source = job.file || (await download(job, dir))
+      current.stage = '分离人声和伴奏'
+      const { vocals, inst } = await separate(source, dir)
+      const vol = await meanVolume(vocals)
+      if (vol < VOCAL_MIN_DB) throw new Error('这首没有人声（像是纯音乐或伴奏版），换一首吧')
+      current.stage = '本地整曲生成'
+      const output = join(dir, 'master.wav')
+      const result = await local.call('song', { task: LOCAL_FULL_SONG_TASK,
+        voiceId, renderVersion, refSong: source, vocal: vocals, inst, output, pitch: 0, log })
+      if (!result || result.kind !== 'master') throw new Error('本地整曲钩子未返回标记为 master 的完整成品')
+      const master = typeof result.file === 'string' ? result.file : ''
+      if (!master || !existsSync(master) || statSync(master).size < 1024) throw new Error('本地整曲钩子没写出有效成品文件')
+      if (!insideWorkDir(dir, master)) throw new Error('本地整曲钩子返回的成品不在任务目录内')
+      if (String(result.voiceId || '') !== String(voiceId)) throw new Error(`本地整曲钩子返回的音色不一致（期望 ${voiceId}，实际 ${result.voiceId || '空'}）`)
+      if (String(result.renderVersion || '') !== String(renderVersion)) throw new Error(`本地整曲渲染版本不匹配（登记 ${renderVersion}，实际 ${result.renderVersion || '空'}）`)
+      current.stage = '成品转码'
+      const encoded = join(dir, 'master.mp3')
+      await run(P().ffmpeg, ['-y', '-hide_banner', '-loglevel', 'error', '-i', master,
+        '-ac', '2', '-ar', '44100', '-b:a', '192k', encoded], { log })
+      const duration = await ffprobeDuration(encoded)
+      const sourceDuration = await ffprobeDuration(source)
+      return { file: encoded, source, duration, sourceDuration, params: result.params || {} }
+    } catch (error) {
+      error.familyStage = current.stage
+      if (!/本地整曲|渲染版本|音色|钩子|原调|master|没有人声|下载不了|会员|版权|显存|memory/i.test(String(error.message || ''))) {
+        error.message = '本地整曲生成失败：' + String(error.message || '')
+      }
+      throw error
+    } finally { current = null }
+  }
+
   async function makeOriginal({ song, songId }) {
     if (!fullLength || !songId) throw new Error('完整原曲参数未就绪')
     if (current || queue.length) throw new Error('已有歌曲正在生成')
@@ -642,6 +703,7 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
     status,
     convertSpeech,
     makeFull,
+    makeLocalFull,
     makeOriginal,
     durationOf: ffprobeDuration,
     install: () => ({ ok: false, message: '请先在宿主翻唱模块准备环境，本模块不下载安装程序。' }),

@@ -1,4 +1,5 @@
-import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises';
+import { writeFile, rename, mkdir, unlink } from 'node:fs/promises';
+import { preserveFailedPreference, readPreference } from './preference-file.mjs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { pinyin } from '../vendor/pinyin-pro/index.mjs';
@@ -62,11 +63,13 @@ export class WakePreference {
       ...(pronunciations ? { pronunciations: [...pronunciations] } : {}) };
   }
   async open() {
-    try {
-      const data = JSON.parse(await readFile(this.file, 'utf8'));
-      if (data.schema !== 1) throw new Error();
-      this.value = validateWakeConfig(data);
-    } catch (error) { if (error.code !== 'ENOENT') throw new Error('家庭称呼设置不可读，未启用该配置。'); }
+    const result = await readPreference(this.file, '家庭称呼', data => {
+      if (data?.schema !== 1) throw new Error();
+      return validateWakeConfig(data);
+    });
+    this.value = result.value ?? validateWakeConfig(DEFAULT_WAKE_CONFIG);
+    this.error = result.error;
+    this.saved = result.value !== undefined;
     return this.get();
   }
   save(value, expected) {
@@ -93,12 +96,15 @@ export class WakePreference {
       try {
         await mkdir(dirname(this.file), { recursive: true });
         await writeFile(temporary, JSON.stringify({ schema: 1, ...next }), { mode: 0o600, flag: 'wx' });
+        await preserveFailedPreference(this.file, this.error);
         await rename(temporary, this.file);
       } catch {
         await unlink(temporary).catch(() => {});
         throw new Error('家庭称呼设置未能保存，原设置保持不变。');
       }
       this.value = next;
+      this.error = undefined;
+      this.saved = true;
       return this.get();
     });
     this.queue = operation.catch(() => {});

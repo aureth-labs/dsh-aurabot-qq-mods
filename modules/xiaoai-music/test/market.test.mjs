@@ -7,7 +7,7 @@ import definition from '../index.mjs';
 test('market metadata matches entry and portable defaults', async () => {
  const m=JSON.parse(await readFile(new URL('../module.json',import.meta.url),'utf8'));
  for(const key of ['id','version','api']) assert.equal(m[key],definition[key]);
- assert.equal(definition.tab,undefined); assert.equal(definition.id,'xiaoai-music'); assert.equal(definition.defaults.resourceRoot,''); assert.equal(definition.defaults.networkInterface,'');
+ assert.equal(definition.tab,undefined); assert.equal(definition.name,'小爱音箱'); assert.equal(m.name,definition.name); assert.equal(definition.id,'xiaoai-music'); assert.equal(definition.defaults.resourceRoot,''); assert.equal(definition.defaults.networkInterface,'');
 });
 test('fresh setup uses host module data directory and remains inactive', async () => {
  const root=await mkdtemp(join(tmpdir(),'family-market-'));const routes=new Map(), disposers=[];
