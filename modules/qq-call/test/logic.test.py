@@ -230,5 +230,135 @@ class GreetTest(unittest.TestCase):
             self.assertFalse(logic.greet_is_silent(line))
 
 
+class CallerTest(unittest.TestCase):
+    """来电窗口标题 → 是谁打来的。"""
+
+    def test_常见标题(self):
+        self.assertEqual(logic.caller_from_title("小明 邀请你语音通话"), "小明")
+        self.assertEqual(logic.caller_from_title("  阿澜 正在向你发起语音通话 "), "阿澜")
+
+    def test_认不出来就是未知号码(self):
+        self.assertEqual(logic.caller_from_title(""), "未知号码")
+        self.assertEqual(logic.caller_from_title("语音通话"), "未知号码")
+        self.assertEqual(logic.caller_from_title("QQ"), "未知号码")
+
+    def test_太长的截断(self):
+        self.assertEqual(len(logic.caller_from_title("一" * 40)), 24)
+
+
+class VerdictTest(unittest.TestCase):
+    """她那一行回话 → 接 / 不接 / 等几秒。"""
+
+    def test_接(self):
+        self.assertTrue(logic.parse_verdict("接")["answer"])
+
+    def test_不接不会被接抢走(self):
+        self.assertFalse(logic.parse_verdict("不接")["answer"])
+
+    def test_带理由(self):
+        got = logic.parse_verdict("接｜想你了")
+        self.assertTrue(got["answer"])
+        self.assertEqual(got["reason"], "想你了")
+
+    def test_等几秒(self):
+        got = logic.parse_verdict("等3")
+        self.assertIsNone(got["answer"])
+        self.assertEqual(got["delay"], 3.0)
+
+    def test_等也封顶(self):
+        got = logic.parse_verdict("等 9｜再响会儿", wait_max=5)
+        self.assertEqual(got["delay"], 5.0)
+        self.assertEqual(got["reason"], "再响会儿")
+
+    def test_看不懂返回None(self):
+        self.assertIsNone(logic.parse_verdict(""))
+        self.assertIsNone(logic.parse_verdict("今天有点困，算了吧"))
+
+    def test_英文也算(self):
+        self.assertFalse(logic.parse_verdict("no")["answer"])
+
+
+class DecideTest(unittest.TestCase):
+    """策略 + 她的判断 → 动作。"""
+
+    def test_总是接(self):
+        self.assertEqual(logic.decide_answer("always", None)["action"], "answer")
+
+    def test_一律不接(self):
+        self.assertEqual(logic.decide_answer("never", {"answer": True})["action"], "decline")
+
+    def test_她说不接就不接(self):
+        got = logic.decide_answer("decide", {"answer": False, "reason": "不想聊"})
+        self.assertEqual(got["action"], "decline")
+        self.assertEqual(got["why"], "不想聊")
+
+    def test_她说接就接(self):
+        self.assertEqual(logic.decide_answer("decide", {"answer": True})["action"], "answer")
+
+    def test_她说等就是等(self):
+        got = logic.decide_answer("decide", {"answer": None, "delay": 3})
+        self.assertEqual(got["action"], "wait")
+        self.assertEqual(got["delay"], 3.0)
+
+    def test_没判断按兜底(self):
+        self.assertEqual(logic.decide_answer("decide", None, "answer")["action"], "answer")
+        self.assertEqual(logic.decide_answer("decide", None, "skip")["action"], "decline")
+
+    def test_看不懂也按兜底(self):
+        self.assertEqual(logic.decide_answer("decide", {"answer": None, "delay": 0}, "answer")["action"], "answer")
+        self.assertEqual(logic.decide_answer("decide", {"answer": None, "delay": 0}, "skip")["action"], "decline")
+
+
+class DeciderTest(unittest.TestCase):
+    """一通电话只问她一次；「等几秒」要真的等到点才接。"""
+
+    def test_第一次看到就问(self):
+        d = logic.AnswerDecider()
+        self.assertEqual(d.begin(2001, "小明", 100.0), d.ASK)
+
+    def test_问过就不再问(self):
+        d = logic.AnswerDecider()
+        d.begin(2001, "小明", 100.0)
+        d.resolve(2001, {"answer": True}, 101.0)
+        self.assertEqual(d.begin(2001, "小明", 102.0), d.ANSWER)
+
+    def test_不接就一直不接(self):
+        d = logic.AnswerDecider()
+        d.begin(2001, "小明", 100.0)
+        d.resolve(2001, {"answer": False, "reason": "在忙"}, 101.0)
+        self.assertEqual(d.begin(2001, "小明", 103.0), d.DECLINE)
+        self.assertEqual(d.state(2001), d.DECLINE)
+
+    def test_等几秒到点才接(self):
+        d = logic.AnswerDecider(policy="decide", wait_max=5)
+        d.begin(2001, "小明", 100.0)
+        d.resolve(2001, {"answer": None, "delay": 3}, 101.0)
+        self.assertEqual(d.begin(2001, "小明", 101.5), d.PENDING)
+        self.assertFalse(d.tick(2001, 103.0))   # 3 秒还没到
+        self.assertTrue(d.tick(2001, 104.2))    # 到了
+        self.assertEqual(d.begin(2001, "小明", 104.5), d.ANSWER)
+
+    def test_结果带着来电人(self):
+        d = logic.AnswerDecider()
+        d.begin(2001, "小明", 100.0)
+        r = d.resolve(2001, {"answer": True}, 101.0)
+        self.assertEqual(r["caller"], "小明")
+        self.assertEqual(d.result(2001)["caller"], "小明")
+
+    def test_窗口消失就清掉(self):
+        d = logic.AnswerDecider()
+        d.begin(2001, "小明", 100.0)
+        d.resolve(2001, {"answer": False}, 101.0)
+        d.clear(2001)
+        self.assertEqual(d.begin(2001, "小明", 200.0), d.ASK)
+
+    def test_总是接就不用她判断(self):
+        d = logic.AnswerDecider(policy="always")
+        d.begin(2001, "小明", 100.0)
+        r = d.resolve(2001, None, 101.0)
+        self.assertEqual(r["action"], "answer")
+        self.assertEqual(r["why"], "策略：总是接")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
