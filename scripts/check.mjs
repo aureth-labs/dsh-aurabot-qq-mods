@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { catalogFresh } from './catalog.mjs'
-import { BUILTINS, ROOT, checkModule, checkRevoked, compareVersions, listModules, readManifest, tagOf } from './lib.mjs'
+import { BUILTINS, ROOT, checkModule, checkRevoked, checkTestCoverage, compareVersions, listModules, readManifest, tagOf } from './lib.mjs'
 
 const git = (...args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
 const baseIndex = process.argv.indexOf('--base')
@@ -13,6 +13,17 @@ const base = baseIndex > 0 ? process.argv[baseIndex + 1] : ''
 const mods = listModules()
 const known = new Set([...BUILTINS, ...mods.map((m) => m.id)])
 let failed = false
+
+/** 这个模块是不是本次新增的（base 上还没有它）。没带 --base 时判断不了，一律当老模块。 */
+function isNewModule(mod) {
+  if (!base) return false
+  try {
+    git('show', `${base}:modules/${mod.id}/module.json`)
+    return false
+  } catch (error) {
+    return true
+  }
+}
 
 function versionErrors(mod) {
   const version = readManifest(mod.dir).version
@@ -26,6 +37,8 @@ function versionErrors(mod) {
 
 for (const mod of mods) {
   const { errors, warnings } = checkModule(mod, known)
+  // 新模块必须带测试：这次提交了新模块却没 test/，check 直接红
+  errors.push(...checkTestCoverage(mod.dir, { required: isNewModule(mod) }))
   if (!errors.length) errors.push(...versionErrors(mod))
   for (const w of warnings) console.log(`⚠ ${mod.id}：${w}`)
   for (const e of errors) console.error(`✗ ${mod.id}：${e}`)
