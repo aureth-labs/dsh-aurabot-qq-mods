@@ -10,7 +10,7 @@ import { join } from 'node:path'
 
 let disposed = false
 // 版本只有这一处：module.json 里也写同一个，运行时部署戳用它判断「要不要覆盖脚本」
-const VERSION = '0.3.2'
+const VERSION = '0.3.3'
 
 // ---------- 子进程退出：分类 / 退避 / 降级 ----------
 // 下面三个是纯函数，测试直接 import；计数状态在 setup 里按进程名维护。
@@ -41,6 +41,25 @@ export function failureUpdate(state, name, code) {
   return next
 }
 
+/** 接不接电话：只认三种，写错了回落到「她自己决定」 */
+export function normalizePolicy(value) {
+  const v = String(value || 'decide').trim().toLowerCase()
+  return ['always', 'never', 'decide'].includes(v) ? v : 'decide'
+}
+
+/** 接听进程的环境变量。抽成纯函数，测试能直接断言「设置翻译成了什么」 */
+export function answerEnv(settings) {
+  const s = settings || {}
+  return {
+    // 她要不要接：decide 让她自己决定 / always 总是接 / never 一律不接
+    QQ_CALL_ANSWER_POLICY: normalizePolicy(s.answerPolicy),
+    // 她没给出判断时（模型不通、回得看不懂）：answer 先接上 / skip 先不接
+    QQ_CALL_ANSWER_ON_ERROR: String(s.answerOnError || 'answer').trim().toLowerCase() === 'skip' ? 'skip' : 'answer',
+    QQ_CALL_ANSWER_TIMEOUT: String(Number(s.answerTimeout) || 3),
+    QQ_CALL_ANSWER_WAIT_MAX: String(Number(s.answerWaitMax) || 5),
+  }
+}
+
 export default {
   id: 'qq-call',
   name: 'QQ语音通话',
@@ -50,6 +69,8 @@ export default {
   defaults: {
     on: true,
     autoAnswer: true,
+    answerPolicy: 'decide',
+    answerOnError: 'answer',
     engine: 'piper',
     greeting: '喂？是我呀。你怎么突然想起给我打电话了。',
     idle: true,
@@ -63,6 +84,27 @@ export default {
   settings: [
     { key: 'on', label: '启用通话能力', type: 'switch' },
     { key: 'autoAnswer', label: '自动接听', type: 'switch', hint: '来电时自动点接听，不用手点' },
+    {
+      key: 'answerPolicy',
+      label: '接不接这通电话',
+      type: 'select',
+      options: [
+        { value: 'decide', label: '她自己决定（看是谁打来的、几点了）' },
+        { value: 'always', label: '总是接' },
+        { value: 'never', label: '一律不接，只记下来电' },
+      ],
+      hint: '她自己决定时，来电人昵称、当前时间和她的来电记录会交给对话模型，一通电话只问一次',
+    },
+    {
+      key: 'answerOnError',
+      label: '她没给出判断时',
+      type: 'select',
+      options: [
+        { value: 'answer', label: '先接上（模型不通也不漏接）' },
+        { value: 'skip', label: '先不接' },
+      ],
+      hint: '模型超时、接口不通、回的话看不懂，都算「没给出判断」',
+    },
     {
       key: 'engine',
       label: '说话用的引擎',
@@ -164,6 +206,14 @@ export default {
     const pidFile = (name) => join(runDir(), `${name}.pid`)
     const pyExe = () => String(api.settings().py || 'python')
     const port = () => Number(api.settings().port) || 47660
+    // 她最近一次「接不接」的判断：接听进程写在 out/last_decision.json，面板直接读
+    const lastDecision = () => {
+      try {
+        return JSON.parse(readFileSync(join(api.dataDir('runtime', 'out'), 'last_decision.json'), 'utf8'))
+      } catch {
+        return null
+      }
+    }
 
     function readPid(name) {
       try {
@@ -230,6 +280,7 @@ export default {
           QQ_CALL_IDLE: api.settings().idle === false ? '0' : '1',
           QQ_CALL_SILENT_FIRST: api.settings().silentFirst === false ? '0' : '1',
           QQ_CALL_SILENT_OPEN_SEC: String(Number(api.settings().silentOpenSec) || 30),
+          ...answerEnv(api.settings()),
           QQ_CALL_LLM_URL: String(api.settings().llmUrl || ''),
           QQ_CALL_LLM_MODEL: String(api.settings().llmModel || ''),
           PYTHONIOENCODING: 'utf-8',
@@ -341,7 +392,7 @@ export default {
         ok: true,
         bridge: health,
         loop: { running: isRunning('loop') },
-        answer: { running: isRunning('answer') },
+        answer: { running: isRunning('answer'), policy: normalizePolicy(api.settings().answerPolicy), lastDecision: lastDecision() },
         engine: api.settings().engine || 'piper',
         port: port(),
         modelMissing: missingModels(),
