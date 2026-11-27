@@ -1,5 +1,5 @@
 {
-  "id": "draw-request-check", "name": "画图前核对请求", "version": "1.0.5", "api": 1,
+  "id": "draw-request-check", "name": "画图前核对请求", "version": "1.0.6", "api": 1,
   "description": "准备画图时，让当前聊天模型核对用户是否想生成或修改图片。",
   "category": "creative", "platforms": ["qq"], "tags": ["绘图"], "author": "b1ghawk119", "license": "MIT",
   "minPluginVersion": "1.2.1", "requires": [], "capabilities": ["plugin-internals", "network"]

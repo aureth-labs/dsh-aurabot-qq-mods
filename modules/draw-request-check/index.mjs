@@ -78,7 +78,15 @@ export async function check(api, chatId, input, signal, drawing) {
   const {provider, model, reasoningEffort} = api.core.hub.modelFor({kind, chatId, groupId:kind==='group' ? id : '', userId:kind==='private' ? id : ''}) || {}
   if (!provider || !model || input.current.length > 18000) return 'UNAVAILABLE'
   let text = '', usage, finish
+  const diagnostic = reason => {
+    if (!text) return
+    try {
+      const safe = api.lib('core/redact.js').redact(text)
+      api.log?.debug?.('绘图核对现场 ' + JSON.stringify({chatId, reason, candidate:safe.slice(0,2048), truncated:safe.length>2048}))
+    } catch {}
+  }
   const unavailable = why => {
+    diagnostic(why)
     api.log?.warn?.(`绘图核对未完成（${why}）`)
     return 'UNAVAILABLE'
   }
@@ -94,6 +102,7 @@ export async function check(api, chatId, input, signal, drawing) {
     text = text.trim()
     if (!['stop','completed'].includes(finish)) return unavailable(finish || '无结束状态')
     const result = parseDecision(text, speakers.length)
+    if (result.verdict && result.verdict !== 'DRAW') diagnostic(result.verdict)
     return result.verdict || unavailable(result.error)
   } catch { return unavailable(signal.aborted ? '中止或超时' : '模型调用失败') } finally {
     if (usage) { try { api.lib('core/usage.js').recordUsage({module:'绘图请求核对',chat:chatId,provider,model,usage}) } catch {} }
@@ -101,7 +110,7 @@ export async function check(api, chatId, input, signal, drawing) {
 }
 
 export default {
-  id:'draw-request-check', name:'画图前核对请求', version:'1.0.5', api:1,
+  id:'draw-request-check', name:'画图前核对请求', version:'1.0.6', api:1,
   setup(api) {
     const lifetime = new AbortController()
     const bySession = new WeakMap()
