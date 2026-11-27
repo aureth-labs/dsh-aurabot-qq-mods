@@ -66,7 +66,7 @@ const MODULE_DESC =
 export default {
   id: 'real-life',
   name: '生理模块',
-  version: '1.2.0',
+  version: '1.2.1',
   api: 1,
   description: MODULE_DESC,
   flag: 'enabled',

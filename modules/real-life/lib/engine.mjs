@@ -246,7 +246,10 @@ export function createRealLifeEngine({
     const rawDur = hoursBetween(baseSleepH, baseWakeH)
     const sleepDurH = rawDur >= 1.5 && rawDur <= 20 ? rawDur : 8
     const dayBoundaryH = c.sleepEnabled ? normHour(baseSleepH + sleepDurH / 2) : 0
-    return { baseSleepH, baseWakeH, sleepDurH, dayBoundaryH }
+    // 睡眠周期盐值切分点放在入睡前 2 小时（如 23:30 睡→21:30 切分，05:00 睡→03:00 切分），
+    // 确保从入睡到次日起床、再到起床后上厕所回来，整轮睡眠始终使用同一份 sleep/wake 抖动，彻底避免跨日抖动漂移
+    const sleepCycleBoundaryH = normHour(baseSleepH - 2)
+    return { baseSleepH, baseWakeH, sleepDurH, dayBoundaryH, sleepCycleBoundaryH }
   }
 
   function routineDayAt(now = nowFn(), c = cfg()) {
@@ -254,16 +257,22 @@ export function createRealLifeEngine({
     return routineDayYmd(now, dayBoundaryH, c.timeZone)
   }
 
-  function sleepWindowFor(c = cfg(), rDay = routineDayAt(nowFn(), c)) {
-    const b = sleepBounds(c)
-    const sleepH = normHour(b.baseSleepH + dailyJitterHours(rDay, 'sleep', 20))
-    const wakeH = normHour(b.baseWakeH + dailyJitterHours(rDay, 'wake', 20))
-    return { ...b, sleepH, wakeH }
+  function sleepCycleKey(now = nowFn(), c = cfg()) {
+    const { sleepCycleBoundaryH } = sleepBounds(c)
+    return routineDayYmd(now, sleepCycleBoundaryH, c.timeZone)
   }
 
-  function isInAwakeWindow(hourFloat, c = cfg(), rDay = routineDayAt(nowFn(), c)) {
+  function sleepWindowFor(c = cfg(), now = nowFn()) {
+    const b = sleepBounds(c)
+    const cycleKey = sleepCycleKey(now, c)
+    const sleepH = normHour(b.baseSleepH + dailyJitterHours(cycleKey, 'sleep', 20))
+    const wakeH = normHour(b.baseWakeH + dailyJitterHours(cycleKey, 'wake', 20))
+    return { ...b, cycleKey, sleepH, wakeH }
+  }
+
+  function isInAwakeWindow(hourFloat, c = cfg(), now = nowFn()) {
     if (!c.sleepEnabled) return true
-    const { sleepH, wakeH } = sleepWindowFor(c, rDay)
+    const { sleepH, wakeH } = sleepWindowFor(c, now)
     return !inHourWindow(hourFloat, sleepH, wakeH)
   }
 
@@ -340,6 +349,7 @@ export function createRealLifeEngine({
       poopedYmd: '',
       showeredYmd: '',
       nappedYmd: '',
+      wokeNaturalCycle: '',
       afterglowUntil: 0,
       afterglowNote: '',
       mode: 'awake', // 'awake' | 'away' | 'asleep'
@@ -391,6 +401,7 @@ export function createRealLifeEngine({
   if (!Array.isArray(state.events)) state.events = []
   if (!Array.isArray(state.confessions)) state.confessions = []
   if (typeof state.nappedYmd !== 'string') state.nappedYmd = ''
+  if (typeof state.wokeNaturalCycle !== 'string') state.wokeNaturalCycle = ''
   if (!state.locks || typeof state.locks !== 'object') {
     state.locks = { eat: null, bathroom: null, shower: null, sleep: null }
   }
@@ -804,18 +815,17 @@ export function createRealLifeEngine({
   function enterSleep({ kind = 'night', durationMin, forcedStage = '', now = nowFn(), reason = '作息入睡' } = {}) {
     const c = cfg()
     const wt = wallTime(now, c.timeZone)
-    const rDay = routineDayAt(now, c)
     let plannedWakeAt
     if (durationMin) {
       plannedWakeAt = now + durationMin * 60_000
     } else if (kind === 'nap') {
       plannedWakeAt = now + 35 * 60_000
     } else {
-      const { sleepH, wakeH, sleepDurH } = sleepWindowFor(c, rDay)
+      const { sleepH, wakeH, sleepDurH } = sleepWindowFor(c, now)
       const remToWake = hoursBetween(wt.hourFloat, wakeH)
       let deltaH
       if (inHourWindow(wt.hourFloat, sleepH, wakeH)) {
-        // 已在睡眠窗口内：若离起床时间不到 45 分钟（如刚被吵醒又赖床回笼），只补睡 30~45 分钟，绝不 +24h 睡整天
+        // 已在睡眠窗口内：只睡到本次起床点（离起床不足 45 分钟被手动哄睡时补睡 30~45 分钟，绝不 +24h 睡整天）
         deltaH = remToWake < 0.75 ? Math.max(0.5, remToWake) : remToWake
       } else if (remToWake <= sleepDurH + 3.0) {
         // 比平时提前最多 3 小时早睡：按平时起床时间醒来
@@ -891,9 +901,13 @@ export function createRealLifeEngine({
     if (state.mode !== 'asleep' || !state.sleep) return { woken: false, missed: [], dream: null }
     const sleptHours = Math.max(0.1, (now - state.sleep.sleptAt) / 3_600_000)
     const wasNap = state.sleep.kind === 'nap'
+    const sleepReason = state.sleep.reason || ''
     const lastDream = state.sleep.dreamLogged ? state.dreams[0] || null : null
     state.sleep = null
     state.mode = 'awake'
+    if (reason === '自然醒' && !wasNap && sleepReason !== '困极入睡') {
+      state.wokeNaturalCycle = sleepCycleKey(now, cfg())
+    }
     const gain = reason === '被叫醒' ? Math.min(35, sleptHours * 10) : wasNap ? 26 : Math.max(55, sleptHours * 11)
     state.energy = Math.round(clamp(reason === '自然醒' && !wasNap ? Math.max(88, state.energy + gain) : state.energy + gain, 18, 98))
     if (reason === '被叫醒') state.groggyUntil = now + 12 * 60_000
@@ -1357,8 +1371,8 @@ export function createRealLifeEngine({
       ? state.lastOwnerChatAt > 0 && now - state.lastOwnerChatAt < Math.min(2, idleMin) * 60_000
       : ownerChatting
     const mealQuota = Math.round(numCfg(c.dailyMealQuota, 3, 0, 10))
-    const awakeWindow = isInAwakeWindow(wt.hourFloat, c, rDay)
-    const { baseWakeH, sleepH, wakeH } = sleepWindowFor(c, rDay)
+    const awakeWindow = isInAwakeWindow(wt.hourFloat, c, now)
+    const { baseWakeH, sleepH, wakeH, cycleKey } = sleepWindowFor(c, now)
 
     // 若已挂着 pendingAway / pendingSleep，超过 2 分钟兜底自动切入
     if (state.pendingAway && state.pendingAway.approved && now - state.pendingAway.createdAt >= 2 * 60_000) {
@@ -1504,8 +1518,9 @@ export function createRealLifeEngine({
     if (c.sleepEnabled && !isLocked('sleep', now)) {
       const inSleep = inHourWindow(wt.hourFloat, sleepH, wakeH)
       const remToWake = hoursBetween(wt.hourFloat, wakeH)
-      const justAboutToWake = inSleep && remToWake < 0.35 && state.energy >= 45
-      if ((inSleep && !justAboutToWake) || state.energy <= 8) {
+      // 距本次起床点不足 45 分钟（0.75h）或本周期已经自然醒，不再自动回睡，彻底杜绝「起床→上厕所→再入睡」连锁
+      const canAutoSleep = inSleep && remToWake >= 0.75 && state.wokeNaturalCycle !== cycleKey
+      if (canAutoSleep || state.energy <= 8) {
         enterSleep({ kind: 'night', now, reason: state.energy <= 8 ? '困极入睡' : '到点睡觉' })
         return { actions }
       }
@@ -1637,8 +1652,8 @@ export function createRealLifeEngine({
     const autonomy = normalizeAutonomyMode(c.autonomyMode)
     const isFree = autonomy === 'free'
     const isPassive = autonomy === 'passive'
-    const { sleepH, wakeH } = sleepWindowFor(c, rDay)
-    const inSleepWindow = c.sleepEnabled && inHourWindow(wt.hourFloat, sleepH, wakeH)
+    const { sleepH, wakeH, cycleKey } = sleepWindowFor(c, now)
+    const inSleepWindow = c.sleepEnabled && inHourWindow(wt.hourFloat, sleepH, wakeH) && state.wokeNaturalCycle !== cycleKey
 
     if (state.interruptedAway && now < state.interruptedAway.until) {
       const ia = state.interruptedAway
@@ -2059,6 +2074,7 @@ export function createRealLifeEngine({
         state.locks = { eat: null, bathroom: null, shower: null, sleep: null }
         state.confessions = []
         state.nappedYmd = ''
+        state.wokeNaturalCycle = ''
         ensureTodayMeals(routineDayAt(now, c)).usedCount = 0
         addLog('重置', '恢复日常饱满舒适状态', now)
         save()

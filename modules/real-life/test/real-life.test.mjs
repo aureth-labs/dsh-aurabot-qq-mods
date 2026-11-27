@@ -818,3 +818,59 @@ test('v1.2: dreams never repeat back-to-back in pool, AI dream generation works 
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('v1.2.1 (Issue #1): wake -> bathroom -> return never reloops into 24h sleep across midnight wake jitter', () => {
+  // 复现 Issue #1 原始时间线：2026-11-23 23:41:05 入睡 → 11-24 07:40:36 自然醒 → 去洗手间 → 07:43:36 回来
+  const settings = {
+    sleepEnabled: true,
+    sleepAt: '23:30',
+    wakeAt: '07:45',
+    bathroomEnabled: true,
+    showerEnabled: false,
+    timeZone: 'Asia/Shanghai',
+    autonomyMode: 'daily',
+  }
+  let now = Date.parse('2026-11-23T15:41:05Z') // 2026-11-23 23:41:05 CST
+  const eng = createRealLifeEngine({ getSettings: () => settings, nowFn: () => now, rngFn: () => 0.9 })
+
+  // 1. 23:41:05 入睡，记录计划醒来时间（基于 11-23 睡眠周期盐值）
+  eng.tick(now)
+  assert.equal(eng.state.mode, 'asleep')
+  const wakeAtMs = eng.state.sleep.plannedWakeAt
+  const wakeWall = wallTime(wakeAtMs, 'Asia/Shanghai')
+  assert.equal(wakeWall.ymd, '2026-11-24')
+
+  // 2. 到点自然醒，并立刻因膀胱满进入洗手间暂离 3 分钟
+  now = wakeAtMs + 5_000
+  eng.updateValues({ bladder: 90 }, now)
+  eng.tick(now)
+  assert.equal(eng.state.mode, 'away')
+  assert.equal(eng.state.away.kind, 'pee')
+
+  // 3. 3 分钟后从洗手间回来，再次 tick：严禁回笼入睡，更不能顺延 24 小时睡到 11-25！
+  now += 3 * 60_000 + 5_000
+  eng.tick(now)
+  assert.equal(eng.state.mode, 'awake', 'must stay awake after natural wake + bathroom return')
+
+  // 4. 再推进 5 分钟（模拟原 Issue 中 07:43:36 ~ 07:50 仍在旧版次日抖动窗口内）也保持清醒
+  now += 5 * 60_000
+  eng.tick(now)
+  assert.equal(eng.state.mode, 'awake')
+
+  // 5. 即使不是自然醒（例如距起床点仅剩 19 分钟被主人提前吵醒），tick 也不得自动回睡
+  let t2 = Date.parse('2026-11-23T15:41:05Z')
+  const eng2 = createRealLifeEngine({ getSettings: () => settings, nowFn: () => t2, rngFn: () => 0.9 })
+  eng2.tick(t2)
+  const wake2 = eng2.state.sleep.plannedWakeAt
+  t2 = wake2 - 19 * 60_000 // 距起床点仅 19 分钟
+  eng2.wakeUpNow(t2, '被叫醒')
+  eng2.state.lastTickAt = t2
+  eng2.updateValues({ energy: 50, bladder: 20 }, t2)
+  eng2.tick(t2 + 30_000)
+  assert.equal(eng2.state.mode, 'awake', 'must not auto-reenter sleep when < 45m before wakeAt')
+
+  // 6. 即便此时被手动哄睡，计划醒来时间也只能在 1 小时内，绝不 +24h 睡整天
+  eng2.enterSleep({ kind: 'night', now: t2 + 30_000, reason: '手动哄睡' })
+  const durH = (eng2.state.sleep.plannedWakeAt - (t2 + 30_000)) / 3_600_000
+  assert.ok(durH >= 0.45 && durH <= 1.0, `expected short snooze <= 1h, got ${durH}h`)
+})
