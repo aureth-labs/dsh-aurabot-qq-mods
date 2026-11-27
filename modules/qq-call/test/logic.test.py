@@ -198,7 +198,7 @@ class IdleTest(unittest.TestCase):
         self.assertEqual(self.判(silent_mode=True, user_spoke=True, now=105.0), "none")
         self.assertEqual(self.判(silent_mode=True, user_spoke=True, now=200.0), "idle")
 
-    def test_对方不吭夏十四秒后催一句(self):
+    def test_对方不吭声十四秒后催一句(self):
         self.assertEqual(self.判(user_spoke=True, now=112.0), "none")
         self.assertEqual(self.判(user_spoke=True, now=115.0), "idle")
 
