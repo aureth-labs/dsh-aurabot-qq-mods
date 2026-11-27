@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """
-call_bridge —— 把 AI 的声音"假装成麦克风"嗂进 QQ 语音通话。
+call_bridge —— 把 AI 的声音"假装成麦克风"喂进 QQ 语音通话。
 
-链路：文本 -> Breeze TTS(mp3) -> ffmpeg 解成 48k 单声道 PCM -> 咙叭选 CABLE Input
+链路：文本 -> Breeze TTS(mp3) -> ffmpeg 解成 48k 单声道 PCM -> 喇叭选 CABLE Input
       QQ 里把「麦克风」设成 CABLE Output，通话对面就能听见。
 
 命令：
@@ -335,3 +335,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
