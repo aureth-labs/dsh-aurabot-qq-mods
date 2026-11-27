@@ -1,0 +1,14 @@
+{
+  "id": "auto-change-model",
+  "name": "自动切换模型",
+  "version": "1.0.0",
+  "description": "按时段、星期、指定日期和会话人格自动切换聊天模型",
+  "category": "manage",
+  "tags": ["模型", "定时", "人格", "日期", "路由"],
+  "author": "auto-change-model contributors",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.3.0",
+  "requires": [],
+  "capabilities": ["plugin-config", "plugin-internals"]
+}
