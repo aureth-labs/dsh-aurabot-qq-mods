@@ -54,8 +54,8 @@ models/
 4. 在模块设置里填：Python 解释器路径（默认 `python`）、对话模型接口与模型名
 5. 打开面板（模块自己的页面），点「全部启动」
 
-运行时代码由模块首次启动时从模块文件夹铺到 `modules-data/qq-call/runtime/`；
-已经存在的脚本不会被覆盖（自己改过的调试版本留得住，要更新就删掉那个文件再重启）。
+运行时代码由模块首次启动时从模块文件夹铺到 `modules-data/qq-call/runtime/`：
+内容一样就跳过；不一样就覆盖，覆盖前先把旧版存成 `.bak-<旧版本>/`（自己改过的调试版本也找得回来）。
 
 运行时的数据都在 `plugins-data/aurabot/modules-data/qq-call/`：
 - `runtime/` 脚本（首次启动自动从模块目录铺过来，避免模块升级时被动）、`models/`（自己放进去的模型）
@@ -108,6 +108,28 @@ models/
 `CALL_TTS_ENGINE` 环境变量由模块按设置注入，脚本也可以单独跑：
 `python runtime/call_bridge.py say "测试一句"`。
 
+## 测试
+
+三块最容易出事的判断都从运行代码里抽到了 `runtime/logic.py`（纯标准库，不碰窗口、声卡、模型和网络），
+生产代码用的是同一份，测试不另写一套实现：
+
+| 覆盖 | 被测的东西 | 用例要点 |
+|---|---|---|
+| 来电 → 接听 / 不接 | `logic.CallGate` | 不是绿钮不点、命中才点、10 秒冷却按窗口算、自动接听关掉只观察不动手、窗口消失分「接过的结束」与「没接的错过」、结束后再来电重新落到 RINGING |
+| ASR 文本 → 回复的拼接与中断 | `logic.VoiceSegmenter`、`build_messages` / `append_turn`、`idle_action` | 语音段起止、静音 600ms 收句、短于 300ms 当咳嗽丢掉、她说的时候对方插话触发打断、底噪大时门槛自动抬高、history 只带最近 6 条 / 记住后裁到 8 条、先只听不说 30 秒开口、催话最多三次 |
+| runtime 子进程启动失败 / 退出码异常 | `index.mjs` 的 `classifyExit` / `failureUpdate` / `backoffMs` / `isDegraded` | 0 正常收工、信号杀掉、非 0 都算异常；连续 3 次降级且只报一次；退避 1s→3s→9s 封顶 60s；启动失败或异常退出时清 pid、记日志，`/status.runtime` 暴露失败次数、最近一次退出和降级标记 |
+
+跑法（模块目录下）：
+
+```
+npm test                          # 两套一起：node 15 个用例 + python 30 个用例
+node --test test/qq-call.test.mjs # 模块本体、运行时部署、进程降级
+python test/logic.test.py         # 接听闸门、VAD 分段、上下文拼接、静默策略
+```
+
+市场的 CI 两边都会跑：`modules/*/test/*.test.mjs` 由仓库统一执行，`npm test` 由 `package.json` 提供；
+机器上没有 python3 时 Python 那半会打印跳过，不会把检查压红。测试全程不连 QQ、不开声卡、不下载模型、不写用户目录。
+
 ## 已知限制
 
 - 纯 CPU：更高质量的方案（GPT-SoVITS 7 秒/句、RVC 2 秒音频 15 秒）进不了实时对话，有显卡再说
@@ -118,17 +140,23 @@ models/
 
 ```
 qq-call/
-├─ index.mjs              模块本体：拉进程、pid 认领、接口、命令
+├─ index.mjs              模块本体：拉进程、pid 认领、接口、命令、异常退出降级
 ├─ panel.js               自定义面板
 ├─ module.json            市场发布信息
+├─ package.json           只用来跑测试，模块零依赖
 ├─ LICENSE
 ├─ README.md
+├─ test/
+│  ├─ qq-call.test.mjs    模块本体 / 运行时部署 / 子进程降级（node --test）
+│  ├─ logic.test.py       接听闸门 / VAD 分段 / 上下文拼接 / 静默策略（unittest）
+│  └─ run-python.mjs      找一个能用的 python 去跑上面那个
 └─ runtime/
    ├─ call_bridge.py      常驻桥接：/health /say /tone，PCM 播进 CABLE Input
    ├─ call_loop.py        听 → 识别 → 大模型 → 合成 → 播回
    ├─ speak_stream.py     Piper 小句流水，支持打断
    ├─ asr.py              sherpa-onnx 流式识别
-   ├─ auto_answer.py      窗口截图找接听键
+   ├─ auto_answer.py      窗口截图找接听键（点不点交给 logic.CallGate）
+   ├─ logic.py            接听闸门 / VAD 分段 / 上下文拼接 / 静默策略（纯逻辑，可单独测）
    ├─ devices.py          列设备
    └─ requirements.txt
 ```
