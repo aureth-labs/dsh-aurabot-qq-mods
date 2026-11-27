@@ -1,0 +1,23 @@
+{
+  "id": "chat-shield",
+  "name": "聊天屏蔽",
+  "version": "1.1.0",
+  "description": "群聊 / 私聊黑名单静默，被拉黑的人她一字不回；自动识别刷屏、复读与机器人互刷，防对话污染。",
+  "category": "manage",
+  "tags": [
+    "黑名单",
+    "屏蔽",
+    "防刷屏",
+    "群管"
+  ],
+  "author": "winston-hoo",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [],
+  "platforms": [
+    "qq"
+  ],
+  "homepage": ""
+}
