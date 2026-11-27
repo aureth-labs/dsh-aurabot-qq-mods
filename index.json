@@ -995,7 +995,7 @@
     {
       "id": "dream-sleep",
       "name": "做梦睡觉",
-      "version": "3.0.0",
+      "version": "3.0.1",
       "description": "让她像真人一样睡觉：按睡眠周期一段段做梦、会失眠、入睡快慢随机、醒来时间随机、梦会被白天做过的事影响。",
       "category": "social",
       "tags": [
@@ -1014,13 +1014,13 @@
         "plugin-internals"
       ],
       "replacesBuiltin": false,
-      "tag": "dream-sleep-v3.0.0",
-      "file": "dream-sleep-v3.0.0.zip",
-      "path": "dream-sleep-v3.0.0/dream-sleep-v3.0.0.zip",
-      "size": 28781,
-      "sha256": "21377e9278271735ad8e948c594cc3ccba63f6acb0751ee15156fbac73b4e8d9",
-      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
-      "publishedAt": "2026-11-25T14:35:21.423Z"
+      "tag": "dream-sleep-v3.0.1",
+      "file": "dream-sleep-v3.0.1.zip",
+      "path": "dream-sleep-v3.0.1/dream-sleep-v3.0.1.zip",
+      "size": 28863,
+      "sha256": "fb7448e166988110241a24f74d46e53ad97bd1a6bdf5a3babf4540f48e53dcf6",
+      "commit": "b641a9491dee6809c8b0ec2ba6d6df85f39f9f05",
+      "publishedAt": "2026-11-27T02:45:05.749Z"
     },
     {
       "id": "dsh-image",
@@ -2740,7 +2740,7 @@
     {
       "id": "receipt-print",
       "name": "热敏打印",
-      "version": "0.10.0",
+      "version": "0.10.3",
       "description": "把模板和提示词变成热敏小票：首次使用需在面板或聊天确认使用协议；定时或随时触发，纸宽按毫米自适应排版，配图缩放调色后打印并自动切纸；支持真机校准页，量出实际有效宽度并检查图片切边；每次打印在本机保存正文与触发来源备份，备份目录可自定义；内置 ESC/POS 指令表和字节解码，可查打印机状态并把返回字节翻译成中文；打印失败或打印机报错会主动私聊主人。支持 Windows USB 队列、网口 9100、CUPS 和预览。",
       "category": "desktop",
       "tags": [
@@ -2761,13 +2761,13 @@
         "plugin-config"
       ],
       "replacesBuiltin": false,
-      "tag": "receipt-print-v0.10.0",
-      "file": "receipt-print-v0.10.0.zip",
-      "path": "receipt-print-v0.10.0/receipt-print-v0.10.0.zip",
-      "size": 278425,
-      "sha256": "4cd8155b6c6eb54bc8dd095841586cacd6c1d18550364917d6f733783ee7111b",
-      "commit": "f2e91f5830239af326c4982c802775ab29a542f6",
-      "publishedAt": "2026-11-25T09:28:03.838Z"
+      "tag": "receipt-print-v0.10.3",
+      "file": "receipt-print-v0.10.3.zip",
+      "path": "receipt-print-v0.10.3/receipt-print-v0.10.3.zip",
+      "size": 278674,
+      "sha256": "48d00ed53ac9b56c2f9d54b240550b8039b3e08db8eecdd739f0c9dea78c384d",
+      "commit": "b641a9491dee6809c8b0ec2ba6d6df85f39f9f05",
+      "publishedAt": "2026-11-27T02:45:05.749Z"
     },
     {
       "id": "reminder",
@@ -3179,7 +3179,7 @@
     {
       "id": "shangxue-tell-owner",
       "name": "转告主人反馈",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "description": "群里/私聊里有人托话，记成工单送达主人；主人处理完，机器人自己找对工单回群引用原消息告诉本人。转述由主模型用自然口吻完成",
       "category": "social",
       "tags": [
@@ -3203,13 +3203,13 @@
         "plugin-internals"
       ],
       "replacesBuiltin": false,
-      "tag": "shangxue-tell-owner-v1.0.1",
-      "file": "shangxue-tell-owner-v1.0.1.zip",
-      "path": "shangxue-tell-owner-v1.0.1/shangxue-tell-owner-v1.0.1.zip",
-      "size": 19747,
-      "sha256": "b6f505005f3ae5cda794060add99e84ad102ae6b91c435cbd923c1205dc2da3b",
-      "commit": "a0e31b09ed070c1e1ba5d3f38ee7f8276259fb61",
-      "publishedAt": "2026-11-25T12:05:17.223Z"
+      "tag": "shangxue-tell-owner-v1.0.2",
+      "file": "shangxue-tell-owner-v1.0.2.zip",
+      "path": "shangxue-tell-owner-v1.0.2/shangxue-tell-owner-v1.0.2.zip",
+      "size": 19752,
+      "sha256": "10c1e20227a800981bfa53f8e429ce5a1650688d275fa50e4a04adf77ed38247",
+      "commit": "b641a9491dee6809c8b0ec2ba6d6df85f39f9f05",
+      "publishedAt": "2026-11-27T02:45:05.749Z"
     },
     {
       "id": "shitu",
@@ -3338,7 +3338,7 @@
     {
       "id": "song",
       "name": "点歌",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "description": "按歌名或关键词点歌，拉取音源并推送播放，支持队列与失败回退。替换内置 song。",
       "category": "social",
       "tags": [
@@ -3359,13 +3359,13 @@
       ],
       "replacesBuiltin": true,
       "homepage": "https://github.com/aureth-labs/dsh-aurabot-qq",
-      "tag": "song-v1.0.1",
-      "file": "song-v1.0.1.zip",
-      "path": "song-v1.0.1/song-v1.0.1.zip",
-      "size": 55447,
-      "sha256": "b07dbe194601da91ea1ef366363388e8ca294c9a4fdde735ba68ba1bc8f22b36",
-      "commit": "8f6ee3c01e03e6ca92291ba7c57ecd3b42a7ece1",
-      "publishedAt": "2026-11-25T14:35:21.423Z"
+      "tag": "song-v1.0.2",
+      "file": "song-v1.0.2.zip",
+      "path": "song-v1.0.2/song-v1.0.2.zip",
+      "size": 55517,
+      "sha256": "600a3a50a3242659e29e2792f046de0044dff9c5e3cae5ce6a0dda457d509fd5",
+      "commit": "b641a9491dee6809c8b0ec2ba6d6df85f39f9f05",
+      "publishedAt": "2026-11-27T02:45:05.749Z"
     },
     {
       "id": "speak-natural",
@@ -4113,5 +4113,5 @@
       "reason": "作者主动撤回。"
     }
   ],
-  "generatedAt": "2026-11-25T14:50:08.169Z"
+  "generatedAt": "2026-11-27T02:45:05.749Z"
 }
