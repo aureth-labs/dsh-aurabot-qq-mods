@@ -198,3 +198,18 @@ test('unloading the module cancels a pending approval, and another chat cannot a
   if(!unload)h.dispose()
  }
 })
+
+test('failure diagnostics are bounded, redacted before truncating, and cannot alter a verdict',async()=>{
+ const {check}=await import('../index.mjs')
+ for (const failLog of [false,true]) {
+  const logs=[];let redactLength=0
+  const raw='secret-value\n'+'x'.repeat(3000)
+  const api={core:{hub:{modelFor:()=>({provider:'p',model:'m'})}},
+   lib:()=>({redact:s=>{redactLength=s.length;return s.replace('secret-value','***')}}),
+   log:{warn:()=>{},debug:s=>{logs.push(s);if(failLog)throw Error('disk full')}},
+   dsh:{llm:{async *stream(){yield {type:'text-delta',text:raw};yield {type:'finish',reason:{kind:'stop'}}}}}}
+  assert.equal(await check(api,'private:123',{current:'【私聊】甲：画只猫'},new AbortController().signal,{}),'UNAVAILABLE')
+  assert.equal(redactLength,raw.length);assert.equal(logs.length,1);assert.ok(logs[0].length<2300)
+  assert.doesNotMatch(logs[0],/secret-value/)
+ }
+})
