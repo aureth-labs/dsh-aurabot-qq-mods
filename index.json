@@ -873,6 +873,36 @@
       "publishedAt": "2026-11-09T16:12:08.199Z"
     },
     {
+      "id": "daily-session",
+      "name": "每日会话拆分",
+      "version": "1.0.0",
+      "description": "每天自动开新会话，按聊天提炼前一天对话，只在新会话首轮注入摘要，降低上下文和 token 压力",
+      "category": "manage",
+      "tags": [
+        "会话",
+        "上下文",
+        "每日",
+        "省Token"
+      ],
+      "author": "Winston",
+      "license": "MIT",
+      "api": 1,
+      "minPluginVersion": "1.2.0",
+      "requires": [],
+      "capabilities": [
+        "filesystem",
+        "plugin-internals"
+      ],
+      "replacesBuiltin": false,
+      "tag": "daily-session-v1.0.0",
+      "file": "daily-session-v1.0.0.zip",
+      "path": "daily-session-v1.0.0/daily-session-v1.0.0.zip",
+      "size": 14901,
+      "sha256": "7fbeccc30fa52443616b5ba38306da845a822f881380e55965ef66e1c98a5586",
+      "commit": "7e0e43e55350ef31c3be949d444099993561025c",
+      "publishedAt": "2026-11-27T02:57:08.029Z"
+    },
+    {
       "id": "deepseek-balance",
       "name": "DeepSeek 余额",
       "version": "1.1.1",
@@ -4148,5 +4178,5 @@
       "reason": "作者主动撤回。"
     }
   ],
-  "generatedAt": "2026-11-27T02:56:09.759Z"
+  "generatedAt": "2026-11-27T02:57:08.029Z"
 }
