@@ -34,7 +34,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, Math.max(0, ms)))
 export default {
   id: 'world-link',
   name: '开放世界',
-  version: '0.1.0',
+  version: '0.1.2',
   api: 1,
   description: '让大肥鱼以本人身份进入 3D 开放世界，自主观察、走动、说话、牵手；主人只能旁观和发建议。',
   navGroup: 'market',
@@ -320,13 +320,13 @@ export default {
         name: 'world_act',
         description: '在 3D 开放世界里做一件事：走动、说话、牵手、跳舞、答应或拒绝请求、松手、采集、摆放、盖房子。只有连上世界时有用。',
         properties: {
-          action: { type: 'string', enum: ['move_to', 'idle', 'say', 'request_handhold', 'request_dance', 'accept_social', 'reject_social', 'release_social', 'mine', 'pickup', 'place', 'build'], description: '要做的动作' },
-          target: { type: 'string', description: '牵手/跳舞写对方名字；答应/拒绝写 request_id；mine 写物件 id' },
+          action: { type: 'string', enum: ['move_to', 'idle', 'say', 'request_handhold', 'request_dance', 'accept_social', 'reject_social', 'release_social', 'mine', 'pickup', 'place', 'build', 'give', 'fish', 'cook'], description: '要做的动作' },
+          target: { type: 'string', description: '牵手/跳舞写对方名字；答应/拒绝写 request_id；mine 写物件 id；give 写对方名字' },
           place: { type: 'string', description: 'move_to 的目的地名：湖边 / 台地（不给地名就用 x、z 坐标）' },
           x: { type: 'number', description: 'move_to / place / build 的 x 坐标' },
           z: { type: 'number', description: 'move_to / place / build 的 z 坐标' },
-          item: { type: 'string', description: 'place 要摆放的物品（背包里要有）：wood / stone / fiber / flower' },
-          recipe: { type: 'string', description: 'build 的配方名：house（小木屋，要 10 个 wood）' },
+          item: { type: 'string', description: 'place 要摆放的物品 / give 要递的物品（背包里要有）：wood / stone / fiber / flower / fish / cooked' },
+          recipe: { type: 'string', description: 'build 的配方名：house 小木屋(wood×10) / house2 中木屋(wood×20+stone×5) / house3 大木屋(wood×42+stone×15) / campfire 篝火(stone×5) / basket 花篮(fiber×3+flower×2) / fence 栅栏(wood×2)' },
           say: { type: 'string', description: '顺带说一句话（可选）' },
         },
         required: ['action'],
@@ -365,6 +365,13 @@ export default {
               return { ok: false, message: 'build 要给 x / z 坐标（身边 5m 内）' };
             }
             params = { recipe: String(args.recipe || 'house'), x: Number(args.x), z: Number(args.z) };
+          } else if (a === 'give') {
+            const e = link.findEntity(args.target);
+            if (!e) return { ok: false, message: `附近没找到 ${args.target || '（没写名字）'}，先用 world_look 看有谁` };
+            if (!args.item) return { ok: false, message: 'give 要写给什么物品（wood/stone/fiber/flower/fish/cooked）' };
+            params = { target_entity: e.id, item: String(args.item).trim(), count: Math.max(1, Number(args.count) || 1) };
+          } else if (a === 'fish' || a === 'cook') {
+            params = {};
           }
 
           const r = await link.act(a, params, args.say);
