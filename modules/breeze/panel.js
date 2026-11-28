@@ -47,7 +47,7 @@ return function BreezePanel({ settings, draftSettings, setSettings, toast }) {
   const doLogin = async () => {
     setBusy('login')
     try {
-      const r = await call('/login')
+      const r = await call('/browser-login', {})
       toast(r.message || 'ok')
     } catch (e) {
       toast('开不了浏览器：' + e.message)
@@ -100,20 +100,19 @@ return function BreezePanel({ settings, draftSettings, setSettings, toast }) {
     desc: '在线文字转语音：填好 key 和音色，她的语音条就走 Breeze；合成失败会自动退回 edge / Windows 语音。',
     right: h(ui.Switch, { on: d.on !== false, onChange: (v) => upd('on', v) }),
   },
-    h(ui.Row, { label: '登录', hint: '点下面登录一次，之后每天签到都靠它，只有掉登录了才需要再点' },
+    h(ui.Row, { label: '登录', hint: '在运行 DSH 的电脑上登录。登好后关闭该窗口，再点「手动签到」。语音合成只需 API Key。' },
       h('div', { className: 'ab-flex', style: { gap: 8, flexWrap: 'wrap' } },
         h(ui.Btn, { small: true, disabled: busy === 'login', onClick: doLogin },
-          busy === 'login' ? '正在开…' : '登录'),
+          busy === 'login' ? '正在开…' : '在浏览器登录'),
         h(ui.Btn, { small: true, disabled: busy === 'checkin', onClick: doCheckin },
           busy === 'checkin' ? '正在领…' : '手动签到'),
         h(ui.Btn, { small: true, disabled: busy === 'logout' || !hasLogin, onClick: doLogout },
           busy === 'logout' ? '正在退…' : confirmOut ? '再点一次就退出' : '退出登录'),
       ),
       h('div', { className: 'ab-muted ab-small', style: { marginTop: 6 } },
-        hasLogin ? '登录态已建好' : '还没登录',
+        hasLogin ? '登录态已建好' : '尚未确认登录',
         last ? ' ｜ 上次签到：' + last : '',
-        ' ｜ 登完我会自己抓，不用点第二下',
-        ' ｜ 想换号就先退出登录，再点「登录」重新登'),
+        ' ｜ 换号前请先退出登录'),
     ),
 
     h(ui.Row, { label: 'API Key', hint: 'breezeblue.ai 后台的 key，形如 brz_…；清空就会退回 edge / Windows 语音' },

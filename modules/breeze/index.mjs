@@ -1,3 +1,4 @@
+import { createSynthQueue, fetchBreeze } from './lib/resilience.mjs'
 // Breeze Blue 在线语音：设置放在面板「语音」页最下面。
 // 不改插件核心：自己在 127.0.0.1 起一个小的 HTTP 语音服务，再把面板「语音」页的引擎
 // 设成插件本来就支持的「通用 HTTP」，地址指过来 —— 这样任何人都能直接用。
@@ -11,7 +12,7 @@ import { checkinAction, describeClaim, formatDate, looksLoggedIn, msUntil, nowMi
 export default {
   id: 'breeze',
   name: 'Breeze 语音',
-  version: '1.3.3',
+  version: '1.3.6',
   api: 1,
   description: 'Breeze Blue 在线文字转语音 + 每日自动签到领积分',
   tab: 'voice',
@@ -35,6 +36,7 @@ export default {
     const BRIDGE_PORT = 47653
     const BRIDGE_PORT_TRIES = 4
     let bridgeServer = null
+    let bridgeAbort = null
     let bridgePort = 0
     let restoreVoice = null
     // listen 是异步的：回调可能在模块被停掉之后才到。用「代际」判断这次回调还算不算数，
@@ -45,14 +47,16 @@ export default {
     /** 这份设置够不够开服务：要开、有 key、有音色 */
     const bridgeWanted = (s) => Boolean(s && s.on && String(s.apiKey || '').trim() && String(s.voiceId || '').trim())
 
+    const synthQueue = createSynthQueue()
+
     /** 调 Breeze 合成一段，返回 mp3 字节 */
-    async function synthMp3(text) {
+    async function synthMp3(text, signal) {
       const s = api.settings() || {}
       const apiKey = String(s.apiKey || '').trim()
       const voiceId = String(s.voiceId || '').trim()
       if (!apiKey || !voiceId) throw new Error('还没填 API Key 或音色 ID')
       const url = `${BREEZE_URL}/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=${OUTPUT_FORMAT}`
-      const res = await fetch(url, {
+      const res = await fetchBreeze(url, {
         method: 'POST',
         headers: { 'xi-api-key': apiKey, 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -61,12 +65,7 @@ export default {
           language_code: String(s.language || 'zh').trim() || 'zh',
           instructions: String(s.instructions || ''),
         }),
-        signal: AbortSignal.timeout(60000),
-      })
-      if (!res.ok) {
-        const t = await res.text().catch(() => '')
-        throw new Error(`Breeze HTTP ${res.status}：${t.slice(0, 160)}`)
-      }
+      }, { signal, log: api.log })
       const buf = Buffer.from(await res.arrayBuffer())
       if (buf.length < 400) throw new Error('Breeze 返回的音频太短')
       return buf
@@ -77,6 +76,8 @@ export default {
       const s = settings || api.settings() || {}
       if (bridgeServer || !bridgeWanted(s)) return
       const gen = ++bridgeGen
+      const lifetime = new AbortController()
+      bridgeAbort = lifetime
       const srv = http.createServer(async (req, res) => {
         const u = new URL(req.url || '/', 'http://127.0.0.1')
         const text = u.searchParams.get('text') || ''
@@ -86,7 +87,9 @@ export default {
           return
         }
         try {
-          const buf = await synthMp3(text)
+          const cancel = new AbortController()
+          res.on('close', () => { if (!res.writableEnded) cancel.abort(new Error('语音调用方已断开')) })
+          const buf = await synthQueue(signal => synthMp3(text, signal), AbortSignal.any([cancel.signal, lifetime.signal]))
           res.writeHead(200, { 'content-type': 'audio/mpeg', 'content-length': buf.length })
           res.end(buf)
         } catch (error) {
@@ -137,7 +140,7 @@ export default {
             voice: {
               enabled: true,
               engine: 'http',
-              http: { ...(v.http || {}), urlTemplate: `http://127.0.0.1:${port}/?text={text}`, method: 'GET', sampleRate: 24000 },
+              http: { ...(v.http || {}), urlTemplate: `http://127.0.0.1:${port}/?text={text}`, method: 'GET', sampleRate: 24000, fallback: 'edge' },
             },
           })
         } catch (error) {
@@ -150,6 +153,8 @@ export default {
     /** 关掉本地服务，并把引擎还原成开之前的（只还原成我们自己写的那种，别覆盖别人后改的设置） */
     function stopBridge() {
       bridgeGen++
+      bridgeAbort?.abort(new Error('Breeze 语音桥已停用'))
+      bridgeAbort = null
       if (bridgeServer) {
         try {
           bridgeServer.close()
@@ -247,19 +252,22 @@ export default {
       try {
         opened = await startBrowser({ headless: true })
         const parts = await grabCookies()
-        // 复用别人（用户正开着的登录窗口）时别去关它，只关我们自己起的
-        if (opened && !opened.reused) await closeBrowser()
         if (looksLoggedIn(parts)) memCookie = parts.join('; ')
-      } catch (error) {
-        api.log.debug('[breeze] 从浏览器配置里读登录态失败：', error.message)
+      } finally {
+        if (opened && !opened.reused) await closeBrowser()
       }
       return memCookie
     }
 
     /** 真去领一次。返回 { ok, message, balance? } */
     async function claim() {
-      const cookie = await sessionCookie()
-      if (!cookie) return { ok: false, message: '还没登录，先在面板点一下「登录」' }
+      let cookie
+      try {
+        cookie = await sessionCookie()
+      } catch (error) {
+        return { ok: false, message: error.message }
+      }
+      if (!cookie) return { ok: false, message: '未找到 Breeze 登录记录。请点「在浏览器登录」，登录后关窗，再点「手动签到」' }
       const headers = {
         'content-type': 'application/json',
         'user-agent': 'Mozilla/5.0',
@@ -536,7 +544,7 @@ export default {
         }
         await new Promise((r) => setTimeout(r, 250))
       }
-      throw new Error('Chrome 15 秒内没开出调试端口')
+      throw new Error('暂时无法连接 Breeze 专用浏览器。如果登录窗口还开着，请关掉它，再点「手动签到」')
     }
 
     /** 把那个登录窗口关掉（连不上就算了） */
@@ -656,6 +664,22 @@ export default {
       return r.reused ? '登录窗口开着呢，登进去以后我自动抓' : '登录窗口开好了，登录完我会自己抓，不用再点'
     }
 
+    // Interactive sign-in runs in the user's regular browser on the DSH host.
+    api.route('/browser-login', async (req) => {
+      if (req.method !== 'POST') return { ok: false, message: '请从面板打开登录窗口' }
+      if (await findExistingPort()) return { ok: false, message: '请先关掉之前的 Breeze 登录窗口，再试一次' }
+      const browser = findBrowser()
+      if (!browser) return { ok: false, message: '找不到 Chrome 或 Edge，请在下方填写浏览器路径' }
+      try {
+        const child = spawn(browser, [`--user-data-dir=${chromeDir()}`, 'https://breezeblue.ai/zh/auth/login'], { detached: true, stdio: 'ignore' })
+        await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
+        child.unref()
+        return { ok: true, message: '登录后关掉这个窗口，回面板点「手动签到」确认' }
+      } catch (error) {
+        return { ok: false, message: '开不了浏览器：' + error.message }
+      }
+    })
+
     api.route('/login', async () => {
       try {
         return { ok: true, message: await doLogin() }
@@ -695,6 +719,7 @@ export default {
 
     api.route('/checkin', async () => {
       const r = await claim()
+      if (r.ok && !readState().loginAt) writeState({ ...readState(), loginAt: new Date().toISOString() })
       markDone(r.ok, r.message, 'manual')
       return { ok: r.ok, message: r.ok ? r.message : '没成功：' + r.message }
     })
