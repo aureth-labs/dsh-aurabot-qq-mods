@@ -12,8 +12,15 @@ export const ACTION_LIST = [
   'move_to', 'idle', 'say',
   'request_handhold', 'request_dance',
   'accept_social', 'reject_social', 'release_social',
-  'mine', 'pickup', 'place', 'build',
+  'mine', 'pickup', 'place', 'build', 'give',
+  'fish', 'cook',
 ];
+
+/* 展示用中英对照：内部背包/配方仍用英文 key，摘要里换成中文 */
+const ITEM_CN = { wood: '木头', stone: '石头', fiber: '纤维', flower: '花', fish: '鲜鱼', cooked: '烤鱼' };
+const TYPE_CN = { tree: '树', rock: '岩石', bush: '灌木', flower: '花', house: '小木屋', house2: '中木屋', house3: '大木屋', build: '摆放方块', placed: '摆放方块', item_drop: '掉落物', campfire: '篝火', basket: '小花篮', fence: '木栅栏' };
+const itemCn = (it) => ITEM_CN[it] || it || '';
+const typeCn = (tp) => TYPE_CN[tp] || tp || '';
 
 export class WorldLink {
   constructor(opts) {
@@ -183,6 +190,16 @@ export class WorldLink {
       return;
     }
 
+    if (m.type === 'visitor_dm') {
+      // 访客私聊：只推给本鱼，作为留言进入上下文
+      const from = m.from || '访客';
+      m.text = `${from} 对你说：${String(m.text || '')}`;
+      this.suggestions.push({ text: m.text, at: Date.now() });
+      while (this.suggestions.length > 10) this.suggestions.shift();
+      this.onSuggestion(m);
+      return;
+    }
+
     if (m.type === 'intent_result') {
       const p = this.pendingIntents.get(m.intent_id);
       if (p) {
@@ -322,7 +339,7 @@ export function summarize(p, extra = {}) {
   const places = (p.places || []).slice(0, 2);
   if (places.length) {
     lines.push('地标：' + places
-      .map((q) => `${q.name} ${Number(q.dist).toFixed(0)}m（${q.dir}方向${q.relation ? '，' + q.relation : ''}）`)
+      .map((q) => `${q.name} ${Number(q.dist).toFixed(0)}m（${q.rel || q.dir}${q.relation ? '，' + q.relation : ''}）`)
       .join('，'));
   }
 
@@ -337,7 +354,10 @@ export function summarize(p, extra = {}) {
   const chat = (p.chat || []).slice(-8);
   if (chat.length) {
     lines.push('频道最近对话：');
-    for (const c of chat) lines.push('- ' + (c.name || '?') + '：「' + (c.text || '') + '」');
+    for (const c of chat) {
+      const tag = c.kind === 'visitor' ? '访客' : '';
+      lines.push('- ' + (tag ? tag + ' ' : '') + (c.name || '?') + '：「' + (c.text || '') + '」');
+    }
   }
 
   const evs = (p.events || []).filter((e) => e.kind !== 'say').slice(-6);
@@ -352,20 +372,20 @@ export function summarize(p, extra = {}) {
   const objs = (p.objects || []).slice(0, 4);
   if (objs.length) {
     lines.push('附近能采的：' + objs
-      .map((o) => `${o.id}（${o.type}→${o.item}）${Number(o.dist).toFixed(1)}m`)
+      .map((o) => `${o.id}（${o.typeName || typeCn(o.type)}${o.itemName ? '·' + o.itemName : ''}）${Number(o.dist).toFixed(1)}m ${o.rel || ''}`)
       .join('、'));
   }
 
   const dr = (p.drops || []).slice(0, 3);
   if (dr.length) {
     lines.push('地上有掉落：' + dr
-      .map((d) => `${d.item} ${Number(d.dist).toFixed(1)}m`)
+      .map((d) => `${d.itemName || itemCn(d.item)} ${Number(d.dist).toFixed(1)}m ${d.rel || ''}`)
       .join('、'));
   }
 
   const bag = p.inv || {};
   const bagKeys = Object.keys(bag).filter((k) => bag[k] > 0);
-  lines.push(bagKeys.length ? '背包：' + bagKeys.map((k) => k + '×' + bag[k]).join('、') : '背包是空的');
+  lines.push(bagKeys.length ? '背包：' + bagKeys.map((k) => `${itemCn(k)}×${bag[k]}`).join('、') : '背包是空的');
 
   if (extra.social && extra.social.length) {
     lines.push('等你回应：');

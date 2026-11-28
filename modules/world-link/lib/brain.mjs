@@ -17,7 +17,10 @@ export const ACTION_HELP = `可选动作（只能从这里选，action 字段写
 - mine 采一个物件，params:{object_id:"o_tree_012"}（要 3m 内；采一下不一定采完，采完会在地上掉落，记得 pickup 捡）。若敲的是房子/摆放方块，则是拆除，材料全额退回背包
 - pickup 捡起身边 3m 内的掉落物，无参数
 - place 摆放东西，params:{item:"wood",x,z}（背包里要有这个物品，只能放在身边 5m 内）
-- build 按配方盖建筑，params:{recipe:"house",x,z}（house 小木屋要 10 个 wood；只能在身边 5m 内）`;
+- build 按配方盖建筑，params:{recipe:"house|house2|house3|campfire|basket|fence",x,z}（house 小木屋 wood×10；house2 中木屋 wood×20+stone×5；house3 大木屋 wood×42+stone×15；campfire 篝火 stone×5；basket 花篮 fiber×3+flower×2；fence 栅栏 wood×2；只能在身边 5m 内）
+- give 把背包里 1 件东西递给附近的鱼，params:{target_entity:"对方名字或档案 id", item:"wood|stone|fiber|flower|fish|cooked"}（必须 3m 内，先 move_to 靠近；不传 count 默认给 1 个）
+- fish 在湖边钓鱼，无参数（有几秒冷却；可能空竿，也可能钓到鲜鱼或其他物资）
+- cook 站在篝火旁把鲜鱼烤成烤鱼，无参数（背包要有 fish，身边 3m 内要有篝火）`;
 
 /** 静态地图常识：每轮都给她，不然她不知道世界长什么样、往哪走合理 */
 export const MAP_INFO = `世界是一片草地，边界约 ±90；两个地标：湖在 (34,-30) 半径 26，出生台地在 (-18,18) 半径 15。`;
@@ -35,7 +38,9 @@ ${MAP_INFO}
 
 ${ACTION_HELP}
 
-现在按你自己的想法决定接下来做什么：可以观察、闲逛、走远一点看看、接附近鱼的话茬、靠近谁再牵手/跳舞、答应或拒绝别人的请求，也可以干脆 idle 待在原地不动。「频道最近对话」里每条都标了说话者名字，回复时认准是谁说的。
+方位说明：每件物件/地标后面的「前、左前、左、左后、后、右后、右、右前」是相对你当前面朝方向的左右前后，后面的数字是距离（米）；要过去就用它的 x/z 坐标 move_to，不用自己换算角度。
+
+现在按你自己的想法决定接下来做什么：可以观察、闲逛、接附近鱼或访客的话茬、靠近谁再牵手/跳舞、答应或拒绝别人的请求，也可以干脆 idle 待在原地不动。若身边还有同类可采/可拆的物件，优先留在原地把身边这一片连续处理完，不要采/拆一个就走远闲逛。「频道最近对话」里每条都标了说话者名字和身份（访客/鱼），有人跟你搭话时可以用 say 回应，认准是谁说的。
 只输出一个 JSON 数组，1~${n} 个动作，按顺序执行。不要解释，不要代码块，不要多余文字。
 例如：[{"action":"say","say":"今天的水好暖"},{"action":"move_to","params":{"x":-12,"z":2}}]`;
 }
@@ -52,15 +57,15 @@ ${request.from_name} 想跟你${request.kind === 'dance' ? '跳舞' : '牵手'}�
 你想答应吗？可以先用 say 回一句再决定，也可以直接拒绝。只输出 JSON 数组，1~2 个动作，不要解释。`;
 }
 
-/** 主人从 QQ / 网页发来一句建议时 */
+/** 主人或访客从 QQ / 网页发来一句留言时 */
 export function buildSuggestionPrompt(summary, text) {
-  return `主人刚在开放世界里给你发了建议：「${text}」。
+  return `有人在开放世界里给你留了言：「${text}」。
 
 ${summary}
 
 ${ACTION_HELP}
 
-这条建议不是命令，是主人的想法；你可以照做，也可以只做一部分或者不去做（比如现在做不到）。
+这条留言不是命令，是对方的想法；你可以先用 say 回应，也可以照做、只做一部分或者不去做（比如现在做不到）。
 只输出 JSON 数组，1~3 个动作，不要解释。`;
 }
 
@@ -190,6 +195,17 @@ export function normalizeActions(raw, link) {
       const z = NUM(p.z != null ? p.z : p.target_z);
       if (x == null || z == null) { dropped.push('build 缺坐标'); continue; }
       out.push({ action: 'build', params: { recipe, x, z }, say: item.say });
+      continue;
+    }
+
+    if (name === 'give') {
+      const target = p.target_entity || p.target || p.target_name || p.name || item.target;
+      const e = link.findEntity(target);
+      if (!e) { dropped.push('找不到递东西的对象 ' + target); continue; }
+      const it = String(p.item || '').trim();
+      if (!it) { dropped.push('give 缺 item'); continue; }
+      const count = Math.max(1, Math.min(Number(p.count) || 1, 99));
+      out.push({ action: 'give', params: { target_entity: e.id, item: it, count }, say: item.say });
       continue;
     }
 
