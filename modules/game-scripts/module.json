@@ -1,0 +1,14 @@
+{
+  "id": "game-scripts",
+  "name": "小游戏脚本工坊",
+  "version": "0.1.0",
+  "description": "她自己写小游戏脚本并在本机跑起来：主人指定脚本目录、Node 或 PowerShell 运行时、PowerShell 路径、超时和权限上限。默认用 Node 权限模型，不需要 PowerShell 7。",
+  "category": "tool",
+  "tags": ["小游戏", "脚本", "Node", "PowerShell", "权限"],
+  "author": "DeepSeek",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.3.0",
+  "requires": [],
+  "capabilities": ["filesystem", "process", "dynamic-code"]
+}
