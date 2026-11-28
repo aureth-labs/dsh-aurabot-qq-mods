@@ -1,0 +1,22 @@
+{
+  "id": "latex",
+  "name": "LaTeX 渲染",
+  "version": "2.3.0",
+  "description": "@ 她并给一段 LaTeX，本机把公式渲染成图片发回来。",
+  "category": "tool",
+  "tags": [
+    "latex",
+    "公式",
+    "数学",
+    "图片"
+  ],
+  "author": "litongtong256",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [],
+  "build": {
+    "out": ".build"
+  }
+}
