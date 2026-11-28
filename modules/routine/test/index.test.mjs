@@ -146,12 +146,15 @@ test('扰动生成：一周最多两条，只落休→班或班→休', () => {
   }
 })
 
-test('托管开启沿：tick 检测到 enabled false→true 立刻对齐 livin，不等状态沿', async () => {
+test('托管开启沿：tick 检测到 enabled false→true 立刻对齐 livin，不等状态沿', async (t) => {
+  // tick() 内部用 Date.now()。不冻结时钟的话，这条断言成立与否取决于跑测试的真实时刻：
+  // stateAt() 按当前时刻算「该开 livin」，而计划那一轮在「决定出门」分支里会再写一次
+  // ext.livin.enabled=false（index.mjs 的 planTick），两个写撞在一起，断言就随机红。
+  // 冻到周一 10:30（班段内、livin=false），结论固定。
+  t.mock.timers.enable({ apis: ['Date'], now: MONDAY_1030 })
   const settings = { enabled: false, pressureOn: true }
   const { api, config } = makeApi({ settings })
   const exp = mod.setup(api)
-  // 周一 10:30 是班段内（work）——但不能控 Date.now()，改在真实时刻跑逻辑：直接调用导出的 tick
-  // tick 用 Date.now()，当前真实时刻是什么状态就按什么状态断言「对齐到该状态的 livin 值」
   await exp.tick()
   const before = config.ext.livin.enabled
   // 关掉再打开托管，模拟开启沿
@@ -167,6 +170,7 @@ test('托管开启沿：tick 检测到 enabled false→true 立刻对齐 livin�
   await exp.tick()
   assert.equal(config.ext.livin.enabled, stable)
   void before
+  t.mock.timers.reset()
 })
 
 test('存盘原子化：无 .tmp 残留', async () => {
