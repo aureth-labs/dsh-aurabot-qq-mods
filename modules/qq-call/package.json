@@ -1,0 +1,9 @@
+{
+  "name": "aurabot-module-qq-call",
+  "version": "0.3.2",
+  "private": true,
+  "description": "QQ 语音实时通话（Aurabot 模块）：只用来跑测试，模块本身零依赖",
+  "scripts": {
+    "test": "node --test test/qq-call.test.mjs && node test/run-python.mjs"
+  }
+}

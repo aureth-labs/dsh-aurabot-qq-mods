@@ -1,0 +1,15 @@
+{
+  "id": "qq-call",
+  "name": "QQ语音通话",
+  "version": "0.3.3",
+  "description": "接入 QQ 语音通话：来电先由她自己决定接不接、实时识别对方说话、模型想好后用合成语音回过去，一整轮对话自己跑。",
+  "category": "social",
+  "tags": ["QQ", "语音通话", "实时", "ASR", "TTS"],
+  "platforms": ["qq"],
+  "author": "澜",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": ["process", "network", "filesystem", "plugin-internals"]
+}
