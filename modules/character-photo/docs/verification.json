@@ -1,0 +1,13 @@
+{
+  "upstream": "https://github.com/aureth-labs/dsh-aurabot-qq",
+  "tag": "v1.3.0",
+  "commit": "14ffe5b6b174fec4566e04af6a0da431341064e2",
+  "defaultBranchCommitWithIdenticalImageGen": "b10931d24fb0905365dc3a669b2291a3e387bee5",
+  "file": "src/features/imagegen.js",
+  "sourceBlob": "2034c45816d6ee3dcb78864df67cb304ebc410d3",
+  "sourceSHA256": "c7c111741810da50b18c0abb66fd26a2ae962768d6c53a3f0db79763d59a7596",
+  "patchedSHA256": "b71abd7ba355db15a585147f85bc8410f5896538ea0ac5cb52b8e88d4017d724",
+  "patchSHA256": "95f6b0421b41872eebd6e855f224f2a1e8810f8061b1708c72d31e0ee20fd1cb",
+  "roundtrip": true,
+  "isolatedTests": 92
+}

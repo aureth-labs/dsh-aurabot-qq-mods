@@ -1,0 +1,64 @@
+diff --git a/src/features/imagegen.js b/src/features/imagegen.js
+--- a/src/features/imagegen.js
++++ b/src/features/imagegen.js
+@@ -311,7 +311,7 @@
+   const fetch = fetchImpl || ((...args) => globalThis.fetch(...args))
+   const auth = codexAuth || createCodexAuth({ log, fetchImpl: fetch })
+   const viaCodex = createCodexImage({ auth, fetchImpl: fetch, log })
+-  async function generate(prompt, { format, shape, image, images, size, count, onRetry } = {}) {
++  async function generate(prompt, { format, shape, image, images, size, count, onRetry, styleMode = 'default' } = {}) {
+     const cfg = getConfig()
+     const config = cfg.imageGen
+     const gif = drawFormat(format) === 'gif'
+@@ -331,6 +331,11 @@
+     if (image != null && (!Buffer.isBuffer(image) || !String(mimeOf(image)).startsWith('image/'))) throw new Error('参考图不是可用的图片')
+     if (c.provider === 'minimax') assertMinimaxReferences(refs)
+     image = refs[0] || null
++    if (!['default', 'reference'].includes(styleMode)) throw new Error('未知画风模式')
++    if (styleMode === 'reference') {
++      if (!image) throw new Error('参考画风需要参考图')
++      c.stylePrompt = ''
++    }
+     if (image && c.img2img === false) throw new Error('参考图功能已关闭')
+     // 外部生图模块（如社区库的「生图 · DSH 已接入模型」）：它明确接管时就用它，返回 null 则照旧。
+     // 只在没有参考图时询问：对话模型通道没有统一的编辑协议，图生图落回内置接法。
+@@ -560,7 +565,7 @@
+   }
+   const supportsReference = async () => await referenceLimit() > 0
+ 
+-  return { generate, canSee, toolImage, enabled, notReadyReason, supportsReference, referenceLimit, codexAuth: auth, dispose: () => auth.dispose?.() }
++  return { generate, canSee, toolImage, enabled, notReadyReason, supportsReference, referenceLimit, supportsReferenceStyle: true, codexAuth: auth, dispose: () => auth.dispose?.() }
+ }
+ 
+ /**
+diff --git a/test/imagegen-reference-style.test.js b/test/imagegen-reference-style.test.js
+new file mode 100644
+--- /dev/null
++++ b/test/imagegen-reference-style.test.js
+@@ -0,0 +1,26 @@
++import assert from 'node:assert/strict'
++import test from 'node:test'
++import { createImageGen } from '../src/features/imagegen.js'
++
++const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/hT0AAAAASUVORK5CYII=', 'base64')
++
++test('reference style applies only to the current edit and preserves normal drawing defaults', async () => {
++  const imageGen = { enabled: true, provider: 'openai', model: 'fixture', baseUrl: 'https://example.invalid/v1', stylePrompt: '全局水彩' }
++  const prompts = []
++  const service = createImageGen({ getConfig: () => ({ imageGen }), log: { info() {} }, codexAuth: {},
++    fetchImpl: async (url, { body }) => {
++      const edit = body instanceof FormData
++      assert.equal(new URL(url).pathname, edit ? '/v1/images/edits' : '/v1/images/generations')
++      if (edit) assert.equal(body.getAll('image[]').length, 2)
++      prompts.push(edit ? body.get('prompt') : JSON.parse(body).prompt)
++      return Response.json({ data: [{ b64_json: image.toString('base64') }] })
++    } })
++  assert.equal(service.supportsReferenceStyle, true)
++  await service.generate('服饰三视图', { images: [image, image], styleMode: 'reference' })
++  await service.generate('普通绘画')
++  await service.generate('普通编辑', { images: [image, image] })
++  await assert.rejects(service.generate('未选原图', { styleMode: 'reference' }), /参考图/)
++  await assert.rejects(service.generate('拼写错误', { image, styleMode: 'unknown' }), /画风/)
++  assert.deepEqual(prompts, ['服饰三视图', '全局水彩，普通绘画', '全局水彩，普通编辑'])
++  assert.equal(imageGen.stylePrompt, '全局水彩')
++})

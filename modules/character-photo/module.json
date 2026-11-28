@@ -1,0 +1,28 @@
+{
+  "id": "character-photo",
+  "name": "模拟人生5",
+  "version": "0.8.3",
+  "description": "生活安排、四类设定图、恋爱、拍照、相册和 QQ 收件。自动恋爱、聊天投影及主动配图需要配套宿主接口。",
+  "category": "creative",
+  "tags": [
+    "人格",
+    "生活",
+    "照片",
+    "作息",
+    "成长"
+  ],
+  "author": "Yobak",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.3.0",
+  "requires": [
+    "imagegen"
+  ],
+  "capabilities": [
+    "filesystem",
+    "network",
+    "process",
+    "plugin-config",
+    "plugin-internals"
+  ]
+}
