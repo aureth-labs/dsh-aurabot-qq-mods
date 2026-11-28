@@ -1,0 +1,24 @@
+{
+  "id": "persona-corpus",
+  "name": "人格素材库",
+  "version": "1.0.0",
+  "description": "被人点名「这句太人机」时把那句原话收下来，连「为什么不对」和「换成她会怎么说」一起存进主人指定的目录，供人格实验室自我反思时翻查",
+  "category": "social",
+  "tags": [
+    "人格",
+    "素材",
+    "反例",
+    "群聊"
+  ],
+  "author": "Aurabot contributors",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": [
+    "filesystem",
+    "plugin-config",
+    "plugin-internals"
+  ],
+  "homepage": "https://github.com/aureth-labs/dsh-aurabot-qq"
+}
