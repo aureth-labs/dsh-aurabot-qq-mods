@@ -176,6 +176,41 @@ return function Panel({ toast, settings, draftSettings, setSettings, save }) {
   const entryRef = useRef(null)
   entryRef.current = entry
 
+  // 刷新：先让后端重扫日记目录（手写进去的、外面改动的也能看见），再对齐现在打开的那一篇。
+  const lastFilesRef = useRef(null)
+  const refresh = useCallback(async (manual = false) => {
+    try { await call('/rescan') } catch (error) {}
+    const r = await load()
+    const list = (r && r.items) || []
+    const prev = lastFilesRef.current
+    // 只有手动刷新才推进基线：一分钟一次的自动刷新会把「新冒出来的那篇」悄悄吃进基线，
+    // 等用户再点刷新时就没有「新篇」可跳了
+    if (manual) lastFilesRef.current = new Set(list.map((x) => x.file))
+    if (!list.length) { setEntry(null); return }
+    const before = entryRef.current
+    const cur = before && before.file ? list.find((x) => x.file === before.file) : null
+    if (!cur) { await open(list[0].file); return }   // 现在这篇没了，翻到最新的一篇
+    // 同一篇被改写过（字数或改动时间变了）就重读正文：只换目录的话，点刷新后正文还是旧的
+    if (before.chars !== cur.chars || before.at !== cur.at) { await open(cur.file); return }
+    // 手点刷新就是要看新东西：多出来的那篇直接翻过去，多篇就翻最新的一篇。
+    // 一分钟一次的自动刷新不跳页，免得正看着旧日记被弹走。
+    if (manual && prev) {
+      const added = list.filter((x) => !prev.has(x.file))
+      if (added.length) await open(added.length === 1 ? added[0].file : list[0].file)
+    }
+  }, [load, open])
+
+  // 首屏那次 load 的列表当成基线，之后才分得清哪篇是刷新时新冒出来的
+  useEffect(() => {
+    if (lastFilesRef.current === null && data) lastFilesRef.current = new Set((data.items || []).map((x) => x.file))
+  }, [data])
+
+  // 面板开着的时候每分钟自己刷一次，不用手动点
+  useEffect(() => {
+    const timer = setInterval(() => { refresh() }, 60_000)
+    return () => clearInterval(timer)
+  }, [refresh])
+
   const items = (data && data.items) || []
   const dayMap = useMemo(() => {
     const m = new Map()
@@ -188,7 +223,8 @@ return function Panel({ toast, settings, draftSettings, setSettings, save }) {
     if (!e || !e.file) return
     const i = items.findIndex((x) => x.file === e.file)
     if (i >= 0) setPage(i)
-  }, [items])
+    // 也要盯 entry：刷新时先换列表再换正文，只盯 items 的话页码停在上一篇，左边目录高亮和右边正文对不上
+  }, [items, entry])
   useEffect(() => {
     if (!entry && firstFile) open(firstFile)
   }, [firstFile, entry, open])
@@ -401,7 +437,7 @@ return function Panel({ toast, settings, draftSettings, setSettings, save }) {
         : null,
       h(ui.Row, null,
         h(ui.Btn, { onClick: write, disabled: busy || (data && data.running) }, busy ? '写着…' : '现在写一篇'),
-        h(ui.Btn, { onClick: load }, '刷新'),
+        h(ui.Btn, { onClick: () => refresh(true) }, '刷新'),
         h(ui.Btn, { onClick: openFolder }, '打开文件夹'),
         draftDirty ? h(ui.Btn, { onClick: saveNow }, '保存设置') : null,
       ),

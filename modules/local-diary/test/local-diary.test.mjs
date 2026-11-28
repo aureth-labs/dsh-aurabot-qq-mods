@@ -513,3 +513,27 @@ test('日记线索只注入主人私聊，群聊和陌生人不带', async (t) =
   // 没有 chat（系统轮）也不该崩
   assert.equal(api.contextFn({}), '')
 })
+
+test('面板刷新：手写进文件夹的一篇，重扫之后 /status 和 /read 都看得到', async (t) => {
+  const root = tempRoot(t)
+  const { api, inst } = boot(root)
+  await api.routes['/run']()
+
+  // 绕过 run() 直接往文件夹里放一篇（人自己写文件，模块内存里的索引不知道）
+  const hand = join(inst.folder(), '2026-11-30.md')
+  writeFileSync(hand, '---\ndate: 2026-11-30\nmood: 平静\n---\n手写的一篇，先在纸上写好再敲进来。\n', 'utf8')
+
+  const stale = await api.routes['/status']()
+  assert.equal(stale.items.some((x) => x.file === hand), false, '只读 /status 是看不见手写那篇的')
+
+  await api.routes['/rescan']()   // 面板刷新时先调它
+  const hit = (await api.routes['/status']()).items.find((x) => x.file === hand)
+  assert.ok(hit, '重扫之后要看得见')
+  assert.equal(hit.day, '2026-11-30')
+  assert.equal(hit.mood, '平静')
+
+  api.posted = { file: hand }
+  const read = await api.routes['/read']({})
+  assert.equal(read.ok, true)
+  assert.match(read.body, /手写的一篇/)
+})
