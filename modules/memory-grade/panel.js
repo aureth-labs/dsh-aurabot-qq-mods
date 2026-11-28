@@ -12,6 +12,7 @@ return function MemoryGradePanel({ toast }) {
   const [memBusy, setMemBusy] = React.useState(false)
   const [q, setQ] = React.useState('')
   const [cls, setCls] = React.useState('')
+  const [src, setSrc] = React.useState('')
   const [openId, setOpenId] = React.useState('')
   const [editText, setEditText] = React.useState('')
   const [editTags, setEditTags] = React.useState('')
@@ -36,6 +37,7 @@ return function MemoryGradePanel({ toast }) {
       p.push('offset=' + offset)
       if (q.trim()) p.push('q=' + encodeURIComponent(q.trim()))
       if (cls) p.push('cls=' + cls)
+      if (src) p.push('source=' + encodeURIComponent(src))
       const r = await call('/mem/list?' + p.join('&'))
       if (r.ok) setMem({ items: r.items || [], total: r.total || 0, offset })
       else toast(r.message || '读不了记忆', 'err')
@@ -90,6 +92,39 @@ return function MemoryGradePanel({ toast }) {
 
   const fmt = (ts) =>
     ts ? new Date(ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''
+
+  // 可折叠卡片：默认收起，展开状态记在 localStorage，刷新后还在。
+  // 用原生 details/summary，跟 1.3.0 面板自带的折叠一致，不引新组件。
+  const FOLD_KEY = 'mg-fold-state'
+  const readFold = () => {
+    try { return JSON.parse(localStorage.getItem(FOLD_KEY) || '{}') || {} } catch (e) { return {} }
+  }
+  const FoldCard = ({ id, title, desc, children }) => {
+    // 非受控：展开状态交给原生 details 管，只在挂载时给一次初始值，
+    // onToggle 时把状态写进 localStorage。避免受控 open 与原生展开打架反复横跳。
+    const ref = React.useRef(null)
+    React.useEffect(() => {
+      if (ref.current) ref.current.open = !!readFold()[id]
+    }, [])
+    const onToggle = (e) => {
+      const all = readFold()
+      all[id] = e.target.open
+      try { localStorage.setItem(FOLD_KEY, JSON.stringify(all)) } catch (err) {}
+    }
+    return h('details', {
+      ref: ref,
+      onToggle: onToggle,
+      style: { border: '1px solid var(--ab-border, #e3e8ec)', borderRadius: 8, marginBottom: 10 },
+    },
+      h('summary', {
+        style: { cursor: 'pointer', padding: '10px 12px', fontWeight: 600, listStyle: 'none', display: 'flex', alignItems: 'center', gap: 6 },
+      },
+        h('span', { style: { color: 'var(--ab-muted, #888)', fontSize: 12 } }, '▸'),
+        h('span', null, title),
+        desc ? h('span', { className: 'ab-muted ab-small', style: { fontWeight: 400, marginLeft: 6 } }, '— ' + desc) : null),
+      h('div', { style: { padding: '0 12px 12px' } }, children)
+    )
+  }
 
   const dryRun = async () => {
     setBusy('dry')
@@ -147,6 +182,18 @@ return function MemoryGradePanel({ toast }) {
           h('option', { value: 'secret' }, '秘密'),
           h('option', { value: 'internal' }, '内部'),
           h('option', { value: 'public' }, '公开')),
+        h('select', {
+          className: 'ab-input',
+          value: src,
+          onChange: (e) => setSrc(e.target.value),
+          style: { width: 110 },
+        },
+          h('option', { value: '' }, '全部来源'),
+          h('option', { value: 'autotelic' }, '自驱'),
+          h('option', { value: 'session' }, '聊天'),
+          h('option', { value: 'event' }, '事件'),
+          h('option', { value: 'absorb' }, '外部收录'),
+          h('option', { value: 'knowledge' }, '知识')),
         h(ui.Btn, { small: true, onClick: () => loadMem(0), disabled: memBusy }, '查'),
         h(ui.Btn, { small: true, onClick: () => loadMem(mem.offset + PAGE), disabled: memBusy }, '下一页'),
         h(ui.Btn, { small: true, onClick: () => loadMem(Math.max(0, mem.offset - PAGE)), disabled: memBusy || mem.offset === 0 }, '上一页')),
@@ -245,7 +292,8 @@ return function MemoryGradePanel({ toast }) {
               : null)),
 
     // ---- 消化记录 ----
-    h(ui.Card, {
+    h(FoldCard, {
+      id: 'digest',
       title: '消化记录',
       desc: '每消化一次留一条：进了多少条、从哪来、写进库几条。只留最近 20 次。',
     },
@@ -264,7 +312,8 @@ return function MemoryGradePanel({ toast }) {
                 : null))),
 
     // ---- 自动盖章状态 ----
-    h(ui.Card, {
+    h(FoldCard, {
+      id: 'wrap',
       title: '自动盖章',
       desc: '模块启动时把插件的 memory.add 包一层，写库前自动规整标签、补重要度。不改插件源码，升级也不受影响。',
     },
@@ -283,7 +332,8 @@ return function MemoryGradePanel({ toast }) {
               '想在设置里关掉：找到「写库前自动盖章」开关。'))),
 
     // ---- 判定规则速查 ----
-    h(ui.Card, {
+    h(FoldCard, {
+      id: 'rules',
       title: '判定规则速查',
       desc: '不用记，出问题时来这儿对一眼。',
     },
@@ -313,7 +363,8 @@ return function MemoryGradePanel({ toast }) {
         h('div', { className: 'ab-muted', style: { paddingLeft: 12 } },
           '置顶固定 1；其余按内容给 0~1，模型没给就用时效建议值。'))),
     // ---- 实时大脑（记录 + 注入，合成一栏说明）----
-    h(ui.Card, {
+    h(FoldCard, {
+      id: 'brain',
       title: '实时大脑',
       desc:
         '把「刚才各会话发生了什么」实时记下来，再按需带进上下文。' +
@@ -340,7 +391,8 @@ return function MemoryGradePanel({ toast }) {
           '建议只留一个：用模块这套就把插件的关掉。'))),
 
     // ---- 说明（放最末，别挡在前面）----
-    h(ui.Card, {
+    h(FoldCard, {
+      id: 'about',
       title: '这套在管什么',
       desc: '想了解原理再看，平时不用管这儿。',
     },

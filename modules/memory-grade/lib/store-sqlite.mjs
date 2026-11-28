@@ -283,6 +283,50 @@ export function openStoreSqlite(dir, opts = {}) {
     return item
   }
 
+  /**
+   * 2026-11-27 加（issue #357）：从磁盘重读进内存 index。
+   * 场景：syncFromPlugin 直接对 sqlite 文件 INSERT，绕过了内存 index，
+   * 导致「表里 1957 条、mem.list() 只认 977 条」，多出来的对模块不可见。
+   * sync 完成后调这个，让内存和磁盘重新对齐。
+   * 顺带给没有 cls 的镜像条目补一个（源库 json 本来没有 cls，密级兜底对它们不生效）。
+   */
+  function reload() {
+    try {
+      const db = openDb()
+      let state
+      try {
+        state = readAll(db)
+      } finally {
+        closeDb(db)
+      }
+      index.clear()
+      usedIds.clear()
+      let fixedCls = 0
+      for (const [id, it] of state.items) {
+        if (!it.cls) {
+          // 镜像条目没密级：按内容给个保守的默认值 internal
+          it.cls = 'internal'
+          fixedCls++
+        }
+        it.__seq = it.__seq || it.at || Date.now()
+        index.set(id, it)
+        usedIds.add(id)
+      }
+      // 同步更新快照，避免下次 save 把这些当成"变化"重写一遍
+      snapshot = {
+        items: new Map([...state.items].map(([k, v]) => [k, JSON.stringify(v)])),
+        gists: new Map([...state.gists].map(([k, v]) => [k, JSON.stringify(v)])),
+        kv: new Map([...state.kv].map(([k, v]) => [k, JSON.stringify(v)])),
+        meta: new Map([...state.meta].map(([k, v]) => [k, JSON.stringify(v)])),
+      }
+      log?.info?.('[memory-grade] index 已从磁盘重建，共 ' + index.size + ' 条，补密级 ' + fixedCls + ' 条')
+      return { ok: true, count: index.size, fixedCls }
+    } catch (error) {
+      log?.warn?.('[memory-grade] index 重建失败：' + error.message)
+      return { ok: false, message: error.message }
+    }
+  }
+
   function get(id) {
     return index.get(String(id || '')) || null
   }
@@ -493,6 +537,7 @@ export function openStoreSqlite(dir, opts = {}) {
     all,
     flush,
     close,
+    reload,
     kvGet,
     kvSet,
     kvKeys,

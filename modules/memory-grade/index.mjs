@@ -16,7 +16,7 @@
  */
 
 import { readFileSync, readdirSync, writeFileSync, statSync, unlinkSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 // node:sqlite 是实验性 API，取不到就退回读不了——只影响「抄外部记忆」这一步，不影响别的。
 let sqliteModule = null
 try {
@@ -283,7 +283,7 @@ async function absorbInbox({ inbox, api, log, memory, max = 300 } = {}) {
 export default {
   id: 'memory-grade',
   name: '记忆总库',
-  version: '2.1.4',
+  version: '2.1.5',
   api: 1,
   description: '存记忆、判密级、贴标签、算时效，还能顺手标八卦。写库前自动盖章，过期的只标「当时」不删除。东西全在自己机器上，不联网、不外传。',
   panel: 'panel.js',
@@ -770,6 +770,11 @@ export default {
             if (!pluginDb) return
             const r = syncFromPlugin({ pluginDb, targetDb: store.file, log: api.log })
             if (!r.ok) api.log?.warn?.("[memory-grade] 同步插件记忆失败：" + r.message)
+            // issue #357：sync 直接写 sqlite 文件、绕过了内存 index，
+            // 写完必须重建，否则多出来的条目模块看不见（召回/搜索都找不到）。
+            else if (r.added || r.updated) {
+              try { store.reload?.() } catch (e) { api.log?.warn?.('[memory-grade] 同步后重建 index 失败：' + e.message) }
+            }
           } catch (error) {
             api.log?.warn?.("[memory-grade] 同步插件记忆出错：" + error.message)
           }
@@ -1399,13 +1404,15 @@ api.on('prompt', (content, info) => {
         let cur = String(dataDir || "")
         if (!cur) return ""
         for (let i = 0; i < 5; i++) {
-          const cand = cur.replace(/[\\/]$/, "") + "\\chatlog"
+          // 2026-11-28 修 Linux 兼容：原来硬拼 "\\chatlog"，Linux 下不是分隔符，
+          // 会拼出不存在的路径导致「翻旧记录」失效。改用 node:path 的 join/dirname，跟系统分隔符走。
+          const cand = join(cur, 'chatlog')
           try {
             if (statSync(cand).isDirectory()) return cand
           } catch {
             /* 没有就往上走 */
           }
-          const parent = cur.replace(/[\\/][^\\/]+$/, "")
+          const parent = dirname(cur)
           if (!parent || parent === cur) break
           cur = parent
         }
@@ -1655,9 +1662,9 @@ api.on('prompt', (content, info) => {
 
     // 手动接口：面板或脚本想立刻消化一次，就调它。带 dry=1 只看不写。
     api.route('/inbox/absorb', async (req) => {
-      if (!supportsRouteAccess && String(api.core?.http?.query?.(req)?.dry || '') !== '1') {
-        return writeBlocked()
-      }
+      // 2026-11-27 修：消化是模块内部提炼记忆（跟定时器走同一条 absorbInbox），
+      // 不是「面板手动改某一条」，风险等级不同。1.2.x 上不该挡它，
+      // 否则面板「现在消化一次」会报错，而定时消化却照常跑，前后矛盾。
       const q = api.core?.http?.query?.(req) || {}
       const dry = String(q.dry || '') === '1'
       const memory = api.lazy?.('memory')
@@ -1723,6 +1730,10 @@ api.on('prompt', (content, info) => {
         }
       }
       const r = syncFromPlugin({ pluginDb, targetDb: store.file, log: api.log })
+      // issue #357：直接写 sqlite 绕过内存 index，写完重建
+      if (r.ok && (r.added || r.updated)) {
+        try { store.reload?.() } catch (e) { api.log?.warn?.('[memory-grade] 同步后重建 index 失败：' + e.message) }
+      }
       return { ...r, pluginDb }
     }, { access: 'panel' })
 
@@ -1736,6 +1747,7 @@ api.on('prompt', (content, info) => {
       const offset = Math.max(Number(q.offset) || 0, 0)
       const cls = String(q.cls || '').trim()
       const tag = String(q.tag || '').trim()
+      const source = String(q.source || '').trim()
       const kw = String(q.q || '').trim().toLowerCase()
       const includePin = String(q.pin || '') !== '0'
 
@@ -1746,6 +1758,7 @@ api.on('prompt', (content, info) => {
       }
       if (cls) rows = rows.filter((m) => m.cls === cls)
       if (tag) rows = rows.filter((m) => (m.tags || []).includes(tag))
+      if (source) rows = rows.filter((m) => m.source === source)
       if (!includePin) rows = rows.filter((m) => !m.pin)
       if (kw) {
         rows = rows.filter((m) => String(m.text || '').toLowerCase().includes(kw))
@@ -1819,6 +1832,10 @@ api.on('prompt', (content, info) => {
         if (pluginDb) {
           const r = syncFromPlugin({ pluginDb, targetDb: store.file, log: api.log })
           synced = !!r?.ok
+          // issue #357：同步后重建 index
+          if (r.ok && (r.added || r.updated)) {
+            try { store.reload?.() } catch (e) { /* 重建失败不影响这次修改 */ }
+          }
         }
       } catch {
         /* 同步失败不影响这次修改 */
