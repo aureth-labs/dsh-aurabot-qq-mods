@@ -1,0 +1,19 @@
+{
+  "id": "sl-status",
+  "name": "SnowLuma 状态",
+  "version": "1.0.0",
+  "description": "有人发 #sl 就回一张 SnowLuma 状态卡：版本、平台、运行时长；平台可自定义成任何文字，触发词也能改。",
+  "category": "social",
+  "tags": [
+    "#sl",
+    "状态",
+    "梗",
+    "SnowLuma"
+  ],
+  "author": "HDB-Studio",
+  "license": "MIT",
+  "api": 1,
+  "minPluginVersion": "1.2.0",
+  "requires": [],
+  "capabilities": []
+}
