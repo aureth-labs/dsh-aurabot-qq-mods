@@ -34,7 +34,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, Math.max(0, ms)))
 export default {
   id: 'world-link',
   name: '开放世界',
-  version: '0.1.0',
+  version: '0.1.1',
   api: 1,
   description: '让大肥鱼以本人身份进入 3D 开放世界，自主观察、走动、说话、牵手；主人只能旁观和发建议。',
   navGroup: 'market',
