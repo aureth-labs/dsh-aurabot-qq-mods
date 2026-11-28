@@ -55,7 +55,7 @@
 
 ## 测试
 
-仓库根目录下（`node --test test/dafeiyu-world.test.mjs`）有一份可离线跑的测试，不连世界、不连网：
+`test/dafeiyu-world.test.mjs`（`node --test modules/dafeiyu-world/test/dafeiyu-world.test.mjs`，CI 也会跑 `modules/*/test/*.test.mjs`）是一份可离线跑的测试，不连世界、不连网：
 
 - 地图 / 坐标 / 移动边界：`move_to` 的坐标夹回世界边界 ±90，非法坐标（`NaN`、`Infinity`、字符串）被丢掉而不是发出去；地名（湖边 / 杂货铺 / 广场）解析成坐标，未知地名丢弃；「去湖边」会换到离湖心 26m 的水岸点；`travelSeconds` 有 0.6 秒下限。
 - 存档降级：`profile.json` 坏掉、模块数据目录拿不到、行动记录写不进去，都只记一条 debug 日志并降级（下次上线重新建档），`setup` 不抛、面板 `/status` 照常回。
